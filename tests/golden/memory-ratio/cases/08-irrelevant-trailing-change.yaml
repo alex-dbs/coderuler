@@ -1,0 +1,31 @@
+inputs:
+  - filepath: charts/payments-api/values.yaml
+    diff: |
+      --- a/charts/payments-api/values.yaml
+      +++ b/charts/payments-api/values.yaml
+      @@ -6,3 +6,4 @@
+               memory: 512Mi
+             limits:
+               memory: 1024Mi
+      +replicas: 2
+    head: |
+      containers:
+        - name: payments-api
+          image: registry.example.com/payments-api:1.4.2
+          resources:
+            requests:
+              memory: 512Mi
+            limits:
+              memory: 1024Mi
+      replicas: 2
+    base: |
+      containers:
+        - name: payments-api
+          image: registry.example.com/payments-api:1.4.2
+          resources:
+            requests:
+              memory: 512Mi
+            limits:
+              memory: 1024Mi
+expected:
+  contexts: []

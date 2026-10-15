@@ -1,0 +1,67 @@
+inputs:
+  - filepath: internal/store/prefix.go
+    diff: |
+      --- a/internal/store/prefix.go
+      +++ b/internal/store/prefix.go
+      @@ -3,7 +3,8 @@
+       func withHeader(header string, values []string) []string {
+      -    out := make([]string, 0, len(values)+1)
+      +    out := make([]string, 1)
+      +    out[0] = header
+           for _, value := range values {
+               out = append(out, value)
+           }
+           return out
+       }
+    base: |
+      package store
+
+      func withHeader(header string, values []string) []string {
+          out := make([]string, 0, len(values)+1)
+          for _, value := range values {
+              out = append(out, value)
+          }
+          return out
+      }
+    head: |
+      package store
+
+      func withHeader(header string, values []string) []string {
+          out := make([]string, 1)
+          out[0] = header
+          for _, value := range values {
+              out = append(out, value)
+          }
+          return out
+      }
+expected:
+  contexts:
+    - filepath: internal/store/prefix.go
+      diff: |
+        --- a/internal/store/prefix.go
+        +++ b/internal/store/prefix.go
+        @@ -3,7 +3,8 @@
+         func withHeader(header string, values []string) []string {
+        -    out := make([]string, 0, len(values)+1)
+        +    out := make([]string, 1)
+        +    out[0] = header
+             for _, value := range values {
+                 out = append(out, value)
+             }
+             return out
+         }
+      scope:
+        id: function_declaration:withHeader
+        source: |-
+          func withHeader(header string, values []string) []string {
+              out := make([]string, 1)
+              out[0] = header
+              for _, value := range values {
+                  out = append(out, value)
+              }
+              return out
+          }
+        captures:
+          SLICE: out
+          ARGS:
+            - value

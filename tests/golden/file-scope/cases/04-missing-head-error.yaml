@@ -1,0 +1,9 @@
+inputs:
+  - filepath: config/app.yaml
+    diff: |
+      @@ -1,1 +1,2 @@
+       service: api
+      +replicas: 2
+expected:
+  error:
+    stage: match

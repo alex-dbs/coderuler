@@ -1,0 +1,51 @@
+inputs:
+  - filepath: internal/store/tags.go
+    diff: |
+      --- a/internal/store/tags.go
+      +++ b/internal/store/tags.go
+      @@ -4 +4 @@
+      -    out := make([]string, 0, len(tags))
+      +    out := make([]string, len(tags))
+    base: |
+      package store
+
+      func addTags(tags []string) []string {
+          out := make([]string, 0, len(tags))
+          for _, tag := range tags {
+              out = append(out, tag)
+          }
+          return out
+      }
+    head: |
+      package store
+
+      func addTags(tags []string) []string {
+          out := make([]string, len(tags))
+          for _, tag := range tags {
+              out = append(out, tag)
+          }
+          return out
+      }
+expected:
+  contexts:
+    - filepath: internal/store/tags.go
+      diff: |
+        --- a/internal/store/tags.go
+        +++ b/internal/store/tags.go
+        @@ -4 +4 @@
+        -    out := make([]string, 0, len(tags))
+        +    out := make([]string, len(tags))
+      scope:
+        id: function_declaration:addTags
+        source: |-
+          func addTags(tags []string) []string {
+              out := make([]string, len(tags))
+              for _, tag := range tags {
+                  out = append(out, tag)
+              }
+              return out
+          }
+        captures:
+          SLICE: out
+          ARGS:
+            - tag

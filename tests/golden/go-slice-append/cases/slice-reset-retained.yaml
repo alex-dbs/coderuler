@@ -1,0 +1,67 @@
+inputs:
+  - filepath: internal/store/reset.go
+    diff: |
+      --- a/internal/store/reset.go
+      +++ b/internal/store/reset.go
+      @@ -3,7 +3,8 @@
+       func reuseBuffer(values []string) []string {
+      -    out := make([]string, 0, len(values))
+      +    out := make([]string, len(values))
+      +    out = out[:0]
+           for _, value := range values {
+               out = append(out, value)
+           }
+           return out
+       }
+    base: |
+      package store
+
+      func reuseBuffer(values []string) []string {
+          out := make([]string, 0, len(values))
+          for _, value := range values {
+              out = append(out, value)
+          }
+          return out
+      }
+    head: |
+      package store
+
+      func reuseBuffer(values []string) []string {
+          out := make([]string, len(values))
+          out = out[:0]
+          for _, value := range values {
+              out = append(out, value)
+          }
+          return out
+      }
+expected:
+  contexts:
+    - filepath: internal/store/reset.go
+      diff: |
+        --- a/internal/store/reset.go
+        +++ b/internal/store/reset.go
+        @@ -3,7 +3,8 @@
+         func reuseBuffer(values []string) []string {
+        -    out := make([]string, 0, len(values))
+        +    out := make([]string, len(values))
+        +    out = out[:0]
+             for _, value := range values {
+                 out = append(out, value)
+             }
+             return out
+         }
+      scope:
+        id: function_declaration:reuseBuffer
+        source: |-
+          func reuseBuffer(values []string) []string {
+              out := make([]string, len(values))
+              out = out[:0]
+              for _, value := range values {
+                  out = append(out, value)
+              }
+              return out
+          }
+        captures:
+          SLICE: out
+          ARGS:
+            - value

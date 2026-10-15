@@ -1,0 +1,9 @@
+version: 'v2'
+name: Unsupported rule version
+files:
+  included:
+    - '**/*.ts'
+scope:
+  format: yaml
+  path: '$'
+rule: Review the change.

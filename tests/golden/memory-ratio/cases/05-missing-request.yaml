@@ -1,0 +1,53 @@
+inputs:
+  - filepath: charts/payments-api/values.yaml
+    diff: |
+      --- a/charts/payments-api/values.yaml
+      +++ b/charts/payments-api/values.yaml
+      @@ -4,5 +4,3 @@
+           resources:
+      -      requests:
+      -        memory: 512Mi
+             limits:
+               memory: 1024Mi
+    head: |
+      containers:
+        - name: payments-api
+          image: registry.example.com/payments-api:1.4.2
+          resources:
+            limits:
+              memory: 1024Mi
+    base: |
+      containers:
+        - name: payments-api
+          image: registry.example.com/payments-api:1.4.2
+          resources:
+            requests:
+              memory: 512Mi
+            limits:
+              memory: 1024Mi
+expected:
+  contexts:
+    - filepath: charts/payments-api/values.yaml
+      diff: |
+        --- a/charts/payments-api/values.yaml
+        +++ b/charts/payments-api/values.yaml
+        @@ -4,5 +4,3 @@
+             resources:
+        -      requests:
+        -        memory: 512Mi
+               limits:
+                 memory: 1024Mi
+      scope:
+        id: '0:payments-api'
+        source: |
+          name: payments-api
+              image: registry.example.com/payments-api:1.4.2
+              resources:
+                limits:
+                  memory: 1024Mi
+        data:
+          name: payments-api
+          image: registry.example.com/payments-api:1.4.2
+          resources:
+            limits:
+              memory: 1024Mi

@@ -1,0 +1,38 @@
+inputs:
+  - filepath: config/app.yaml
+    diff: |
+      @@ -1,1 +1,3 @@
+      -service: api
+      +service:
+      +  name: api
+      +  ports: [80, 443]
+      +replicas: 2
+    head: '{service: {name: api, ports: [80, 443]}, replicas: 2}'
+  - filepath: config/vendor/dep.yaml
+    diff: |
+      @@ -1,1 +1,2 @@
+       image: api
+      +tag: latest
+  - filepath: docs/readme.md
+    diff: |
+      @@ -1,1 +1,2 @@
+       title
+      +body
+expected:
+  contexts:
+    - filepath: config/app.yaml
+      diff: |
+        @@ -1,1 +1,3 @@
+        -service: api
+        +service:
+        +  name: api
+        +  ports: [80, 443]
+        +replicas: 2
+      scope:
+        id: '0:'
+        source: '{service: {name: api, ports: [80, 443]}, replicas: 2}'
+        data:
+          service:
+            name: api
+            ports: [80, 443]
+          replicas: 2

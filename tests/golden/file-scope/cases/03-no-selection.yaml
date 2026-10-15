@@ -1,0 +1,15 @@
+inputs:
+  - filepath: config/app.yml
+    diff: |
+      @@ -1,1 +1,2 @@
+       service: api
+      +replicas: 2
+    head: '{service: api, replicas: 2}'
+  - filepath: other/config.yaml
+    diff: |
+      @@ -1,1 +1,2 @@
+       service: web
+      +replicas: 3
+    head: '{service: web, replicas: 3}'
+expected:
+  contexts: []

@@ -1,0 +1,59 @@
+inputs:
+  - filepath: internal/store/items.go
+    diff: |
+      --- a/internal/store/items.go
+      +++ b/internal/store/items.go
+      @@ -3,3 +3,7 @@
+       func collectItems(values []string) []string {
+      -    return values
+      +    out := make([]string, 0, len(values))
+      +    for _, value := range values {
+      +        out = append(out, value)
+      +    }
+      +    return out
+       }
+    base: |
+      package store
+
+      func collectItems(values []string) []string {
+          return values
+      }
+    head: |
+      package store
+
+      func collectItems(values []string) []string {
+          out := make([]string, 0, len(values))
+          for _, value := range values {
+              out = append(out, value)
+          }
+          return out
+      }
+expected:
+  contexts:
+    - filepath: internal/store/items.go
+      diff: |
+        --- a/internal/store/items.go
+        +++ b/internal/store/items.go
+        @@ -3,3 +3,7 @@
+         func collectItems(values []string) []string {
+        -    return values
+        +    out := make([]string, 0, len(values))
+        +    for _, value := range values {
+        +        out = append(out, value)
+        +    }
+        +    return out
+         }
+      scope:
+        id: function_declaration:collectItems
+        source: |-
+          func collectItems(values []string) []string {
+              out := make([]string, 0, len(values))
+              for _, value := range values {
+                  out = append(out, value)
+              }
+              return out
+          }
+        captures:
+          SLICE: out
+          ARGS:
+            - value

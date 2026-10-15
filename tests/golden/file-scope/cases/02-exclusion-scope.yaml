@@ -1,0 +1,39 @@
+inputs:
+  - filepath: config/sub/vendor/keep.yaml
+    diff: |
+      @@ -1,2 +1,3 @@
+       image: api
+      +resources:
+      +  limits:
+      +    memory: 1Gi
+    head: |
+      image: api
+      resources:
+        limits:
+          memory: 1Gi
+  - filepath: config/vendor/nested/app.yaml
+    diff: |
+      @@ -1,1 +1,2 @@
+       image: api
+      +tag: latest
+expected:
+  contexts:
+    - filepath: config/sub/vendor/keep.yaml
+      diff: |
+        @@ -1,2 +1,3 @@
+         image: api
+        +resources:
+        +  limits:
+        +    memory: 1Gi
+      scope:
+        id: '0:'
+        source: |
+          image: api
+          resources:
+            limits:
+              memory: 1Gi
+        data:
+          image: api
+          resources:
+            limits:
+              memory: 1Gi

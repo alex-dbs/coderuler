@@ -1,0 +1,80 @@
+inputs:
+  - filepath: proto/billing/v1/invoice.proto
+    diff: |
+      --- a/proto/billing/v1/invoice.proto
+      +++ b/proto/billing/v1/invoice.proto
+      @@ -14,0 +15,3 @@ service BillingService {
+      +      additional_bindings {
+      +        get: "/v1/billing/invoices/{invoice_id}"
+      +      }
+    base: |
+      syntax = "proto3";
+
+      package acme.billing.v1;
+
+      service BillingService {
+        rpc GetInvoice(GetInvoiceRequest) returns (GetInvoiceResponse) {
+          option (google.api.http) = {
+            get: "/v1/billing/invoices/{invoice_id}"
+          };
+        }
+
+        rpc CreateInvoice(CreateInvoiceRequest) returns (CreateInvoiceResponse) {
+          option (google.api.http) = {
+            post: "/v1/billing/invoices"
+          };
+        }
+      }
+    head: |
+      syntax = "proto3";
+
+      package acme.billing.v1;
+
+      service BillingService {
+        rpc GetInvoice(GetInvoiceRequest) returns (GetInvoiceResponse) {
+          option (google.api.http) = {
+            get: "/v1/billing/invoices/{invoice_id}"
+          };
+        }
+
+        rpc CreateInvoice(CreateInvoiceRequest) returns (CreateInvoiceResponse) {
+          option (google.api.http) = {
+            post: "/v1/billing/invoices"
+            additional_bindings {
+              get: "/v1/billing/invoices/{invoice_id}"
+            }
+          };
+        }
+      }
+expected:
+  contexts:
+    - filepath: proto/billing/v1/invoice.proto
+      diff: |
+        --- a/proto/billing/v1/invoice.proto
+        +++ b/proto/billing/v1/invoice.proto
+        @@ -14,0 +15,3 @@ service BillingService {
+        +      additional_bindings {
+        +        get: "/v1/billing/invoices/{invoice_id}"
+        +      }
+      scope:
+        id: acme.billing.v1.BillingService.CreateInvoice
+        source: |-
+          rpc CreateInvoice(CreateInvoiceRequest) returns (CreateInvoiceResponse) {
+              option (google.api.http) = {
+                post: "/v1/billing/invoices"
+                additional_bindings {
+                  get: "/v1/billing/invoices/{invoice_id}"
+                }
+              };
+            }
+        data:
+          id: acme.billing.v1.BillingService.CreateInvoice
+          package: acme.billing.v1
+          service: BillingService
+          name: CreateInvoice
+          http:
+            bindings:
+              - method: POST
+                url: /v1/billing/invoices
+              - method: GET
+                url: /v1/billing/invoices/{invoice_id}

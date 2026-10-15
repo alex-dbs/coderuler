@@ -1,0 +1,10 @@
+inputs:
+  - filepath: src/app.ts
+    diff: |
+      @@ -1,1 +1,1 @@
+      -export const app = 1;
+      +export const app = 2;
+    head: 'export const app = 2;'
+expected:
+  error:
+    stage: compile

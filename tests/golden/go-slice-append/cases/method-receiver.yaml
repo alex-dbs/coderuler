@@ -1,0 +1,83 @@
+inputs:
+  - filepath: internal/store/methods.go
+    diff: |
+      --- a/internal/store/methods.go
+      +++ b/internal/store/methods.go
+      @@ -11,5 +11,6 @@
+       func (c *Cart) Add(items ...string) {
+      +    c.items = make([]string, 0, len(items))
+           for _, item := range items {
+               c.items = append(c.items, item)
+           }
+       }
+    base: |
+      package store
+
+      type Cart struct {
+          items []string
+      }
+
+      type Wishlist struct {
+          items []string
+      }
+
+      func (c *Cart) Add(items ...string) {
+          for _, item := range items {
+              c.items = append(c.items, item)
+          }
+      }
+
+      func (w *Wishlist) Add(items ...string) {
+          for _, item := range items {
+              w.items = append(w.items, item)
+          }
+      }
+    head: |
+      package store
+
+      type Cart struct {
+          items []string
+      }
+
+      type Wishlist struct {
+          items []string
+      }
+
+      func (c *Cart) Add(items ...string) {
+          c.items = make([]string, 0, len(items))
+          for _, item := range items {
+              c.items = append(c.items, item)
+          }
+      }
+
+      func (w *Wishlist) Add(items ...string) {
+          for _, item := range items {
+              w.items = append(w.items, item)
+          }
+      }
+expected:
+  contexts:
+    - filepath: internal/store/methods.go
+      diff: |
+        --- a/internal/store/methods.go
+        +++ b/internal/store/methods.go
+        @@ -11,5 +11,6 @@
+         func (c *Cart) Add(items ...string) {
+        +    c.items = make([]string, 0, len(items))
+             for _, item := range items {
+                 c.items = append(c.items, item)
+             }
+         }
+      scope:
+        id: method_declaration:Cart.Add
+        source: |-
+          func (c *Cart) Add(items ...string) {
+              c.items = make([]string, 0, len(items))
+              for _, item := range items {
+                  c.items = append(c.items, item)
+              }
+          }
+        captures:
+          SLICE: c.items
+          ARGS:
+            - item

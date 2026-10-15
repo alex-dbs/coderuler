@@ -1,0 +1,79 @@
+version: 'v1'
+name: go-slice-append
+files:
+  included:
+    - '**/*.go'
+scope:
+  format: ast-grep
+  language: go
+  rule:
+    any:
+      - kind: function_declaration
+      - kind: method_declaration
+    has:
+      kind: for_statement
+      stopBy: end
+      has:
+        pattern: 'append($SLICE,$$$ARGS)'
+        stopBy: end
+rule: A slice populated by append inside a loop must start with length zero unless an existing prefix is intentional. Preallocate capacity rather than length when populating a slice with append. Filling a length-initialized slice by index or resetting its length to zero before appending is valid.
+examples:
+  good:
+    - |
+      func addTags(tags []string) []string {
+          // Capacity only: zero length, so append adds no zeros ahead of tags.
+          out := make([]string, 0, len(tags))
+          for _, tag := range tags {
+              out = append(out, tag)
+          }
+          return out
+      }
+    - |
+      func copyItems(values []string) []string {
+          // Length is set up front and filled by index, so append is not used.
+          out := make([]string, len(values))
+          for i := range values {
+              out[i] = values[i]
+          }
+          return out
+      }
+    - |
+      func reuseBuffer(values []string) []string {
+          out := make([]string, len(values))
+          // Length is reset to zero before the append loop.
+          out = out[:0]
+          for _, value := range values {
+              out = append(out, value)
+          }
+          return out
+      }
+    - |
+      func withHeader(header string, values []string) []string {
+          // The existing prefix is intentional: slot 0 is the header.
+          out := make([]string, 1)
+          out[0] = header
+          for _, value := range values {
+              out = append(out, value)
+          }
+          return out
+      }
+  bad:
+    - |
+      func addTags(tags []string) []string {
+          // Length len(tags) plus append leaves len(tags) zero strings ahead of tags.
+          out := make([]string, len(tags))
+          for _, tag := range tags {
+              out = append(out, tag)
+          }
+          return out
+      }
+    - |
+      func mergeScores(scores []int) []int {
+          // The slice keeps its length and each score is also appended, so values are duplicated.
+          out := make([]int, len(scores))
+          for i, score := range scores {
+              out[i] = score
+              out = append(out, score)
+          }
+          return out
+      }

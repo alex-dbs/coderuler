@@ -1,0 +1,55 @@
+version: 'v1'
+name: memory-ratio
+files:
+  included:
+    - charts/**/*.yaml
+scope:
+  format: yaml
+  path: $.containers[*]
+  key: $.name
+filter:
+  any:
+    - non_empty: $.data.resources.requests.memory
+    - non_empty: $.data.resources.limits.memory
+rule: Memory limit must be less than or equal to memory request * 1.5. Compare both values in the same units. Both memory request and memory limit must be specified.
+examples:
+  good:
+    - |
+      # limit equals request, so the ratio is 1.0 and stays below 1.5x
+      resources:
+        requests:
+          memory: 512Mi
+        limits:
+          memory: 512Mi
+    - |
+      # limit is exactly 1.5x request, so the boundary is compliant
+      resources:
+        requests:
+          memory: 512Mi
+        limits:
+          memory: 768Mi
+    - |
+      # mixed units: 1536Mi is exactly 1.5x the 1Gi request
+      resources:
+        requests:
+          memory: 1Gi
+        limits:
+          memory: 1536Mi
+  bad:
+    - |
+      # limit is 2x request, which exceeds 1.5x
+      resources:
+        requests:
+          memory: 512Mi
+        limits:
+          memory: 1Gi
+    - |
+      # memory request is missing
+      resources:
+        limits:
+          memory: 1Gi
+    - |
+      # memory limit is missing
+      resources:
+        requests:
+          memory: 512Mi

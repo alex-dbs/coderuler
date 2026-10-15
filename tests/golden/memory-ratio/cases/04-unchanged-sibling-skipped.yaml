@@ -1,0 +1,67 @@
+inputs:
+  - filepath: charts/payments-api/values.yaml
+    diff: |
+      --- a/charts/payments-api/values.yaml
+      +++ b/charts/payments-api/values.yaml
+      @@ -8,1 +8,1 @@
+      -        memory: 1Gi
+      +        memory: 2Gi
+    head: |
+      containers:
+        - name: payments-api
+          image: registry.example.com/payments-api:1.4.2
+          resources:
+            requests:
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+        - name: ledger
+          image: registry.example.com/ledger:2.0.0
+          resources:
+            requests:
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+    base: |
+      containers:
+        - name: payments-api
+          image: registry.example.com/payments-api:1.4.2
+          resources:
+            requests:
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+        - name: ledger
+          image: registry.example.com/ledger:2.0.0
+          resources:
+            requests:
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+expected:
+  contexts:
+    - filepath: charts/payments-api/values.yaml
+      diff: |
+        --- a/charts/payments-api/values.yaml
+        +++ b/charts/payments-api/values.yaml
+        @@ -8,1 +8,1 @@
+        -        memory: 1Gi
+        +        memory: 2Gi
+      scope:
+        id: '0:payments-api'
+        source: |
+          name: payments-api
+              image: registry.example.com/payments-api:1.4.2
+              resources:
+                requests:
+                  memory: 512Mi
+                limits:
+                  memory: 2Gi
+        data:
+          name: payments-api
+          image: registry.example.com/payments-api:1.4.2
+          resources:
+            requests:
+              memory: 512Mi
+            limits:
+              memory: 2Gi
