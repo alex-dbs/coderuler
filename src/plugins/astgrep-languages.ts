@@ -1,38 +1,10 @@
-/**
- * The ast-grep language catalog: every grammar a rule may name, and how each name becomes a parser.
- *
- * `@ast-grep/napi` bundles five grammars (JavaScript, TypeScript, TSX, CSS, HTML) that `parse`
- * accepts with no setup, and those never load a dynamic library. The other 26 catalog languages
- * ship as `@ast-grep/lang-*` packages whose default export already is the registration record the
- * native API wants, so no library path, extension list or language symbol is restated here.
- *
- * `registerDynamicLanguage` accepts one call per process and silently ignores a second, so the
- * bundled grammars are handed over together — all 26 at once, the first time a rule actually names
- * one — because a partial registration could never be completed later. Builtin-only matching never
- * loads a grammar package at all. A host that needs grammars of its own must merge them into that
- * same single call:
- *
- *     registerDynamicLanguage({ ...createAstGrepLanguageRegistrations(), mojo: mojoRegistration });
- *
- * A rule's `language` folds case-insensitively onto its canonical catalog spelling, accepts the
- * conventional aliases (`py`, `golang`, `c++`, `md`, ...), and is otherwise passed to the native
- * parser exactly as written, so a name a host registered itself keeps working. `resolveAstGrepLanguage`
- * reports which single call to make when the requested language still cannot be parsed afterwards,
- * instead of leaving the native missing-parser failure to explain it.
- */
 import { parse, registerDynamicLanguage, type DynamicLangRegistrations } from '@ast-grep/napi';
 import { createRequire } from 'node:module';
 
-/** The language argument accepted by the native parser (a built-in name or a registered name). */
 type NativeLanguage = Parameters<typeof parse>[0];
 
-/** One grammar package's registration record, in the shape the native API consumes. */
 type LanguageRegistration = DynamicLangRegistrations[string];
 
-/**
- * The languages `@ast-grep/napi` already bundles: `parse` takes these names with no registration, so
- * they are never given a dynamic library.
- */
 const BUILTIN_LANGUAGES: Readonly<Record<string, true>> = {
   css: true,
   html: true,
@@ -41,11 +13,6 @@ const BUILTIN_LANGUAGES: Readonly<Record<string, true>> = {
   typescript: true,
 };
 
-/**
- * Every language that ships as its own `@ast-grep/lang-<name>` package, in registration order. The
- * package name, the registration key and the name `parse` accepts are all this canonical spelling,
- * so the keys below are the whole catalog of dynamically loaded grammars.
- */
 const DYNAMIC_LANGUAGES: Readonly<Record<string, true>> = {
   angular: true,
   bash: true,
@@ -75,10 +42,6 @@ const DYNAMIC_LANGUAGES: Readonly<Record<string, true>> = {
   yaml: true,
 };
 
-/**
- * Conventional short spellings a rule may use instead of the canonical name, folded to lowercase
- * before lookup. They match the aliases editors and the ast-grep CLI already use.
- */
 const LANGUAGE_ALIASES: Readonly<Record<string, string>> = {
   cc: 'cpp',
   'c++': 'cpp',
@@ -100,14 +63,10 @@ const LANGUAGE_ALIASES: Readonly<Record<string, string>> = {
 
 const loadCommonJs = createRequire(import.meta.url);
 
-/** Whether the bundled grammars have already been handed to the one-shot native call. */
 let bundledRegistrationAttempted = false;
-/** Whether that call took effect, so every dynamic catalog name is known to resolve. */
 let bundledGrammarsActive = false;
-/** Why that call failed, when it did, so a later request reports the real cause. */
 let bundledRegistrationError: Error | null = null;
 
-/** True when the native parser can already parse the language, i.e. its grammar is registered. */
 function isParseable(language: NativeLanguage): boolean {
   try {
     parse(language, '');
@@ -117,7 +76,6 @@ function isParseable(language: NativeLanguage): boolean {
   }
 }
 
-/** Fold a requested spelling onto its canonical catalog name; unknown names stay verbatim. */
 function canonicalLanguage(language: string): string {
   const folded = language.toLowerCase();
   // Own keys only: a name such as `toString` must not pick up an inherited object property here.
@@ -127,7 +85,6 @@ function canonicalLanguage(language: string): string {
   return known ? folded : language;
 }
 
-/** Register every bundled grammar in the single native call the process allows, on first need. */
 function registerBundledGrammars(): void {
   if (bundledRegistrationAttempted) return;
   bundledRegistrationAttempted = true;
@@ -141,12 +98,6 @@ function registerBundledGrammars(): void {
   }
 }
 
-/**
- * The registration records for the whole catalog, for a host that registers grammars of its own:
- * spread this into that one `registerDynamicLanguage` call. Loading a package stays lazy — its
- * `libraryPath` is a getter the native call resolves — and a package that is absent fails loudly
- * here rather than becoming a language that silently never matches.
- */
 export function createAstGrepLanguageRegistrations(): DynamicLangRegistrations {
   const registrations: DynamicLangRegistrations = {};
   for (const language of Object.keys(DYNAMIC_LANGUAGES)) {
@@ -157,12 +108,6 @@ export function createAstGrepLanguageRegistrations(): DynamicLangRegistrations {
   return registrations;
 }
 
-/**
- * Resolve a rule's `language` to the name the native parser takes: the canonical catalog spelling
- * for a known name — registering the bundled grammars the first time one is needed — and the
- * spelling as written for anything else, which is a language the host registered itself. The native
- * query is compiled and validated right after this, so a successful resolve is probed at most once.
- */
 export function resolveAstGrepLanguage(language: string): NativeLanguage {
   const canonical = canonicalLanguage(language);
   if (BUILTIN_LANGUAGES[canonical] === true) return canonical;

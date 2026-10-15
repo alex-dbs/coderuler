@@ -1,14 +1,3 @@
-/**
- * Tests for the real rule discovery and loading API.
- *
- * Every case builds its own `.rulekeeper` trees under a fresh temporary workspace and passes them
- * explicitly as the `cwd` and `home` roots, so discovery walks real directories and real symlinks
- * while the process working directory and `$HOME` stay untouched. An explicit `loadRules` path is
- * resolved against the real filesystem too, but it never consults those roots: the cases below hand
- * it a directory or a file inside the same workspace. The no-argument `loadRules()`, which has no
- * root override and would therefore read the ambient home, is left to the CLI tests: they spawn the
- * real entry point with an isolated HOME and cover the discovered compile path.
- */
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,17 +6,11 @@ import { test } from 'node:test';
 
 import { discoverRuleFiles, loadRules } from './rule-loader.ts';
 
-/** The two roots one case discovers in: the project root searched first, the home root second. */
 interface Roots {
   readonly project: string;
   readonly home: string;
 }
 
-/**
- * Run one case against a fresh workspace holding a project root and a home root, removing the whole
- * workspace afterwards even when the case fails. Both roots exist but start empty; a case adds the
- * `.rulekeeper` directory it wants, so a missing root is a case's own deliberate setup.
- */
 async function withRoots(run: (roots: Roots) => Promise<void>): Promise<void> {
   const workspace = mkdtempSync(join(tmpdir(), 'rulekeeper-loader-'));
   try {
@@ -40,11 +23,6 @@ async function withRoots(run: (roots: Roots) => Promise<void>): Promise<void> {
   }
 }
 
-/**
- * A minimal valid rule whose compiled `name` identifies the file it came from and whose `included`
- * globs decide the filepaths it selects. The `yaml` scope plugin and `files` selection make it a
- * real compilable rule, not a shape-only stub.
- */
 function ruleYaml(name: string, included = '**/*.ts'): string {
   return [
     "version: 'v1'",
@@ -60,7 +38,6 @@ function ruleYaml(name: string, included = '**/*.ts'): string {
   ].join('\n');
 }
 
-/** Write one real rule file at a path relative to a root directory and return its absolute path. */
 function writeRule(root: string, relativePath: string, name: string, included?: string): string {
   const path = join(root, relativePath);
   mkdirSync(dirname(path), { recursive: true });

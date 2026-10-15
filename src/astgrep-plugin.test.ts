@@ -1,23 +1,3 @@
-/**
- * Behaviour tests for the ast-grep scope format: real native Go/JS/TS matches, exact source and
- * metavariable captures, stable declaration identity, and the option/query errors a host sees.
- * Every case runs the real `@ast-grep/napi` grammar; nothing is mocked.
- *
- * ast-grep accepts dynamic grammars only once per process, so this file makes that single call up
- * front: the whole bundled catalog merged with one grammar the host brought itself, registered as
- * `mojo`. That is the documented host setup —
- * `registerDynamicLanguage({ ...createAstGrepLanguageRegistrations(), mojo: mojoRegistration })` —
- * and it is what the out-of-catalog promise is about: `mojo` reaches the native parser exactly as
- * written and matches, while another spelling of the same name (`Mojo`) is a different, unregistered
- * language. Canonical spellings and conventional aliases (`Go`, `golang`, `py`) are folded by the
- * plugin itself, so the host never registers those. The plugin's own lazy registration, with no host
- * setup at all, is exercised by src/astgrep-languages.test.ts and by the golden fixtures.
- *
- * The overload and redefinition tests below compile real rules, because the duplicate-id check that
- * rejects a whole file lives in the rule pipeline: legal TypeScript overloads, Java overloads and
- * Python redefinitions each extract with unique ids instead of aborting, in file mode and in
- * revision mode.
- */
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
@@ -30,12 +10,10 @@ import { compileRule, type CompiledRule } from './rule.ts';
 const loadCommonJs = createRequire(import.meta.url);
 const mojoRegistration = loadCommonJs('@ast-grep/lang-go') as DynamicLangRegistrations[string];
 
-/** The host's own grammar name: outside the catalog, so it must survive to the native parser. */
 const HOST_GRAMMAR = 'mojo';
 
 registerDynamicLanguage({ ...createAstGrepLanguageRegistrations(), [HOST_GRAMMAR]: mojoRegistration });
 
-/** The Go rule the golden fixture uses: any function/method containing a loop that appends. */
 const GO_RULE: Record<string, unknown> = {
   any: [{ kind: 'function_declaration' }, { kind: 'method_declaration' }],
   has: {
@@ -116,7 +94,6 @@ const TS_RULE: Record<string, unknown> = {
   },
 };
 
-/** A catalog grammar the host never named: the merged registration is what makes it parse. */
 const PYTHON_SOURCE = [
   'def add_tags(tags):',
   '    out = []',
@@ -130,7 +107,6 @@ const PYTHON_RULE: Record<string, unknown> = {
   has: { pattern: 'return $NAME', stopBy: 'end' },
 };
 
-/** Select scopes from one source with a freshly compiled plugin, the way the core does. */
 function select(options: Record<string, unknown>, source: string): readonly ScopeMatch[] {
   return astGrepPlugin.compile(options).select({ filepath: 'memory.go', source });
 }
@@ -187,7 +163,6 @@ test('keeps a declaration identity stable when earlier lines move', () => {
   assert.deepEqual(moved, original);
 });
 
-/** Compile one ast-grep rule the way rule YAML does, against the built-in plugin registry. */
 function declarationRule(language: string, rule: Record<string, unknown>): CompiledRule {
   return compileRule({
     version: 'v1',
@@ -198,21 +173,18 @@ function declarationRule(language: string, rule: Record<string, unknown>): Compi
   });
 }
 
-/** The implementation every legal `collect` overload set needs; the overload declarations are signatures. */
 const TS_OVERLOAD_IMPLEMENTATION = [
   'export function collect(values: readonly unknown[]): readonly unknown[] {',
   '  return [...values];',
   '}',
 ].join('\n');
 
-/** The overload set before the second signature was added, i.e. the base of the head below. */
 const TS_ONE_SIGNATURE = [
   'export function collect(values: number[]): number[];',
   '',
   TS_OVERLOAD_IMPLEMENTATION,
 ].join('\n');
 
-/** Two legal overload signatures for `collect`, which parse as two declarations with the same name. */
 const TS_TWO_SIGNATURES = [
   'export function collect(values: number[]): number[];',
   'export function collect(values: string[]): string[];',
@@ -244,10 +216,8 @@ test('keys legal TypeScript overloads with a deterministic ordinal instead of fa
   assert.deepEqual(rule.match({ filepath, diff: '', head: TS_TWO_SIGNATURES, base: TS_TWO_SIGNATURES }), []);
 });
 
-/** The class with one `add`, i.e. the base of the overloaded class below. */
 const JAVA_ONE_ADD = ['class Cart {', '  void add(String item) {', '    items.add(item);', '  }', '}', ''].join('\n');
 
-/** Two legal overloads of `add`, which parse as two declarations with the same name. */
 const JAVA_OVERLOADED_ADD = [
   'class Cart {',
   '  void add(String item) {',
@@ -284,10 +254,8 @@ test('keys a legal Java overload with a deterministic ordinal instead of failing
   assert.deepEqual(rule.match({ filepath, diff: '', head: JAVA_OVERLOADED_ADD, base: JAVA_OVERLOADED_ADD }), []);
 });
 
-/** The module before the second `add_tags` was added, i.e. the base of the redefined module below. */
 const PYTHON_ONE_ADD_TAGS = ['def add_tags(tags):', '    return tags', ''].join('\n');
 
-/** Two module-level definitions of `add_tags`, which Python resolves to the last one. */
 const PYTHON_REDEFINED_ADD_TAGS = [
   'def add_tags(tags):',
   '    return tags',

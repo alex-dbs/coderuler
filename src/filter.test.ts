@@ -1,18 +1,11 @@
-/**
- * Behavior tests for rule-level applicability filters: operator schema, non-executable JSONPath
- * validation, presence-and-emptiness semantics over the `ScopeMatch` wrapper, and cycle rejection.
- * Every case drives the real `compileFilter` against real scope matches; nothing is mocked.
- */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { compileFilter } from './filter.ts';
 import type { ScopeMatch } from './plugins/index.ts';
 import type { JsonValue } from './plugins/types.ts';
 
-/** The wrapper a filter sees; a test adds only the fields it is about. */
 const BASE: ScopeMatch = { id: 's', source: 'text' };
 
-/** Whether one `non_empty` path accepts the given wrapper fields. */
 function accepts(path: string, fields: ScopeMatch): boolean {
   return compileFilter({ non_empty: path }).applies(fields);
 }

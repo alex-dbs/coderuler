@@ -1,14 +1,3 @@
-/**
- * End-to-end tests for the real `check` and `validate` commands. Every case spawns Node on the
- * absolute root `index.ts` inside an isolated project whose `HOME`/`USERPROFILE` point at an
- * isolated home, so the recursive scan, rule selection and every failure path are exercised against
- * real files and never the developer's checkout or home. The case's decision backend is a real HTTP
- * server this process runs on a loopback port, so the CLI's own call is exercised without a mock and
- * never leaves the machine; every project the sandbox hands out is pointed at it. The domain cases
- * materialize the trusted file-only golden sources, so real memory, protobuf and Go inputs reach
- * `check` unchanged; the reviewed rule's name, text and examples come from the group's normative
- * `rule.yaml`.
- */
 import assert from 'node:assert/strict';
 import { readFileSync, symlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -32,7 +21,6 @@ import {
   type SandboxRoot,
 } from '../tests/support.ts';
 
-/** A malformed YAML source: any rule that reads it fails, so an unread file proves it was skipped. */
 const MALFORMED_YAML = 'a: [unclosed\n';
 
 let sandbox!: SandboxRoot;
@@ -48,7 +36,6 @@ after(async () => {
   await backend.close();
 });
 
-/** One whole-file YAML rule over the document root, with the given selection and optional filter. */
 function yamlRule(
   name: string,
   rule: string,
@@ -67,7 +54,6 @@ function yamlRule(
   return lines.join('\n');
 }
 
-/** One trusted file-only golden case: the group rule, its metadata and the materializable sources. */
 interface GoldenFileCase {
   readonly rulePath: string;
   readonly name: string;
@@ -77,13 +63,6 @@ interface GoldenFileCase {
   readonly sources: readonly { readonly filepath: string; readonly source: string }[];
 }
 
-/**
- * Read one trusted golden case whose inputs are all file-only sources. The group's `rule.yaml` is
- * normative for the rule's name, text and examples; the case supplies only the expected contexts,
- * so nothing is derived from the output the case is meant to pin. The revision cases belong to the
- * revision pipeline and are deliberately unreadable here: a case naming `head`/`base`/`diff` is a
- * wrong fixture for a file-only check, not a silently ignored input.
- */
 function goldenFileCase(group: string, name: string): GoldenFileCase {
   const rulePath = join(GOLDEN_ROOT, group, 'rule.yaml');
   const ruleDocument: unknown = parse(readFileSync(rulePath, 'utf8'));
@@ -117,11 +96,6 @@ function goldenFileCase(group: string, name: string): GoldenFileCase {
   };
 }
 
-/**
- * Materialize one golden case's real sources and run `check` over the whole project with its rule.
- * The decision backend answers every context, and the case pins the rule identity, the examples and
- * the context data; the decisions themselves are pinned by their own cases below.
- */
 async function goldenCheck(label: string, group: string, name: string): Promise<void> {
   const project = sandbox.isolated(label);
   const golden = goldenFileCase(group, name);
@@ -401,9 +375,7 @@ test('check never parses a source no rule selects', async () => {
 test('check fails without stdout for every unusable input', async () => {
   interface FailureCase {
     readonly label: string;
-    /** Build the case's fixture and return the CLI arguments to run. */
     readonly setup: (project: Sandbox) => readonly string[];
-    /** Patterns the failure message must carry, for the cases that explain what went wrong. */
     readonly needles?: readonly RegExp[];
   }
 
@@ -476,11 +448,6 @@ test('check fails without stdout for every unusable input', async () => {
   }
   assert.strictEqual(backend.requests.length, 0, 'a failing run must not have asked for a decision');
 });
-
-/*
- * The decision cases below share the file's one backend fixture: a case that reads the recorded
- * requests resets it first, and a case that changes the answer restores it before it returns.
- */
 
 test('check decides every context and reports each scope under its own filepath and id', async () => {
   const project = sandbox.isolated('check-decisions');
@@ -556,11 +523,12 @@ test('check asks the backend for a decision on the whole scope under the documen
     '',
     'the instruction must carry a review question',
   );
-  // The scope travels whole — filepath, id, source and parsed data — beside the rule and examples it
-  // is judged against, and nothing else.
+  // The review state carries where the scope lives and the data selected for it, beside the rule
+  // and examples it is judged against, and nothing else. The parsed data already carries the whole
+  // scope, so the raw source text is not repeated on the wire.
   assert.deepStrictEqual(body, {
     model: backend.model,
-    state: fileContext('config/app.yaml', source),
+    state: { filepath: 'config/app.yaml', scope: { id: '0:', data: { name: 'api' } } },
     questions: {
       follows_instructions: {
         type: 'noul',

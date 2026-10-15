@@ -2,8 +2,10 @@
 
 **One YAML file = one rule.** rulekeeper selects complete *scopes*, filters their applicability, and
 builds each scope's review context. `check` then sends the rule, its examples, and every selected
-context to the configured HTTP decision provider and reports, per scope, the probability and model
-it answered with. `validate` stays offline and only compiles rules.
+context to the configured HTTP decision provider and reports the probability and model it answered with,
+per scope — or per group, when a rule sets `decision.group_by` to `file`, `folder` or `project` and
+judges one group at a time from the current working tree rather than a diff. `validate` stays offline
+and only compiles rules.
 
 Scope selection itself — the matcher, applicability filters, and context contract — is a
 deterministic, network-free core, and the [golden tests](#checks) exercise it without any model call.
@@ -20,7 +22,8 @@ and common aliases such as `py`, `rs`, and `c++`. See the
 ## Requirements
 
 - **Node.js 24 or later** — the sources are typed TypeScript executed directly (no compile step).
-- **Git 2.45 or later** — only for `--diff-only`; older Git rejects the `--no-lazy-fetch` option.
+- **Git 2.45 or later** — only for a `--diff-only` run that has scope-mode rules; older Git rejects the
+  `--no-lazy-fetch` option.
 - **A decision provider** — an HTTP endpoint and API key for `check`; both come from the environment
   (see [Configuration](#configuration)) and `validate` needs neither.
 
@@ -79,7 +82,10 @@ node index.ts validate ./my-rules        # validate an explicit rule file or fol
 `check [path]` defaults to `.`. Rule globs and context filepaths are relative to the **working
 directory**; a target such as `src` narrows the scan without changing that base. Only files selected
 by a rule's `files.included` / `files.excluded` are read. Selected scopes then pass through the rule's
-applicability filter. Without `--diff-only`, sources come from the working tree.
+applicability filter. Without `--diff-only`, sources come from the working tree. A rule whose
+`decision.group_by` is `file`, `folder` or `project` always reads the current working tree — even under
+`--diff-only` — and judges one group of its selected scopes at a time; see
+[decision grouping](docs/rulekeeper-design.md#decision-grouping).
 
 Recursive source scans skip `.git`, `node_modules`, `.rulekeeper`, symlinks, and the loaded rule
 files themselves. An explicitly selected source symlink is rejected. `.gitignore` is not consulted.
@@ -89,20 +95,25 @@ files themselves. An explicitly selected source symlink is rejected. `.gitignore
 `--diff-only` requires Git 2.45 or later and compares the **merge base of the base branch and
 `HEAD`** to committed `HEAD`, like a pull request. It reviews new/changed scopes with complete
 context, not just added lines. Unchanged sibling scopes are excluded, even with
-`scope.changed: false`.
+`scope.changed: false`. This applies to scope-mode rules; a rule grouped by `file`, `folder` or
+`project` ignores the diff and reads the current working tree instead, so a `--diff-only` run whose
+rules are all grouped needs no Git and leaves `--base` unused.
 
 The default base is `origin/HEAD`, falling back to `origin/main`, `origin/master`, `main`, then
 `master`. `--base <ref>` overrides it and requires `--diff-only`. References must exist locally;
 the command never fetches. Every Git call carries `--no-lazy-fetch` with `GIT_TERMINAL_PROMPT=0`, so
 a partial clone whose objects are missing fails the read instead of contacting the promisor remote,
 and Git older than 2.45 fails loudly on the unsupported option. That no-network guarantee covers
-**Git operations only**: `check` still contacts the decision provider over HTTP for whatever scopes the
-diff selects.
+**Git operations only**: `check` still contacts the decision provider over HTTP for every selected scope
+or group.
 
-Staged, unstaged, and untracked source changes are **not** included. Rule definitions still come
-from the current working tree and home directory. `[path]` and `--rules` work in both modes, and a
-`[path]` must lie inside the repository (it need not exist on disk, so committed changes stay
-checkable after a local deletion).
+For a scope-mode rule, staged, unstaged, and untracked source changes are **not** included; a rule
+grouped by `file`, `folder` or `project` reviews the current working tree, dirty or not, and needs no
+repository — a `--diff-only` run whose rules are all grouped touches no Git at all, while a mixed run
+still reads the repository for its scope-mode rules. Rule definitions still come from the current working
+tree and home directory. `[path]` and `--rules` work in both modes; for a scope-mode diff the `[path]`
+must lie inside the repository but need not exist on disk (so committed changes stay checkable after a
+local deletion), whereas a grouped rule scans the current filesystem and its target must exist there.
 
 
 ### Rule discovery
@@ -130,27 +141,31 @@ per loaded rule, including rules with no contexts. `ruleFile` is the absolute ru
 context's `filepath` is relative to the working directory. Contexts aggregate across files in lexical
 filepath order; diff-only contexts also include the per-file `diff`.
 
-`decisions` holds one entry per context, in the same order — `{ filepath, scopeId, follows,
-probability, model }`. `follows` is `true` exactly when `probability > 0.5` (a tie at `0.5` is not a
-following decision), and the backend's `probability` and `model` are preserved unchanged, so a
-borderline answer reads the same here as the provider reported it.
+`decisions` holds one entry per scope-mode context, in the same order — `{ filepath, scopeId, follows,
+probability, model }` — or, for a grouped rule, one entry per group — `{ group: { type, path },
+members: [{ filepath, scopeId }], follows, probability, model }`. `follows` is `true` exactly when
+`probability > 0.5` (a tie at `0.5` is not a following decision), and the backend's `probability` and
+`model` are preserved unchanged, so a borderline answer reads the same here as the provider reported
+it.
 
 `check` writes nothing before all rules compile and all of its contexts are collected, so a parse or
-read failure has no external side effect. It then sends, one awaited question per context in
-rule and context order, the rule text, its normalized examples, and the context — the scope's
-`source`, `data`, and `captures`, its `filepath`, and, in `--diff-only` mode, the per-file `diff` —
-to the configured provider. Requests time out after 30 seconds, are never followed across redirects,
-and are never retried on a server error; there is no offline or mocked fallback. Only after every
-decision succeeds is the array written in a single atomic `stdout` write, so a failure never leaves
-partial JSON.
+read failure has no external side effect. It then sends, one awaited question per context or group in
+rule order and then context order, the rule text, its normalized examples, and the context — for a
+scope, its structured `data` when the plugin exposes one (with `captures` when present) or else its
+matched `source`, beside its `filepath` and, in `--diff-only` mode, the per-file `diff`; for a group,
+its descriptor and member files and scopes — to the configured provider. One group is one request and is
+never split into smaller calls. Requests time out after 30 seconds, are never followed across redirects,
+and are never retried on a server error; there is no offline or mocked fallback. Only the single final
+`stdout` write is atomic, and it happens only after every decision succeeds, so a failure never leaves
+partial JSON — but requests already sent to the provider cannot be rolled back.
 
 A successful run exits `0` **even when every decision is `false`** — `check` reports the answers, it
 does not assert compliance and does not fail a build on a failing scope. Setup, parse, and provider
 errors exit nonzero with a stderr message and no JSON. `validate` still never calls the provider and
 prints each rule's identity only after all definitions compile.
 
-`check` transmits the selected context to the configured provider. Choose the endpoint and key
-deliberately before reviewing a repository whose contents must not leave the machine.
+`check` transmits the selected context — or group — to the configured provider. Choose the endpoint and
+key deliberately before reviewing a repository whose contents must not leave the machine.
 
 Run `node /absolute/path/to/rulekeeper/index.ts check` from the project you want to review.
 `npm start -- check` also works from this repository; use `npm run --silent start -- check` when
@@ -165,5 +180,8 @@ npm run test:golden
 npm test
 ```
 
-The 39 golden fixtures are deterministic and never call a decision provider, so they run without a
-key or network access.
+The 39 matcher fixtures under `tests/golden/` are deterministic and never call a decision provider, so
+they run without a key or network access; they are what `npm run test:golden` runs. Grouped decisions
+are covered separately by 11 hand-authored cases in `tests/decision-golden.json`, alongside
+end-to-end grouped CLI runs against a local loopback HTTP backend — never a live provider. Both are
+part of `npm test`, which discovers `src/*.test.ts`, and are not part of `npm run test:golden`.

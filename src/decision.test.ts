@@ -1,11 +1,3 @@
-/**
- * Behavior tests for the decision facade and its TypeSafe adapter. Every request leaves through a
- * real axios client to a loopback server this suite starts, so the wire format, the answer
- * validation and the failure paths run over real HTTP. The decision settings are built here rather
- * than inherited, and this test process runs with every proxy variable cleared for the length of the
- * suite and restored afterwards, so no case can reach the developer's key, an ambient proxy or the
- * network.
- */
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createServer, type Server } from 'node:http';
@@ -14,27 +6,26 @@ import { after, before, test } from 'node:test';
 import { isMapping } from '../tests/support.ts';
 import { createDecisionService } from './decision/config.ts';
 import { JevAdapter } from './decision/jev.ts';
+import type { DecisionState } from './decision/port.ts';
 import { DecisionService, type DecisionInput } from './decision/service.ts';
 import type { Context, RuleExamples } from './rule.ts';
 
 const API_KEY = 'loopback-key';
 const RULE = 'Every handler must return a promise.';
 const EXAMPLES: RuleExamples = { good: ['async function save(): Promise<void> {}'], bad: ['function save(): void {}'] };
-const CONTEXT: Context = {
-  filepath: 'src/save.ts',
-  diff: '@@ -1 +1 @@\n-function save(): void {}\n+async function save(): Promise<void> {}',
-  scope: { id: '0:', source: 'async function save(): Promise<void> {}' },
-};
+const FILEPATH = 'src/save.ts';
+const DIFF = '@@ -1 +1 @@\n-function save(): void {}\n+async function save(): Promise<void> {}';
+const SOURCE = 'async function save(): Promise<void> {}';
+const CONTEXT: Context = { filepath: FILEPATH, diff: DIFF, scope: { id: '0:', source: SOURCE } };
 const INPUT: DecisionInput = { context: CONTEXT, rule: RULE, examples: EXAMPLES };
+const PROJECTED: DecisionState = { filepath: FILEPATH, diff: DIFF, scope: { id: '0:', source: SOURCE } };
 
-/** One scripted response: its status, its raw body and any further headers. */
 interface Reply {
   readonly status?: number;
   readonly body?: string;
   readonly headers?: Record<string, string>;
 }
 
-/** One request the adapter sent, with its JSON body decoded. */
 interface Sent {
   readonly method: string;
   readonly path: string;
@@ -42,7 +33,6 @@ interface Sent {
   readonly body: unknown;
 }
 
-/** The loopback backend: where it listens, what it received, and what it answers next. */
 interface Loopback {
   readonly origin: string;
   readonly baseUrl: string;
@@ -52,29 +42,24 @@ interface Loopback {
   close(): Promise<void>;
 }
 
-/** One successful response with the given noul probability, shaped as the API documents it. */
 function noulReply(noul: number, model = 'jev-1.13.0'): Reply {
   return jsonReply({ model, answers: { follows_instructions: { type: 'noul', noul } }, usage: { input_tokens: 296, output_tokens: 20 } });
 }
 
-/** One response whose body is the given value rendered as JSON. */
 function jsonReply(body: unknown, status = 200): Reply {
   return { status, body: JSON.stringify(body) };
 }
 
-/** One response carrying the given answers map under a model name. */
 function answersReply(answers: unknown, model: unknown = 'jev-1.13.0'): Reply {
   return jsonReply({ model, answers });
 }
 
-/** The port one server bound, once it is listening. */
 function boundPort(server: Server): number {
   const address = server.address();
   if (address === null || typeof address === 'string') throw new Error('the server did not bind a TCP port');
   return address.port;
 }
 
-/** Stop one server and every connection still open on it, so a case cannot hang its own teardown. */
 async function stopServer(server: Server): Promise<void> {
   server.closeAllConnections();
   await new Promise<void>((resolve, reject) => {
@@ -82,7 +67,6 @@ async function stopServer(server: Server): Promise<void> {
   });
 }
 
-/** Start the loopback backend, recording each request with its decoded body before it is answered. */
 async function startLoopback(): Promise<Loopback> {
   const sent: Sent[] = [];
   let backend: Loopback;
@@ -127,7 +111,6 @@ async function startLoopback(): Promise<Loopback> {
   return backend;
 }
 
-/** One decision environment: the inherited variables minus every decision setting and its key. */
 function decisionEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(process.env)) {
@@ -137,14 +120,12 @@ function decisionEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return { ...env, ...overrides };
 }
 
-/** The service one case runs: the real factory over the loopback endpoint and the fixture key. */
 function serviceFor(backend: Loopback, overrides: NodeJS.ProcessEnv = {}): DecisionService {
   return createDecisionService(
     decisionEnv({ RULEKEEPER_DECISION_BASE_URL: backend.baseUrl, RULEKEEPER_DECISION_API_KEY: API_KEY, ...overrides }),
   );
 }
 
-/** The error one rejected decision produced; a decision that resolved instead fails the case. */
 async function failed(run: () => Promise<unknown>): Promise<Error> {
   try {
     await run();
@@ -155,22 +136,39 @@ async function failed(run: () => Promise<unknown>): Promise<Error> {
   throw new Error('expected the decision to fail, but it resolved');
 }
 
-/** The one request a case sent, so no case can pass on a request it did not expect. */
 function onlySent(backend: Loopback): Sent {
   assert.equal(backend.sent.length, 1, 'exactly one request must have been sent');
   return backend.sent[0]!;
 }
 
-/** The JSON body of the one request a case sent. */
 function wireBody(backend: Loopback): Record<string, unknown> {
   const body = onlySent(backend).body;
   assert.ok(isMapping(body), 'the request body must be a JSON object');
   return body;
 }
 
+function sentState(backend: Loopback): Record<string, unknown> {
+  const state = wireBody(backend).state;
+  assert.ok(isMapping(state), 'the request must carry an object state');
+  return state;
+}
+
+function sentQuestion(backend: Loopback): Record<string, unknown> {
+  const questions = wireBody(backend).questions;
+  assert.ok(isMapping(questions), 'the request must carry a questions map');
+  const question = questions.follows_instructions;
+  assert.ok(isMapping(question), 'the request must carry a follows_instructions question');
+  return question;
+}
+
+function sentInstructions(backend: Loopback): Record<string, unknown> {
+  const instructions = sentQuestion(backend).instructions;
+  assert.ok(isMapping(instructions), 'the question must carry instructions');
+  return instructions;
+}
+
 let backend!: Loopback;
 
-/** The proxy variables this process had before the suite, so the teardown can put them back. */
 const savedProxies: Record<string, string> = {};
 
 before(async () => {
@@ -190,7 +188,7 @@ after(async () => {
   for (const [name, value] of Object.entries(savedProxies)) process.env[name] = value;
 });
 
-test('one decision posts the rule, its examples and the selected context to the configured endpoint', async () => {
+test('one decision posts the rule, its examples and the projected scope to the configured endpoint', async () => {
   backend.reset();
   const decision = await serviceFor(backend).decide(INPUT);
 
@@ -201,18 +199,98 @@ test('one decision posts the rule, its examples and the selected context to the 
 
   const body = wireBody(backend);
   assert.equal(body.model, 'jev-latest');
-  assert.deepEqual(body.state, CONTEXT);
-  const questions = body.questions;
-  assert.ok(isMapping(questions), 'the request must carry a questions map');
-  const question = questions.follows_instructions;
-  assert.ok(isMapping(question), 'the request must carry a follows_instructions question');
-  assert.equal(question.type, 'noul');
-  const instructions = question.instructions;
-  assert.ok(isMapping(instructions), 'the question must carry instructions');
+  assert.deepEqual(sentState(backend), PROJECTED);
+  assert.equal(sentQuestion(backend).type, 'noul');
+  const instructions = sentInstructions(backend);
   assert.equal(instructions.rule, RULE);
   assert.deepEqual(instructions.examples, EXAMPLES);
   assert.ok(typeof instructions.question === 'string' && instructions.question.trim() !== '', 'the instructions must phrase a question in words');
 
+  assert.deepEqual(decision, { follows: true, probability: 0.9, model: 'jev-1.13.0' });
+});
+
+test('a scope with a structured payload is sent as that payload, without a copy of its matched text', async () => {
+  backend.reset();
+  const captures = { name: 'save', params: ['first', 'last'] };
+  const context: Context = {
+    filepath: FILEPATH,
+    scope: { id: '4:9', source: 'async function save(first: string, last: string) {}', data: { kind: 'function', name: 'save', returns: null }, captures },
+  };
+
+  await serviceFor(backend).decide({ context, rule: RULE, examples: EXAMPLES });
+
+  const state = sentState(backend);
+  assert.deepEqual(state, {
+    filepath: FILEPATH,
+    scope: { id: '4:9', data: { kind: 'function', name: 'save', returns: null }, captures },
+  });
+  const scope = state.scope;
+  assert.ok(isMapping(scope), 'the state must carry the selected scope');
+  assert.ok(!('source' in scope), 'a scope with a payload must not carry its matched text as well');
+  assert.ok(!('diff' in state), 'a context without a diff must not send an empty one');
+});
+
+test('a payload of null, false, 0 or an empty string is sent as data rather than read as absent', async () => {
+  for (const data of [null, false, 0, ''] as const) {
+    backend.reset();
+    const context: Context = { filepath: FILEPATH, scope: { id: '0:', source: 'return 0;', data } };
+
+    await serviceFor(backend).decide({ context, rule: RULE, examples: EXAMPLES });
+
+    assert.deepEqual(sentState(backend), { filepath: FILEPATH, scope: { id: '0:', data } }, `a payload of ${JSON.stringify(data)}`);
+  }
+});
+
+test('a scope with no payload falls back to its matched text, keeping its location, diff and captures', async () => {
+  backend.reset();
+  const context: Context = {
+    filepath: 'src/handlers/load.ts',
+    diff: DIFF,
+    scope: { id: '1:2', source: 'export const load = 1;', captures: { name: 'load' } },
+  };
+
+  await serviceFor(backend).decide({ context, rule: RULE, examples: EXAMPLES });
+
+  assert.deepEqual(sentState(backend), {
+    filepath: 'src/handlers/load.ts',
+    diff: DIFF,
+    scope: { id: '1:2', source: 'export const load = 1;', captures: { name: 'load' } },
+  });
+});
+
+test('a group is sent as one state carrying every file and scope, with no diff anywhere', async () => {
+  backend.reset();
+  const grouped: DecisionInput = {
+    rule: RULE,
+    examples: EXAMPLES,
+    context: {
+      group: { type: 'folder', path: 'src/payments' },
+      files: [
+        {
+          filepath: 'src/payments/save.ts',
+          scopes: [
+            { id: '0:', source: 'async function save() {}' },
+            { id: '3:0', source: 'async function load() {}', data: { kind: 'function', waits: true }, captures: { name: 'load' } },
+          ],
+        },
+        { filepath: 'src/payments/refund.ts', scopes: [{ id: '0:', source: 'function refund() {}', data: null }] },
+      ],
+    },
+  };
+
+  const decision = await serviceFor(backend).decide(grouped);
+
+  assert.deepEqual(sentState(backend), {
+    group: { type: 'folder', path: 'src/payments' },
+    files: [
+      {
+        filepath: 'src/payments/save.ts',
+        scopes: [{ id: '0:', source: 'async function save() {}' }, { id: '3:0', data: { kind: 'function', waits: true }, captures: { name: 'load' } }],
+      },
+      { filepath: 'src/payments/refund.ts', scopes: [{ id: '0:', data: null }] },
+    ],
+  });
+  assert.ok(!JSON.stringify(sentState(backend)).includes('diff'), 'a group must not carry per-file review evidence');
   assert.deepEqual(decision, { follows: true, probability: 0.9, model: 'jev-1.13.0' });
 });
 

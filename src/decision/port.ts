@@ -1,34 +1,51 @@
-import type { Context, RuleExamples } from '../rule.ts';
+import type { JsonValue } from '../plugins/types.ts';
+import type { RuleExamples } from '../rule.ts';
 
-/**
- * The review instruction one decision is judged by: the rule text, the illustrative snippets a
- * reviewer reads alongside it, and the single question the backend is asked. The service builds it
- * once per decision and the backend reads it verbatim.
- */
 export interface DecisionInstructions {
   readonly rule: string;
   readonly examples: RuleExamples;
-  /** The yes/no question the backend answers, phrased against the state it is given. */
   readonly question: string;
 }
 
-/** One decision request: the selected context to judge, with the instruction judging it. */
+export type DecisionCaptures = Readonly<Record<string, string | readonly string[]>>;
+
+export type DecisionScope =
+  | { readonly id: string; readonly data: JsonValue; readonly captures?: DecisionCaptures }
+  | { readonly id: string; readonly source: string; readonly captures?: DecisionCaptures };
+
+export interface DecisionScopeState {
+  readonly filepath: string;
+  readonly diff?: string;
+  readonly scope: DecisionScope;
+}
+
+export interface DecisionGroup {
+  readonly type: 'file' | 'folder' | 'project';
+  readonly path: string;
+}
+
+export interface DecisionGroupFile {
+  readonly filepath: string;
+  readonly scopes: readonly DecisionScope[];
+}
+
+export interface DecisionGroupState {
+  readonly group: DecisionGroup;
+  readonly files: readonly DecisionGroupFile[];
+}
+
+export type DecisionState = DecisionScopeState | DecisionGroupState;
+
 export interface DecisionRequest {
-  readonly context: Context;
+  readonly context: DecisionState;
   readonly instructions: DecisionInstructions;
 }
 
-/** One backend answer: the probability the question holds, and the model that answered it. */
 export interface BackendDecision {
   readonly probability: number;
   readonly model: string;
 }
 
-/**
- * The decision backend one request is evaluated against. An implementation answers exactly the
- * request it is handed; retrying, reporting and aggregating belong to the caller, and no wire
- * format of a particular backend is part of this contract.
- */
 export interface DecisionBackend {
   decide(request: DecisionRequest): Promise<BackendDecision>;
 }

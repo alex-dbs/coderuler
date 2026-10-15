@@ -1,15 +1,3 @@
-/**
- * End-to-end tests for rule discovery through the real `check` and `validate` commands. Every case
- * spawns Node on the absolute root `index.ts` from an isolated working directory whose
- * `HOME`/`USERPROFILE` point at an isolated home, so discovery sees only the two `.rulekeeper` roots
- * the case creates and never the real user's `~/.rulekeeper`. The case's decision backend is a real
- * HTTP server this process runs on a loopback port, so a check that selects a context is answered
- * locally and never reaches a real backend. Only the real rule and source files are materialized;
- * the expectations are the file-mode contexts the rules select. The lexical order and determinism of
- * a root's own rule listing are pinned by the CLI suite's rules-directory case, so only the
- * discovery-specific behavior — both roots, same names, fallbacks and validation — is exercised
- * here.
- */
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
@@ -27,7 +15,6 @@ import {
   type SandboxRoot,
 } from '../tests/support.ts';
 
-/** A rule whose version is not v1, so it fails to compile wherever it is discovered. */
 const INVALID_RULE = [
   "version: 'v2'",
   'name: Unsupported rule version',
@@ -54,7 +41,6 @@ after(async () => {
   await backend.close();
 });
 
-/** One whole-file rule over the config YAML tree, selecting the document root; optionally changed. */
 function wholeFileRule(name: string, rule: string, changed = false): string {
   const lines = [
     "version: 'v1'",

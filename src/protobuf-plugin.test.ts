@@ -5,24 +5,20 @@ import { protobufPlugin } from './plugins/protobuf.ts';
 const SELECT_ALL = protobufPlugin.compile({ path: '$.rpcs[*]' });
 const FILE = 'proto/billing/v1/invoice.proto';
 
-/** One HTTP binding the plugin must report. */
 type Binding = { readonly method: string; readonly url: string };
 
 function select(source: string) {
   return SELECT_ALL.select({ filepath: FILE, source });
 }
 
-/** Join the lines of an RPC the way the reader receives them, one line per array entry. */
 function rpc(...lines: readonly string[]): string {
   return lines.join('\n');
 }
 
-/** Wrap one RPC in the smallest service the reader must accept. */
 function inService(statement: string, packageName = 'acme.billing.v1'): string {
   return `package ${packageName};\nservice S {\n  ${statement}\n}\n`;
 }
 
-/** The whole scope context the plugin must produce for one RPC wrapped by {@link inService}. */
 function expectedContext(
   statement: string,
   name: string,
@@ -64,7 +60,6 @@ test('extracts one RPC with exact source and exact data', () => {
   ]);
 });
 
-/** Every statement form the reader accepts, each keeping its exact source and an empty binding list. */
 const RPC_FORMS: readonly { readonly label: string; readonly name: string; readonly statement: string }[] = [
   { label: 'semicolon body', name: 'Tail', statement: 'rpc Tail(TailRequest) returns (TailResponse);' },
   {
@@ -91,7 +86,6 @@ test('preserves the exact source of every RPC form, unannotated RPCs included', 
   }
 });
 
-/** Every way one `google.api.http` rule can be written, and the bindings in source order. */
 const OPTION_CASES: readonly {
   readonly label: string;
   readonly name: string;
@@ -321,7 +315,6 @@ test('skips unknown angle-bracket options before a service and its real RPC', ()
   assert.deepStrictEqual(select(source), [expectedContext(statement, 'Real', [], '')]);
 });
 
-/** One `get` value written in the source, and the URL it must decode to. */
 const ESCAPE_CASES: readonly { readonly label: string; readonly literal: string; readonly url: string }[] = [
   { label: 'simple escapes', literal: String.raw`"/v1/items/{id}?x=a\"b\\c"`, url: '/v1/items/{id}?x=a"b\\c' },
   // Octal and deliberately malformed escapes are quoted with explicit backslashes: a template

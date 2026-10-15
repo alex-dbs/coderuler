@@ -1,11 +1,3 @@
-/**
- * Protobuf scope format: exposes each `rpc` in a revision as one normalized scope record.
- *
- * The plugin parses the source with the token-based reader in `protobuf-parser.ts`, builds a
- * normalized `{ rpcs: [...] }` root whose nodes are the records' exact `data` payloads, and selects
- * records with a non-executable JSONPath expression (`eval: false`). Only nodes that really are RPC
- * records may be selected; anything else is a configuration error rather than an empty result.
- */
 import { JSONPath } from 'jsonpath-plus';
 import { assertNonExecutable } from '../jsonpath.ts';
 import { readRpcRecords } from './protobuf-parser.ts';
@@ -35,7 +27,6 @@ class ProtobufScope implements CompiledScope {
   }
 }
 
-/** Validate one compiled scope's options and return the selecting scope. */
 function compileProtobufScope(options: Readonly<Record<string, unknown>>): CompiledScope {
   for (const key of Object.keys(options)) {
     if (key !== 'path') throw new Error(`Unknown protobuf scope option '${key}'`);
@@ -56,7 +47,6 @@ function compileProtobufScope(options: Readonly<Record<string, unknown>>): Compi
   return new ProtobufScope(path);
 }
 
-/** The builtin protobuf scope format. */
 export const protobufPlugin: ScopePlugin = {
   format: 'protobuf',
   compile: compileProtobufScope,

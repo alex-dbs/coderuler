@@ -1,23 +1,9 @@
-/**
- * Tests for the bundled ast-grep language catalog in a process where the host registers nothing: the
- * "plain CLI run" path, where the plugin itself supplies every grammar. Real `@ast-grep/napi` grammars
- * do the parsing; nothing is mocked.
- *
- * node:test runs one file per process and the tests of a file in order, so the first test can observe
- * the state before any grammar is registered — matching with a builtin must not pull in a dynamic
- * library — and the later ones can then rely on the single registration the plugin makes for the whole
- * catalog. The host-registration path is covered by src/astgrep-plugin.test.ts.
- *
- * The table below covers every published grammar, each with a real snippet and the exact scopes, source
- * text and captures the rule must select.
- */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parse } from '@ast-grep/napi';
 import { astGrepPlugin } from './plugins/astgrep.ts';
 import type { ScopeMatch } from './plugins/types.ts';
 
-/** The grammars that ship as `@ast-grep/lang-<name>` packages, in the catalog's registration order. */
 const CATALOG: readonly string[] = [
   'angular',
   'bash',
@@ -47,7 +33,6 @@ const CATALOG: readonly string[] = [
   'yaml',
 ];
 
-/** Conventional short spellings the plugin folds onto a canonical name, spelled independently here. */
 const ALIASES: Readonly<Record<string, string>> = {
   cc: 'cpp',
   'c++': 'cpp',
@@ -67,14 +52,12 @@ const ALIASES: Readonly<Record<string, string>> = {
   ts: 'typescript',
 };
 
-/** One real snippet and the rule that must select from it. */
 interface LanguageFixture {
   readonly source: string;
   readonly rule: Record<string, unknown>;
   readonly expected: readonly ScopeMatch[];
 }
 
-/** One catalog language with the fixture its rule must select from it. */
 interface LanguageCase extends LanguageFixture {
   readonly language: string;
 }
@@ -115,7 +98,6 @@ const GO_ADD_TAGS = [
 
 const GO_SOURCE = ['package store', '', GO_ADD_TAGS, ''].join('\n');
 
-/** Any Go function or method containing a loop that appends. */
 const GO_RULE: Record<string, unknown> = {
   any: [{ kind: 'function_declaration' }, { kind: 'method_declaration' }],
   has: {
@@ -188,10 +170,6 @@ const TYPESCRIPT_SOURCE = [
   '}',
 ].join('\n');
 
-/**
- * C and C++ both expose a function definition without a `name` field, so a rule selects the same
- * scope from the same snippet and the two catalog languages share this one fixture.
- */
 const C_FUNCTION_FIXTURE: LanguageFixture = {
   source: C_SOURCE,
   rule: { kind: 'function_definition', has: { pattern: 'return $LEFT + $RIGHT', stopBy: 'end' } },
@@ -204,7 +182,6 @@ const C_FUNCTION_FIXTURE: LanguageFixture = {
   ],
 };
 
-/** Both Glimmer grammars expose the same `<template>` node, so the two share this one fixture. */
 const GLIMMER_TEMPLATE_FIXTURE: LanguageFixture = {
   source: GLIMMER_SOURCE,
   rule: { kind: 'glimmer_template' },
@@ -217,7 +194,6 @@ const GLIMMER_TEMPLATE_FIXTURE: LanguageFixture = {
   ],
 };
 
-/** Every language the catalog promises, with the exact scopes a real rule selects from it. */
 const CASES: readonly LanguageCase[] = [
   {
     language: 'angular',
@@ -546,11 +522,9 @@ const CASES: readonly LanguageCase[] = [
   },
 ];
 
-/** The table keyed by canonical language name. */
 const CASE_BY_LANGUAGE: Record<string, LanguageCase> = {};
 for (const entry of CASES) CASE_BY_LANGUAGE[entry.language] = entry;
 
-/** Select scopes from one source with a freshly compiled plugin, the way the core does. */
 function select(language: string, source: string, rule: Record<string, unknown>): readonly ScopeMatch[] {
   return astGrepPlugin.compile({ language, rule }).select({ filepath: 'memory.src', source });
 }

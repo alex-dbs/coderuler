@@ -1,8 +1,3 @@
-/**
- * Behavior tests for the builtin `yaml` scope plugin: JSONPath selection over YAML documents, exact
- * source slices, fully resolved `data`, stable ids, and the compile-time rejection of executable
- * selectors. Everything here drives the real plugin against real YAML text; nothing is mocked.
- */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 

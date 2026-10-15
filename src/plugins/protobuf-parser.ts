@@ -1,33 +1,17 @@
-/**
- * Token-based structural reader for Protocol Buffer sources.
- *
- * It is deliberately a source extractor, not a compiler: it recognises packages, services and
- * `rpc` statements (including streaming and semicolon forms), preserves each RPC's exact source
- * text, and reads `google.api.http` rules written either as one option aggregate or as dotted field
- * paths spread over several option statements. Imports, message/enum bodies and unknown
- * declarations are skipped by balancing tokens, so anything protoc would accept lexically is
- * tolerated. Comments and quoted strings are consumed by the tokenizer, so braces inside them can
- * never corrupt statement boundaries. Malformed selected RPCs, unterminated strings/comments and
- * invalid escapes throw instead of silently degrading.
- */
 import { Buffer } from 'node:buffer';
 
-/** One lexed token with its half-open `[start, end)` span into the original source. */
 interface ProtoToken {
   readonly kind: 'ident' | 'number' | 'punct' | 'string';
-  /** Identifier text, punctuation character, number text, or the raw quoted string. */
   readonly text: string;
   readonly start: number;
   readonly end: number;
 }
 
-/** One HTTP binding of an RPC's `google.api.http` annotation. */
 type ProtoHttpBinding = {
   readonly method: string;
   readonly url: string;
 };
 
-/** Exact `data` payload for one RPC record (matches the shared scope-plugin contract). */
 type ProtoRpcData = {
   readonly id: string;
   readonly package: string;
@@ -36,7 +20,6 @@ type ProtoRpcData = {
   readonly http: { readonly bindings: readonly ProtoHttpBinding[] };
 };
 
-/** One extracted RPC: its identity, exact source text and normalized data. */
 interface ProtoRpcRecord {
   readonly id: string;
   readonly source: string;
@@ -61,7 +44,6 @@ function isIdentPart(ch: string): boolean {
   return isIdentStart(ch) || (ch >= '0' && ch <= '9');
 }
 
-/** A byte-order mark is skipped like whitespace, so a leading BOM cannot swallow a declaration. */
 function isWhitespace(ch: string): boolean {
   return ch === ' ' || ch === '\t' || ch === '\r' || ch === '\n' || ch === '\f' || ch === '\v' || ch === '\uFEFF';
 }
@@ -73,14 +55,12 @@ function hexValue(ch: string): number | undefined {
   return undefined;
 }
 
-/** One decoded escape: literal `text`, or one UTF-8 `byte` from an octal/hex escape. */
 type ProtoEscape = {
   readonly next: number;
   readonly text?: string;
   readonly byte?: number;
 };
 
-/** Decode one backslash escape that starts at `index`; throws on malformed escapes. */
 function readEscape(source: string, index: number): ProtoEscape {
   const ch = source[index + 1];
   if (ch === undefined) throw new Error('Unterminated escape sequence in string literal');
@@ -160,18 +140,12 @@ function readEscape(source: string, index: number): ProtoEscape {
   }
 }
 
-/** Decode one contiguous byte-escape run once it can no longer continue. */
 function flushByteRun(bytes: number[], out: string[]): void {
   if (bytes.length === 0) return;
   out.push(Buffer.from(bytes).toString('utf8'));
   bytes.length = 0;
 }
 
-/**
- * Decode one raw quoted literal into `out`, carrying the byte run in `bytes` across the literal's
- * escapes and on to the next adjacent literal, so `"\303\251"` and `"\303" "\251"` decode alike.
- * Any escape that is not a byte, and any literal character, ends the run.
- */
 function decodeStringLiteral(raw: string, bytes: number[], out: string[]): void {
   const end = raw.length - 1;
   let index = 1;
@@ -201,7 +175,6 @@ function decodeStringLiteral(raw: string, bytes: number[], out: string[]): void 
   }
 }
 
-/** Lex one quoted string starting at `start` (the opening quote); returns the token and next index. */
 function readStringToken(source: string, start: number): readonly [ProtoToken, number] {
   const quote = source[start]!;
   let index = start + 1;
@@ -221,7 +194,6 @@ function readStringToken(source: string, start: number): readonly [ProtoToken, n
   }
 }
 
-/** Lex a whole protobuf source into tokens, dropping comments and whitespace. */
 function tokenizeProto(source: string): readonly ProtoToken[] {
   const tokens: ProtoToken[] = [];
   let index = 0;
@@ -282,7 +254,6 @@ function tokenizeProto(source: string): readonly ProtoToken[] {
   return tokens;
 }
 
-/** Skip a balanced `{}`/`()`/`[]`/`<>` group; returns the index after the closer. */
 function skipBalanced(tokens: readonly ProtoToken[], index: number): number {
   const open = tokens[index]!.text;
   const close = CLOSERS[open]!;
@@ -300,11 +271,6 @@ function skipBalanced(tokens: readonly ProtoToken[], index: number): number {
   throw new Error(`Unbalanced '${open}' in protobuf source`);
 }
 
-/**
- * Skip one declaration or statement starting at `index`. Block declarations end at their matching
- * `}`; otherwise the statement ends at the first `;` outside balanced groups. A `}` that closes the
- * enclosing block is left for the caller.
- */
 function skipStatement(tokens: readonly ProtoToken[], index: number): number {
   let cursor = index;
   let depth = 0;
@@ -337,38 +303,31 @@ function skipStatement(tokens: readonly ProtoToken[], index: number): number {
   return cursor;
 }
 
-/** A `custom` binding being assembled from its `kind` and `path` fields. */
 interface CustomDraft {
   kind?: string;
   path?: string;
 }
 
-/** One entry of a draft HTTP rule, in source order. */
 type RuleEntry =
   | { readonly kind: 'binding'; readonly method: string; readonly url: string }
   | { readonly kind: 'custom'; readonly draft: CustomDraft };
 
-/** A `google.api.http` rule being assembled across the option statements of one RPC body. */
 interface RuleDraft {
-  /** Shared across all additional bindings so interleaved declarations keep their order. */
   readonly entries: RuleEntry[];
   readonly customs: CustomDraft[];
   currentAddition?: RuleDraft;
 }
 
-/** The additional binding a dotted `additional_bindings` path extends, created on first use. */
 function additionDraft(rule: RuleDraft): RuleDraft {
   return rule.currentAddition ?? newAdditionDraft(rule);
 }
 
-/** Each aggregate/list element declares a distinct additional binding. */
 function newAdditionDraft(rule: RuleDraft): RuleDraft {
   const child: RuleDraft = { entries: rule.entries, customs: [] };
   rule.currentAddition = child;
   return child;
 }
 
-/** The custom binding a dotted `custom.<field>` statement extends: the newest one missing `field`. */
 function customDraft(rule: RuleDraft, field: 'kind' | 'path'): CustomDraft {
   for (let index = rule.customs.length - 1; index >= 0; index--) {
     const draft = rule.customs[index]!;
@@ -380,7 +339,6 @@ function customDraft(rule: RuleDraft, field: 'kind' | 'path'): CustomDraft {
   return draft;
 }
 
-/** Collect one draft rule's bindings in source order. */
 function flattenRule(rule: RuleDraft, out: ProtoHttpBinding[]): void {
   for (const entry of rule.entries) {
     if (entry.kind === 'binding') out.push({ method: entry.method, url: entry.url });
@@ -388,7 +346,6 @@ function flattenRule(rule: RuleDraft, out: ProtoHttpBinding[]): void {
   }
 }
 
-/** One RPC found while reading; its package-qualified identity is only known at the end. */
 interface PendingRecord {
   readonly service: string;
   readonly name: string;
@@ -396,7 +353,6 @@ interface PendingRecord {
   readonly source: string;
 }
 
-/** Recursive-descent reader over the token stream; tolerant of declarations it does not model. */
 class ProtoReader {
   private readonly tokens: readonly ProtoToken[];
   private readonly source: string;
@@ -543,7 +499,6 @@ class ProtoReader {
     throw new Error('Unterminated rpc body in protobuf source');
   }
 
-  /** Read one option statement, applying the fields of a `google.api.http` rule to the draft. */
   private readOption(start: number, rule: RuleDraft): number {
     if (this.tokens[start + 1]?.text !== '(') return skipStatement(this.tokens, start);
     const name = this.readOptionName(start + 1);
@@ -553,7 +508,6 @@ class ProtoReader {
     return this.assignHttpPath(name.fields, cursor, rule);
   }
 
-  /** Read an option name: the parenthesized extension plus every dotted field after it. */
   private readOptionName(start: number): { name: string; fields: readonly string[]; next: number } {
     let cursor = start + 1;
     let name = '';
@@ -572,11 +526,6 @@ class ProtoReader {
     return { name: name.replace(/^\.+/, ''), fields, next: cursor };
   }
 
-  /**
-   * Apply one `google.api.http` option value to the draft named by `fields`, the dotted path after
-   * the option name. An empty path is the whole rule, `['get']` is one verb, and
-   * `['additional_bindings', 'custom', 'kind']` reaches into the newest additional binding.
-   */
   private assignHttpPath(fields: readonly string[], cursor: number, rule: RuleDraft): number {
     let target = rule;
     let index = 0;
@@ -615,7 +564,6 @@ class ProtoReader {
     return skipStatement(this.tokens, cursor);
   }
 
-  /** Read a `{ ... }` or `< ... >` HTTP rule into `rule`; `close` is the matching delimiter. */
   private readHttpRule(start: number, rule: RuleDraft, close = '}'): number {
     let cursor = start + 1;
     while (cursor < this.tokens.length) {
@@ -659,7 +607,6 @@ class ProtoReader {
     throw new Error('Unterminated google.api.http option in protobuf source');
   }
 
-  /** Read a `[ { ... }, < ... > ]` additional_bindings list, one binding per element. */
   private readBindingList(start: number, rule: RuleDraft): number {
     let cursor = start + 1;
     while (cursor < this.tokens.length) {
@@ -678,7 +625,6 @@ class ProtoReader {
     throw new Error('Unterminated additional_bindings list in protobuf source');
   }
 
-  /** Read a custom binding aggregate into a fresh draft of `rule`. */
   private readCustom(start: number, rule: RuleDraft): number {
     const open = this.tokens[start]?.text;
     if (open !== '{' && open !== '<') return this.skipValue(start);
@@ -709,7 +655,6 @@ class ProtoReader {
     throw new Error('Unterminated custom http binding in protobuf source');
   }
 
-  /** Read one string literal plus every adjacent literal, decoding byte escapes as UTF-8 bytes. */
   private readStringValue(start: number): { value: string; next: number } {
     const first = this.tokens[start];
     if (first === undefined || first.kind !== 'string') {
@@ -734,7 +679,6 @@ class ProtoReader {
   }
 }
 
-/** Extract every RPC record from a protobuf source in declaration order. */
 export function readRpcRecords(source: string): readonly ProtoRpcRecord[] {
   return new ProtoReader(source).read();
 }

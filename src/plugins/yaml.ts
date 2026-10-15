@@ -1,12 +1,3 @@
-/**
- * YAML scope plugin: turns one JSONPath selection over every YAML document into complete scopes.
- *
- * The plugin resolves each document to plain JSON-compatible data (aliases and `<<` merge keys
- * included) and queries it with jsonpath-plus under `eval: false`, so a rule can never run a
- * JSONPath script or filter. Every selected node becomes one scope carrying its exact source text
- * and its full resolved data, so a downstream reviewer always sees the whole resource (for example
- * both `request` and `limit`) regardless of which line the diff touched.
- */
 import { JSONPath, type ReturnObject } from 'jsonpath-plus';
 import {
   isAlias,
@@ -22,32 +13,20 @@ import {
 import { assertNonExecutable } from '../jsonpath.ts';
 import type { CompiledScope, JsonValue, ScopeMatch, ScopePlugin } from './types.ts';
 
-/** A parsed YAML document; its contents may still be absent. */
 type YamlDocument = Document.Parsed;
 
-/**
- * The budget the `yaml` package charges every alias expansion against while it materializes a
- * document. Resolution that exceeds it is reported as a resource-exhaustion attack rather than
- * expanded, so an alias bomb fails instead of allocating without bound.
- */
 const MAX_ALIAS_COUNT = 100;
 
-/** One mapping entry after `<<` merge keys are applied, in first-wins insertion order. */
 interface EffectiveEntry {
   readonly key: string;
   readonly value: unknown;
 }
 
-/** One resolved JSONPath match: the value and the JSON Pointer that located it. */
 interface ResolvedMatch {
   readonly value: JsonValue;
   readonly pointer: string;
 }
 
-/**
- * Track `node` on the current merge-source walk so a self-referential merge fails loudly instead of
- * recursing forever; JSON cannot represent a cycle anyway.
- */
 function withGuard<T>(node: unknown, active: Set<unknown>, work: () => T): T {
   if (active.has(node)) throw new Error('Recursive YAML aliases or merges are not supported');
   active.add(node);
@@ -58,7 +37,6 @@ function withGuard<T>(node: unknown, active: Set<unknown>, work: () => T): T {
   }
 }
 
-/** Follow an alias to its anchor target; other nodes pass through unchanged. */
 function resolveAlias(node: unknown, document: YamlDocument): unknown {
   if (!isAlias(node)) return node;
   const target = node.resolve(document);
@@ -66,11 +44,6 @@ function resolveAlias(node: unknown, document: YamlDocument): unknown {
   return target;
 }
 
-/**
- * The JSON object key a scalar mapping key contributes, mirroring YAML's key stringification: the
- * `yaml` package turns every non-null scalar key into a JS object key with `String(value)`, so
- * numbers stringify the same way, including the non-finite `.inf`/`-.inf`/`.nan` keys it accepts.
- */
 function keyString(key: unknown): string {
   if (!isScalar(key)) throw new Error('A YAML scope requires scalar mapping keys');
   const value = key.value;
@@ -80,7 +53,6 @@ function keyString(key: unknown): string {
   throw new Error('A YAML mapping key must be a string, number, boolean or null');
 }
 
-/** The mappings a `<<` merge value contributes, accepting an alias or a sequence of aliases. */
 function mergeSources(value: unknown, document: YamlDocument): YAMLMap<unknown, unknown>[] {
   const resolved = resolveAlias(value, document);
   if (isSeq(resolved)) {
@@ -94,12 +66,6 @@ function mergeSources(value: unknown, document: YamlDocument): YAMLMap<unknown, 
   return [resolved];
 }
 
-/**
- * Mapping entries with merge keys applied: explicit keys always win, then each merge source adds
- * the keys it still owns (earlier sources winning over later ones). Results are memoized per
- * document, so a merge graph that reaches one source through many paths stays linear in the
- * number of distinct keys instead of expanding once per path.
- */
 function effectiveEntries(
   map: YAMLMap<unknown, unknown>,
   document: YamlDocument,
@@ -141,7 +107,6 @@ function effectiveEntries(
   return entries;
 }
 
-/** Reject values JSON cannot carry: cycles, non-finite numbers and non-plain objects. */
 function assertJsonValue(value: unknown, visiting: Set<object>, seen: Set<object>): void {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
   if (typeof value === 'number') {
@@ -167,11 +132,6 @@ function assertJsonValue(value: unknown, visiting: Set<object>, seen: Set<object
   seen.add(value);
 }
 
-/**
- * Resolve a document to plain JSON-compatible data. The `yaml` package expands aliases and `<<`
- * merge keys itself and charges every expansion against `MAX_ALIAS_COUNT`, so an alias bomb errors
- * instead of allocating without bound; the materialized value is then checked for JSON fit.
- */
 function resolveData(document: YamlDocument): JsonValue {
   let data: unknown;
   try {
@@ -184,7 +144,6 @@ function resolveData(document: YamlDocument): JsonValue {
   return data as JsonValue;
 }
 
-/** Walk the resolved JSON Pointer back to the source node, resolving aliases and merges. */
 function locate(
   root: unknown,
   segments: readonly string[],
@@ -211,7 +170,6 @@ function locate(
   return node;
 }
 
-/** Decode a JSON Pointer into path segments; the empty pointer is the document root. */
 function pointerSegments(pointer: string): string[] {
   if (pointer === '') return [];
   if (!pointer.startsWith('/')) throw new Error(`Unexpected JSON Pointer "${pointer}"`);
@@ -221,14 +179,12 @@ function pointerSegments(pointer: string): string[] {
     .map(segment => segment.replaceAll('~1', '/').replaceAll('~0', '~'));
 }
 
-/** The exact source text of a selected node, without surrounding comments or whitespace. */
 function sourceOf(node: unknown, source: string): string {
   const range = isNode(node) ? node.range : undefined;
   if (!range) throw new Error('The selected YAML node has no source range');
   return source.slice(range[0], range[1]);
 }
 
-/** Run the selection under jsonpath-plus with evaluation disabled; executable forms are rejected. */
 function queryAll(selector: string, data: JsonValue): ResolvedMatch[] {
   let result: unknown;
   try {
@@ -247,7 +203,6 @@ function queryAll(selector: string, data: JsonValue): ResolvedMatch[] {
   });
 }
 
-/** Resolve a scope's `key` selector against its own data: exactly one string or finite number. */
 function keyValue(data: JsonValue, selector: string): string {
   // jsonpath-plus reports nothing for a falsy document root, so `$` reads the scope's own data: a
   // key at the root must still resolve for `0`, `false` and the empty string.
@@ -264,7 +219,6 @@ function keyValue(data: JsonValue, selector: string): string {
   throw new Error('The YAML scope "key" selector must resolve to a string or finite number');
 }
 
-/** Every scope the selector matches across every document in one revision's source. */
 function selectScopes(source: string, selector: string, keySelector: string | undefined): ScopeMatch[] {
   if (source === '') return [];
   const documents = parseAllDocuments(source, { merge: true });
@@ -300,7 +254,6 @@ function selectScopes(source: string, selector: string, keySelector: string | un
   return scopes;
 }
 
-/** The builtin `yaml` scope format: `{ path, key? }` selecting nodes of every YAML document. */
 export const yamlPlugin: ScopePlugin = {
   format: 'yaml',
   compile(options: Readonly<Record<string, unknown>>): CompiledScope {

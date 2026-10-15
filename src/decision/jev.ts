@@ -1,33 +1,22 @@
 import axios, { type AxiosInstance } from 'axios';
 import type { BackendDecision, DecisionBackend, DecisionRequest } from './port.ts';
 
-/** The settings one Jev adapter is built from. */
 export interface JevOptions {
   readonly model: string;
   readonly baseUrl: string;
   readonly apiKey: string;
 }
 
-/** The versioned endpoint path one decision is posted to, appended to the configured base URL. */
 const ENDPOINT = 'v1/systemone';
 
-/** The one question id the adapter asks; the answer comes back under the same id. */
 const QUESTION_ID = 'follows_instructions';
 
-/** How long one decision may take before the request is abandoned. */
 const TIMEOUT_MS = 30_000;
 
-/** Narrow to a parsed JSON mapping (not an array or scalar). */
 function isMapping(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/**
- * Validate the configured base URL and return it unchanged, so a request appends the versioned
- * endpoint path to whatever prefix the deployment uses — an origin, or a gateway prefix that keeps
- * its own path. Only a bare http(s) URL is accepted: a query or fragment would swallow the appended
- * path, and embedded credentials would put a second secret on the wire beside the configured key.
- */
 function baseUrlOf(baseUrl: string): string {
   let url: URL;
   try {
@@ -50,11 +39,6 @@ function baseUrlOf(baseUrl: string): string {
   return baseUrl;
 }
 
-/**
- * One failed request as an error that names the failure category and nothing else. The key, the
- * request body, the response body and the request URL never reach the message, and the axios error
- * is not kept as a cause: its `config` holds the authorization header and a caller may print it.
- */
 function requestFailure(error: unknown): Error {
   if (axios.isAxiosError(error)) {
     const status = error.response?.status;
@@ -69,11 +53,6 @@ function requestFailure(error: unknown): Error {
   return new Error(`Decision request failed: ${error instanceof Error ? error.message : String(error)}`);
 }
 
-/**
- * Read the one answer the adapter asked for out of a parsed response body, field by field. Every
- * field used is checked at runtime rather than trusted: an unexpected, incomplete or out-of-range
- * payload must fail here, never surface as a decision that looks answered.
- */
 function readBackendDecision(data: unknown): BackendDecision {
   if (!isMapping(data)) {
     throw new Error('Decision response is not a JSON object');
@@ -99,11 +78,6 @@ function readBackendDecision(data: unknown): BackendDecision {
   return { probability, model };
 }
 
-/**
- * The TypeSafe adapter: one axios client over the versioned `v1/systemone` evaluation endpoint, one
- * request per decision. The configured base URL keeps its own prefix, the key travels as a bearer
- * token, and a response is read only after it passed validation — nothing is retried or redirected.
- */
 export class JevAdapter implements DecisionBackend {
   readonly #client: AxiosInstance;
   readonly #model: string;
@@ -118,12 +92,11 @@ export class JevAdapter implements DecisionBackend {
     });
   }
 
-  /** Ask the one question about one context, and return the probability and model that answered it. */
   async decide(request: DecisionRequest): Promise<BackendDecision> {
     const body = {
       model: this.#model,
-      // The context is data the model reads, not a template this adapter reshapes: it is sent as it
-      // was selected, and it stays distinguishable from the instruction beside it.
+      // The state is data the model reads, not a template this adapter reshapes: it is sent exactly
+      // as the service projected it, and it stays distinguishable from the instruction beside it.
       state: request.context,
       questions: {
         [QUESTION_ID]: { type: 'noul', instructions: request.instructions },

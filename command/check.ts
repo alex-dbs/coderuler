@@ -3,45 +3,30 @@ import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { createDecisionService } from '../src/decision/config.ts';
+import { groupContexts, type DecisionContext, type GroupedContext } from '../src/decision/group.ts';
 import type { Decision, DecisionService } from '../src/decision/service.ts';
 import { branchDiff, readBranchFile } from '../src/git-diff.ts';
 import { type CompiledRule, type Context, type FileInput, type MatchOptions, type RuleExamples, type RuleInput } from '../src/rule.ts';
 import { loadRules, type LoadedRule } from '../src/rule-loader.ts';
 
-/** The parsed `check` options: the rules to use and whether to read the working tree or a diff. */
 export interface CheckOptions {
   readonly rules?: string;
-  /** Compare committed revisions instead of reading source files from the working tree. */
   readonly diffOnly?: boolean;
-  /** Ref to merge-base `HEAD` against in diff mode; the default branch when omitted. */
   readonly base?: string;
 }
 
-/**
- * One source file of the scan: the absolute real path it is read from, and the logical filepath
- * every rule glob selects on and every context reports. The logical path is always relative to the
- * process working directory, so `check some/dir` narrows which files are read without rebasing one
- * rule's globs. The absolute path is resolved, so one file reached under two spellings is one
- * candidate — which is what keeps a rule descriptor out of the sources however it was named.
- */
 interface SourceCandidate {
   readonly absolute: string;
   readonly logical: string;
 }
 
-/** Directories never descended into: version control, installed packages and the rule folders. */
 const SKIPPED_DIRECTORIES: Record<string, true> = {
   '.git': true,
   node_modules: true,
   '.rulekeeper': true,
 };
 
-/**
- * One decision of one selected scope, reported in the context's own file and scope. The decision
- * service derives all three values; the scope `id` is carried alongside rather than looked up from
- * the context again, so the report is self-contained.
- */
-interface CheckedDecision {
+interface CheckedScopeDecision {
   readonly filepath: string;
   readonly scopeId: string;
   readonly follows: boolean;
@@ -49,11 +34,16 @@ interface CheckedDecision {
   readonly model: string;
 }
 
-/**
- * One entry per loaded rule: its descriptor, the contexts it selected, and the decision each
- * context received in the same order. The absolute rule-file path is what the entry is reported
- * under.
- */
+interface CheckedGroupDecision {
+  readonly group: GroupedContext['group'];
+  readonly members: readonly { readonly filepath: string; readonly scopeId: string }[];
+  readonly follows: boolean;
+  readonly probability: number;
+  readonly model: string;
+}
+
+type CheckedDecision = CheckedScopeDecision | CheckedGroupDecision;
+
 interface CheckedRule {
   readonly ruleFile: string;
   readonly name: string;
@@ -63,12 +53,6 @@ interface CheckedRule {
   readonly decisions: readonly CheckedDecision[];
 }
 
-/**
- * Collect the source files at and below one directory. A directory in {@link SKIPPED_DIRECTORIES}
- * and every symlink entry are skipped, so the walk never descends into dependencies and never
- * loops on a link back into itself. Read order carries no meaning: the caller sorts the collected
- * logical filepaths, so the file order is deterministic regardless of the directory read order.
- */
 async function collectSources(directory: string, files: string[]): Promise<void> {
   const entries = await readdir(directory, { withFileTypes: true });
   for (const entry of entries) {
@@ -82,18 +66,6 @@ async function collectSources(directory: string, files: string[]): Promise<void>
   }
 }
 
-/**
- * The source files one invocation scans, lexically sorted by logical filepath. A directory target
- * is walked recursively; a file target is that one file. A target that does not exist, or that is
- * itself a symlink, fails with its path named — following a link here would check the link's
- * target under a logical path that hides what was really read.
- *
- * Every candidate is read from its real path. The walk never follows a link, so the only alias a
- * collected path can carry is one in the target's own prefix: resolving that prefix once yields
- * every candidate's real path without a lookup per file, and only an aliased target rewrites the
- * path a candidate is read from. What a context reports is untouched: the logical filepath stays
- * the cwd-relative spelling.
- */
 async function resolveSources(target: string): Promise<SourceCandidate[]> {
   const absolute = resolve(target);
   let stats: Stats;
@@ -124,13 +96,6 @@ async function resolveSources(target: string): Promise<SourceCandidate[]> {
     .sort((a, b) => (a.logical < b.logical ? -1 : a.logical > b.logical ? 1 : 0));
 }
 
-/**
- * The descriptor identities no source may match: for every loaded rule file, both the path the
- * caller named it with and the real path that path resolves to. A rule keeps being reported under
- * the named path — an explicit `--rules` may be a symlink file, or a link in the path to it — while
- * the file the link resolves to is excluded as well, so a descriptor cannot slip into the scan
- * under a second spelling. Identical entries collapse in the set.
- */
 async function descriptorPaths(loaded: readonly LoadedRule[]): Promise<Set<string>> {
   const identities = new Set<string>();
   for (const { filepath } of loaded) {
@@ -140,23 +105,16 @@ async function descriptorPaths(loaded: readonly LoadedRule[]): Promise<Set<strin
   return identities;
 }
 
-/** Head modes a diff source may carry: a regular file, or a deletion whose scopes are all gone. */
 const DIFF_HEAD_MODES: Record<string, true> = { '100644': true, '100755': true, '000000': true };
 
-/** The indexes of the loaded rules whose compiled selection accepts one logical filepath. */
-function selectingRules(loaded: readonly LoadedRule[], filepath: string): number[] {
+function selectingRules(loaded: readonly LoadedRule[], filepath: string, mask?: readonly boolean[]): number[] {
   const selected: number[] = [];
   for (let index = 0; index < loaded.length; index++) {
-    if (loaded[index]!.rule.matchesFile(filepath)) selected.push(index);
+    if ((mask === undefined || mask[index] === true) && loaded[index]!.rule.matchesFile(filepath)) selected.push(index);
   }
   return selected;
 }
 
-/**
- * One selected rule's contexts at one logical filepath, with a failure of the rule's own matching
- * named by the rule file and the filepath. Nothing is written here, so a failure cannot leave a
- * partial result behind.
- */
 function matchedContexts(
   ruleFile: string,
   rule: CompiledRule,
@@ -172,23 +130,13 @@ function matchedContexts(
   }
 }
 
-/**
- * Collect one context list per loaded rule from the committed change between the merge base and
- * `HEAD`, the same shape the working-tree scan produces.
- *
- * Only committed revisions are compared: no source file is stat'ed, read or even expected to exist
- * on disk, so a checkout whose committed files were deleted or rewritten is still checked as
- * committed. Candidate scoping is lexical over the repository-relative change paths — the target
- * must lie inside the repository, and no path outside it is read — then a change is dropped when no
- * loaded rule selects its logical filepath, before any blob is read. A change matching no rule, or
- * a deletion, contributes no contexts; a rename's base side is the old path, so a rule that does
- * not select that path is treated as newly applicable and compares against an empty base.
- *
- * Every rule matches every selected change before this returns, so a failing read, a malformed
- * scope or a failing match never yields a partial result; the failure names the change and, for a
- * match failure, the rule file.
- */
-async function collectDiffContexts(target: string, options: CheckOptions, loaded: readonly LoadedRule[]): Promise<Context[][]> {
+async function collectDiffContexts(
+  target: string,
+  options: CheckOptions,
+  loaded: readonly LoadedRule[],
+  rulePaths: ReadonlySet<string>,
+  mask?: readonly boolean[],
+): Promise<Context[][]> {
   const branch = await branchDiff(options.base);
   const targetAbsolute = resolve(target);
   const targetWithinRepo = relative(branch.repoRoot, targetAbsolute);
@@ -197,7 +145,6 @@ async function collectDiffContexts(target: string, options: CheckOptions, loaded
   }
 
   const cwd = process.cwd();
-  const rulePaths = await descriptorPaths(loaded);
   const contextsByRule = loaded.map((): Context[] => []);
 
   for (const file of branch.files) {
@@ -215,7 +162,7 @@ async function collectDiffContexts(target: string, options: CheckOptions, loaded
     if (absolute !== targetAbsolute && !absolute.startsWith(targetAbsolute + sep)) continue;
     const logical = relative(cwd, absolute).split(sep).join('/');
 
-    const selected = selectingRules(loaded, logical);
+    const selected = selectingRules(loaded, logical, mask);
     if (selected.length === 0) continue;
 
     // One read per changed file, shared by every rule that selects it.
@@ -241,11 +188,6 @@ async function collectDiffContexts(target: string, options: CheckOptions, loaded
   return contextsByRule;
 }
 
-/**
- * Write the one JSON array both modes produce: one entry per loaded rule, in load order, each
- * carrying its contexts and the decision of every context. A run writes nothing before this point,
- * so no failure inside it can leave a partial result behind.
- */
 function writeChecked(
   loaded: readonly LoadedRule[],
   contextsByRule: readonly Context[][],
@@ -262,25 +204,15 @@ function writeChecked(
   process.stdout.write(`${JSON.stringify(checked, null, 2)}\n`);
 }
 
-/**
- * Answer every collected context, one awaited call per context in rule order and then context
- * order — never a fan-out, so the requests stay as ordered as the report. One decision service is
- * created on the first context and reused for the rest; a run that collected no context never
- * creates one, and so never reads the decision configuration.
- *
- * A failing request names the rule file, the context's filepath and the scope, and carries only the
- * sanitized message the adapter produced. Every context is collected before this call, so the
- * requests are the only external effect and a failure here leaves nothing written.
- */
 async function decideContexts(
   loaded: readonly LoadedRule[],
-  contextsByRule: readonly Context[][],
+  decisionContextsByRule: readonly (readonly DecisionContext[])[],
 ): Promise<CheckedDecision[][]> {
-  const decisionsByRule = contextsByRule.map((): CheckedDecision[] => []);
+  const decisionsByRule = decisionContextsByRule.map((): CheckedDecision[] => []);
   let service: DecisionService | undefined;
   for (let index = 0; index < loaded.length; index++) {
     const { filepath: ruleFile, rule } = loaded[index]!;
-    for (const context of contextsByRule[index]!) {
+    for (const context of decisionContextsByRule[index]!) {
       // Created lazily on the first context, so only a run that has something to decide reads the
       // backend configuration.
       const active = (service ??= createDecisionService());
@@ -289,35 +221,42 @@ async function decideContexts(
         decision = await active.decide({ context, rule: rule.rule, examples: rule.examples });
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        throw new Error(
-          `Decision for ${context.filepath} scope ${context.scope.id} of rule ${ruleFile} failed: ${detail}`,
-          { cause: error },
-        );
+        const subject = 'group' in context
+          ? `${context.group.type} group ${context.group.path}`
+          : `${context.filepath} scope ${context.scope.id}`;
+        throw new Error(`Decision for ${subject} of rule ${ruleFile} failed: ${detail}`, { cause: error });
       }
-      decisionsByRule[index]!.push({
-        filepath: context.filepath,
-        scopeId: context.scope.id,
-        follows: decision.follows,
-        probability: decision.probability,
-        model: decision.model,
-      });
+      decisionsByRule[index]!.push(decisionRecord(context, decision));
     }
   }
   return decisionsByRule;
 }
 
-/**
- * Collect one context list per loaded rule from the working tree, in lexical filepath order.
- *
- * Only files at least one compiled rule selects are read, and each selected file is read once and
- * shared by every selecting rule. Contexts accumulate per rule across the files, and the rules keep
- * their loaded order. A rule that selects nothing still appears, with an empty `contexts` list.
- * Every rule is compiled, every selected file is read and matched before this returns, so a
- * malformed rule, an unreadable source or a failing match never yields a partial result; the
- * failure names the source path and the rule involved.
- */
-async function collectTreeContexts(target: string, loaded: readonly LoadedRule[]): Promise<Context[][]> {
-  const rulePaths = await descriptorPaths(loaded);
+function decisionRecord(context: DecisionContext, decision: Decision): CheckedDecision {
+  if ('group' in context) {
+    return {
+      group: context.group,
+      members: context.files.flatMap((file) => file.scopes.map((scope) => ({ filepath: file.filepath, scopeId: scope.id }))),
+      follows: decision.follows,
+      probability: decision.probability,
+      model: decision.model,
+    };
+  }
+  return {
+    filepath: context.filepath,
+    scopeId: context.scope.id,
+    follows: decision.follows,
+    probability: decision.probability,
+    model: decision.model,
+  };
+}
+
+async function collectTreeContexts(
+  target: string,
+  loaded: readonly LoadedRule[],
+  rulePaths: ReadonlySet<string>,
+  mask?: readonly boolean[],
+): Promise<Context[][]> {
   const sources = await resolveSources(target);
 
   const contextsByRule = loaded.map((): Context[] => []);
@@ -326,7 +265,7 @@ async function collectTreeContexts(target: string, loaded: readonly LoadedRule[]
     // candidate is a real path, so a rule reached through an explicit `--rules` link is excluded too.
     if (rulePaths.has(source.absolute)) continue;
 
-    const selected = selectingRules(loaded, source.logical);
+    const selected = selectingRules(loaded, source.logical, mask);
     if (selected.length === 0) continue;
 
     let text: string;
@@ -349,34 +288,45 @@ async function collectTreeContexts(target: string, loaded: readonly LoadedRule[]
   return contextsByRule;
 }
 
-/**
- * Compile the rules, scan the target, decide every selected scope, and print one JSON array with an
- * entry per loaded rule.
- *
- * Rules come from `--rules` — a rule YAML file or a folder of them, recursively — or from the
- * default discovery when no such option is given. The target only narrows which files are read;
- * rule discovery always looks at the process working directory and the user's home.
- *
- * Both modes collect all their contexts before any decision is requested, so a parse failure has no
- * external side effect; then each context is decided against the configured backend, in rule and
- * context order, and only once every decision has succeeded is the array written. A successful run
- * that answered every context exits `0` even when no scope follows its rule — deciding is the
- * command's job, reporting an overall verdict is not.
- *
- * `--diff-only` collects the contexts from the committed change instead of the working tree: rules
- * still come from the working tree, but the sources are committed revisions. `--base` has no
- * meaning without it, so that combination fails here, before any rule or repository is read.
- */
+async function collectContexts(
+  target: string,
+  options: CheckOptions,
+  loaded: readonly LoadedRule[],
+  grouped: readonly boolean[],
+  rulePaths: ReadonlySet<string>,
+): Promise<Context[][]> {
+  if (options.diffOnly !== true) {
+    return collectTreeContexts(target, loaded, rulePaths);
+  }
+
+  // A grouped rule ignores the diff, so it is collected from the current tree, while a scope-mode
+  // rule is collected from the committed change. A pass runs only when some rule needs it, so a run
+  // with no scope-mode rule never touches the repository, and each rule is filled from its own pass.
+  const treeByRule = grouped.some(Boolean) ? await collectTreeContexts(target, loaded, rulePaths, grouped) : undefined;
+  const scope = grouped.map((isGrouped) => !isGrouped);
+  const diffByRule = scope.some(Boolean) ? await collectDiffContexts(target, options, loaded, rulePaths, scope) : undefined;
+
+  return loaded.map((_, index) => (grouped[index] === true ? treeByRule![index]! : diffByRule![index]!));
+}
+
 export async function checkCommand(target: string, options: CheckOptions): Promise<void> {
   if (options.base !== undefined && options.diffOnly !== true) {
     throw new Error('--base requires --diff-only');
   }
 
   const loaded = await loadRules(options.rules);
-  const contextsByRule =
-    options.diffOnly === true
-      ? await collectDiffContexts(target, options, loaded)
-      : await collectTreeContexts(target, loaded);
-  const decisionsByRule = await decideContexts(loaded, contextsByRule);
+  // Prepared once from every loaded rule and shared by both collectors, so a descriptor cannot slip
+  // into either pass whichever grouping its own rule uses.
+  const rulePaths = await descriptorPaths(loaded);
+  const grouped = loaded.map(({ rule }) => rule.decision.group_by !== 'scope');
+  const contextsByRule = await collectContexts(target, options, loaded, grouped, rulePaths);
+  // Every group is built here, before the first request, so a member outside the working directory
+  // fails before any call while a scope-mode rule keeps its contexts as one decision each.
+  const decisionsByRule = await decideContexts(
+    loaded,
+    loaded.map(({ rule }, index) =>
+      rule.decision.group_by === 'scope' ? contextsByRule[index]! : groupContexts(contextsByRule[index]!, rule.decision),
+    ),
+  );
   writeChecked(loaded, contextsByRule, decisionsByRule);
 }

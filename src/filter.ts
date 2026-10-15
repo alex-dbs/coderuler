@@ -1,45 +1,23 @@
-/**
- * Applicability filter: an optional rule-level predicate deciding whether one selected scope is
- * reviewed at all.
- *
- * A filter is a mapping holding exactly one operator, and its only leaf is `non_empty`, a
- * non-executable JSONPath selection over the {@link ScopeMatch} wrapper `{ id, source, data,
- * captures }`. Presence is structural, never truthy: `0` and `false` are real values, while an
- * absent, `null`, empty-string, empty-array or empty-object selection is not. Nothing is trimmed,
- * coerced, or evaluated, so a rule can never smuggle code through its filter.
- */
 import { JSONPath } from 'jsonpath-plus';
 import { assertNonExecutable } from './jsonpath.ts';
 import type { ScopeMatch } from './plugins/index.ts';
 
-/**
- * One applicability filter mapping as written in rule YAML. Exactly one operator per mapping:
- * `non_empty` tests a JSONPath selection, `all`/`any` combine a non-empty sequence of filters, and
- * `not` negates one nested filter.
- */
 export type FilterDefinition =
   | { readonly non_empty: string }
   | { readonly all: readonly FilterDefinition[] }
   | { readonly any: readonly FilterDefinition[] }
   | { readonly not: FilterDefinition };
 
-/** A compiled filter: whether one selected scope is applicable. */
 export interface CompiledFilter {
   applies(scope: ScopeMatch): boolean;
 }
 
-/** The identity filter a rule without `filter` compiles to: every scope is applicable. */
 const ACCEPT_ALL: CompiledFilter = { applies: () => true };
 
-/** Narrow to a plain mapping (not an array or scalar). */
 function isMapping(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/**
- * Whether one selected value is absent or empty. Absence, `null`, the empty string, the empty array
- * and the empty object are empty; every other value — including `0` and `false` — is present.
- */
 function isEmpty(value: unknown): boolean {
   if (value === null || value === undefined) return true;
   if (typeof value === 'string') return value === '';
@@ -48,7 +26,6 @@ function isEmpty(value: unknown): boolean {
   return false;
 }
 
-/** Compile one `non_empty` leaf: a safe JSONPath over the scope wrapper, selected at match time. */
 function compileNonEmpty(path: unknown): CompiledFilter {
   const where = 'rule.filter.non_empty';
   if (typeof path !== 'string') throw new Error(`${where} must be a non-empty JSONPath string`);
@@ -72,7 +49,6 @@ function compileNonEmpty(path: unknown): CompiledFilter {
   };
 }
 
-/** Compile an `all`/`any` group; every nested filter is compiled and validated up front. */
 function compileGroup(operator: 'all' | 'any', value: unknown, active: Set<object>): CompiledFilter {
   if (!Array.isArray(value) || value.length === 0) {
     throw new Error(`rule.filter.${operator} must be a non-empty sequence of filters`);
@@ -83,11 +59,6 @@ function compileGroup(operator: 'all' | 'any', value: unknown, active: Set<objec
     : { applies: scope => children.some(child => child.applies(scope)) };
 }
 
-/**
- * Compile one filter node. `active` holds every mapping on the current path, so a YAML alias cycle
- * (`filter: &f { not: *f }`) is rejected instead of recursing forever; a mapping reused without a
- * cycle is still accepted because it leaves `active` once its subtree is compiled.
- */
 function compileNode(value: unknown, active: Set<object>): CompiledFilter {
   if (!isMapping(value)) throw new Error('rule.filter must be a mapping with exactly one operator');
   if (active.has(value)) throw new Error('rule.filter must not contain a cycle');
@@ -114,13 +85,11 @@ function compileNode(value: unknown, active: Set<object>): CompiledFilter {
   }
 }
 
-/** Compile a `not` node: the single negation of one nested filter. */
 function compileNot(value: unknown, active: Set<object>): CompiledFilter {
   const child = compileNode(value, active);
   return { applies: scope => !child.applies(scope) };
 }
 
-/** Compile the optional `rule.filter`; a rule that omits it accepts every scope. */
 export function compileFilter(definition: unknown): CompiledFilter {
   if (definition === undefined) return ACCEPT_ALL;
   return compileNode(definition, new Set<object>());

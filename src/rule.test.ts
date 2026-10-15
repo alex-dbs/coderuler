@@ -4,6 +4,7 @@ import {
   compileRule,
   parseRule,
   type CompiledRule,
+  type DecisionGrouping,
   type FileInput,
   type MatchOptions,
   type RuleExamples,
@@ -12,11 +13,6 @@ import {
 import { createPluginRegistry, PluginRegistry, astGrepPlugin, protobufPlugin, yamlPlugin } from './plugins/index.ts';
 import type { ScopeMatch, ScopePlugin } from './plugins/index.ts';
 
-/**
- * A real custom scope extractor: every prefixed line of the form `key=value` (or bare `key`)
- * becomes one scope keyed by its key. It is a genuine host plugin, not an echo of core behavior,
- * and it owns its option validation the way a consumer would.
- */
 const kvPlugin: ScopePlugin = {
   format: 'kv',
   compile(options) {
@@ -50,7 +46,6 @@ const kvPlugin: ScopePlugin = {
 
 const registry = new PluginRegistry([kvPlugin]);
 
-/** The one valid definition the schema tests vary; each test merges only the fields it is about. */
 const DEFINITION: Record<string, unknown> = {
   version: 'v1',
   name: 'R',
@@ -59,22 +54,22 @@ const DEFINITION: Record<string, unknown> = {
   rule: 'p',
 };
 
-/** The common definition with `fields` merged over it. */
 function definition(fields: Record<string, unknown> = {}): Record<string, unknown> {
   return { ...DEFINITION, ...fields };
 }
 
-/** Compile the common definition against the custom registry, merging scope options as given. */
 function kvRule(scope: Readonly<Record<string, unknown>> = {}): CompiledRule {
   return compileRule(definition({ scope: { format: 'kv', prefix: '+', ...scope } }), registry);
 }
 
-/** Compile the common definition against the custom registry with a top-level `filter`. */
 function kvFiltered(filter: unknown, scope: Readonly<Record<string, unknown>> = {}): CompiledRule {
   return compileRule(definition({ scope: { format: 'kv', prefix: '+', ...scope }, filter }), registry);
 }
 
-/** The surviving scope ids of one match. */
+function groupedRule(decision: unknown, extra: Record<string, unknown> = {}): CompiledRule {
+  return compileRule(definition({ decision, ...extra }), registry);
+}
+
 function idsOf(rule: CompiledRule, input: RuleInput | FileInput): string[] {
   return rule.match(input).map(context => context.scope.id);
 }
@@ -492,4 +487,109 @@ test('a filter sees YAML plugin data, where 0 is present and an empty value is a
   for (const [head, expected] of contexts) {
     assert.equal(rule.match({ filepath: 'config/a.yaml', head, diff: '' }).length, expected, head);
   }
+});
+
+test('decision defaults to scope and normalizes every grouping', () => {
+  // Omitted entirely (no `decision` key at all) is the default scope grouping.
+  assert.deepStrictEqual(compileRule(DEFINITION, registry).decision, { group_by: 'scope' });
+
+  const cases: readonly [label: string, decision: unknown, expected: DecisionGrouping][] = [
+    ['undefined', undefined, { group_by: 'scope' }],
+    ['explicit scope', { group_by: 'scope' }, { group_by: 'scope' }],
+    ['file', { group_by: 'file' }, { group_by: 'file' }],
+    ['project', { group_by: 'project' }, { group_by: 'project' }],
+    ['folder defaults to level 0', { group_by: 'folder' }, { group_by: 'folder', level: 0 }],
+    ['folder -1', { group_by: 'folder', level: -1 }, { group_by: 'folder', level: -1 }],
+    ['folder -2', { group_by: 'folder', level: -2 }, { group_by: 'folder', level: -2 }],
+    // A large negative level is still a valid safe integer; the clamp happens later, at grouping.
+    ['folder deep', { group_by: 'folder', level: -1000 }, { group_by: 'folder', level: -1000 }],
+  ];
+  for (const [label, decision, expected] of cases) {
+    assert.deepStrictEqual(groupedRule(decision).decision, expected, label);
+  }
+});
+
+test('malformed decisions are rejected before any plugin runs', () => {
+  const invalid: readonly [label: string, decision: unknown][] = [
+    ['null', null],
+    ['scalar', 'scope'],
+    ['sequence', ['scope']],
+    ['number', 1],
+    ['empty mapping', {}],
+    ['unknown group_by', { group_by: 'dir' }],
+    ['non-string group_by', { group_by: 1 }],
+    ['group_by missing but a key present', { level: -1 }],
+    ['unknown key on scope', { group_by: 'scope', level: 0 }],
+    ['level on file', { group_by: 'file', level: 0 }],
+    ['unknown key on project', { group_by: 'project', extra: true }],
+    ['positive folder level', { group_by: 'folder', level: 1 }],
+    ['fractional folder level', { group_by: 'folder', level: -1.5 }],
+    ['string folder level', { group_by: 'folder', level: '-1' }],
+    ['NaN folder level', { group_by: 'folder', level: Number.NaN }],
+    ['infinite folder level', { group_by: 'folder', level: Number.POSITIVE_INFINITY }],
+    ['unsafe folder level', { group_by: 'folder', level: -(2 ** 53) }],
+    ['folder with an unknown key', { group_by: 'folder', level: 0, depth: 1 }],
+  ];
+  for (const [label, decision] of invalid) {
+    assert.throws(() => groupedRule(decision), Error, label);
+  }
+});
+
+test('a grouped rule reviews the whole head with no diff and no revision comparison', () => {
+  const rule = groupedRule({ group_by: 'file' });
+  const filepath = 'src/a.ts';
+
+  // An unchanged scope survives: a grouped rule never compares base against head, and it never
+  // needs a diff or a base to read the head.
+  assert.deepStrictEqual(rule.match({ filepath, head: '+a=1\n+b=2\n', base: '+a=1\n+b=2\n', diff: '@@ d @@' }), [
+    { filepath, scope: { id: 'a', source: '+a=1', data: { key: 'a', value: '1' } } },
+    { filepath, scope: { id: 'b', source: '+b=2', data: { key: 'b', value: '2' } } },
+  ]);
+  assert.deepStrictEqual(rule.match({ filepath, head: '+a=1\n' } as RuleInput), [
+    { filepath, scope: { id: 'a', source: '+a=1', data: { key: 'a', value: '1' } } },
+  ]);
+  assert.equal('diff' in rule.match({ filepath, head: '+a=1\n' } as RuleInput)[0]!, false);
+
+  // The option shape is still validated even though a grouped rule has no comparison to force.
+  assert.throws(() => rule.match({ filepath, head: '+a=1\n' } as RuleInput, { changedOnly: 'yes' } as unknown as MatchOptions), Error);
+});
+
+test('a grouped rule ignores base and deleted heads', () => {
+  const rule = groupedRule({ group_by: 'project' });
+  const filepath = 'src/a.ts';
+  // A duplicate-id base would fail a scope rule; a grouped rule never parses it.
+  assert.deepStrictEqual(idsOf(rule, { filepath, head: '+a=1\n', base: '+a=1\n+a=2\n', diff: '' }), ['a']);
+  // A non-string base is likewise never consulted.
+  assert.deepStrictEqual(idsOf(rule, { filepath, head: '+a=1\n', base: 7 as unknown as string, diff: '' }), ['a']);
+  // No head at all is a rejected input; an empty head is a deleted file with nothing to review.
+  assert.throws(() => rule.match({ filepath, diff: '' } as RuleInput), Error);
+  assert.deepStrictEqual(rule.match({ filepath, head: '', base: '+a=1\n+a=2\n', diff: '' }), []);
+  assert.deepStrictEqual(rule.match({ filepath, head: '' } as RuleInput), []);
+});
+
+test('grouped file mode accepts one source, ignores changedOnly and rejects mixed inputs', () => {
+  const rule = groupedRule({ group_by: 'folder' });
+  const file: FileInput = { filepath: 'src/a.ts', source: '+a=1\n' };
+  // A grouped rule has no comparison to force, so `changedOnly` is inert rather than an error.
+  assert.deepStrictEqual(rule.match(file, { changedOnly: true }).map(context => context.scope.id), ['a']);
+  assert.deepStrictEqual(rule.match(file, { changedOnly: false }).map(context => context.scope.id), ['a']);
+  assert.equal('diff' in rule.match(file)[0]!, false);
+
+  for (const mixed of [
+    { filepath: 'src/a.ts', source: '+a=1\n', head: 'x' },
+    { filepath: 'src/a.ts', source: '+a=1\n', diff: '' },
+    { filepath: 'src/a.ts', source: '+a=1\n', base: '' },
+  ]) {
+    assert.throws(() => rule.match(mixed as unknown as FileInput), Error, JSON.stringify(mixed));
+  }
+  assert.throws(() => rule.match({ filepath: 'src/a.ts', source: 7 } as unknown as FileInput), Error);
+  // File selection still short-circuits before the input shape is read.
+  assert.deepStrictEqual(rule.match({ filepath: 'lib/a.ts', source: '+a=1\n', head: 'x' } as unknown as FileInput), []);
+});
+
+test('a grouped rule still applies its filter and duplicate-id checks', () => {
+  const rule = groupedRule({ group_by: 'file' }, { filter: { non_empty: '$.data.value' } });
+  assert.deepStrictEqual(idsOf(rule, { filepath: 'src/a.ts', head: '+a=1\n+b=\n', diff: '' }), ['a']);
+  assert.deepStrictEqual(idsOf(rule, { filepath: 'src/a.ts', source: '+a=1\n+b=\n' }), ['a']);
+  assert.throws(() => rule.match({ filepath: 'src/a.ts', head: '+a=1\n+a=2\n', diff: '' }), Error);
 });

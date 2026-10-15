@@ -1,16 +1,3 @@
-/**
- * Tests for the branch diff and its per-file reads, all against real temporary Git repositories.
- *
- * `branchDiff` reads `process.cwd()`, so every case runs in a child process whose working directory
- * is the fixture repository: the child imports the module, takes one diff with an optional base and
- * prints the frozen commits, the raw per-file metadata and the snapshots it read. Every Git call —
- * the fixture's commits and the module's own reads — runs with an isolated home, no system config
- * and a fixture identity, so the developer's own Git settings cannot decide an outcome. The fixture
- * environment drops every `GIT_*` variable the calling process exported, so no call can be pointed
- * at a repository, index or config file outside its sandbox. Nothing is ever fetched: remotes are
- * simulated with local `refs/remotes` entries, and the partial-clone case proves that a missing blob
- * is reported rather than fetched from the promisor remote.
- */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
@@ -20,13 +7,10 @@ import { pathToFileURL } from 'node:url';
 
 import { createSandbox, isolatedEnv, ROOT, runGit, writeFile, type SandboxRoot } from '../tests/support.ts';
 
-/** Absolute file URL of the module under test, imported by every runner child. */
 const MODULE = pathToFileURL(join(ROOT, 'src', 'git-diff.ts')).href;
 
-/** Absolute file URL of the shared fixtures, imported by the child that proves the env isolation. */
 const SUPPORT = pathToFileURL(join(ROOT, 'tests', 'support.ts')).href;
 
-/** The child that takes one branch diff inside a fixture repository and prints everything it read. */
 const RUNNER = `import { branchDiff, readBranchFile } from ${JSON.stringify(MODULE)};
 
 try {
@@ -41,11 +25,6 @@ try {
 }
 `;
 
-/**
- * The child that exports hostile Git locations of its own and then stages a file through the shared
- * fixtures: `isolatedEnv` must discard every one of them, so both the `git add` and the commit land
- * in the repository the child was given. The locations arrive as one JSON argument.
- */
 const STAGING_PROBE = `import { isolatedEnv, runGit, writeFile } from ${JSON.stringify(SUPPORT)};
 import { join } from 'node:path';
 
@@ -72,7 +51,6 @@ try {
 }
 `;
 
-/** One file entry the runner reports: the raw metadata plus both snapshots and the patch. */
 interface DiffEntry {
   readonly filepath: string;
   readonly previousPath: string;
@@ -85,7 +63,6 @@ interface DiffEntry {
   readonly diff: string;
 }
 
-/** One reported diff: the frozen commits, the repository root and every changed file. */
 interface DiffPayload {
   readonly repoRoot: string;
   readonly head: string;
@@ -93,14 +70,12 @@ interface DiffPayload {
   readonly files: readonly DiffEntry[];
 }
 
-/** One runner outcome: exit status plus both decoded streams. */
 interface RunnerResult {
   readonly status: number | null;
   readonly stdout: string;
   readonly stderr: string;
 }
 
-/** One staging probe outcome: the working tree status, the repository index and the commit made. */
 interface StagingReport {
   readonly status: string;
   readonly index: string;
@@ -124,10 +99,6 @@ after(() => {
   sandbox.cleanup();
 });
 
-/**
- * Create one temporary repository whose initial (unborn) branch is `branch`. The label is the last
- * path component, after the run-unique number, so a case can end a repository path in whitespace.
- */
 function createRepo(label: string, branch = 'main'): string {
   const root = join(sandbox.root, `${sequence++}-${label}`);
   mkdirSync(root, { recursive: true });
@@ -135,28 +106,24 @@ function createRepo(label: string, branch = 'main'): string {
   return root;
 }
 
-/** Stage everything and commit it, returning the commit id Git recorded. */
 function commit(root: string, message: string): string {
   runGit(root, ['add', '-A'], env);
   runGit(root, ['commit', '-q', '--no-gpg-sign', '-m', message], env);
   return runGit(root, ['rev-parse', 'HEAD'], env).trim();
 }
 
-/** Run the runner child in one directory, with one optional base ref, and decode both streams. */
 function runRaw(cwd: string, base = ''): RunnerResult {
   const result = spawnSync(process.execPath, [runner, base], { cwd, encoding: 'utf8', env });
   if (result.error !== undefined) throw result.error;
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
-/** Read one required string field out of a parsed runner payload. */
 function text(payload: Record<string, unknown>, key: string, where: string): string {
   const field = payload[key];
   if (typeof field !== 'string') throw new Error(`${where}.${key} must be a string`);
   return field;
 }
 
-/** Parse one file entry the runner reported. */
 function toEntry(value: unknown, where: string): DiffEntry {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error(`${where} must be a mapping`);
   const payload = value as Record<string, unknown>;
@@ -173,7 +140,6 @@ function toEntry(value: unknown, where: string): DiffEntry {
   };
 }
 
-/** Take one successful branch diff in a fixture repository and parse its payload. */
 function runDiff(cwd: string, base = ''): DiffPayload {
   const result = runRaw(cwd, base);
   assert.strictEqual(result.status, 0, `expected the branch diff to succeed (stderr: ${result.stderr})`);
@@ -190,7 +156,6 @@ function runDiff(cwd: string, base = ''): DiffPayload {
   };
 }
 
-/** Assert one runner failure: a non-zero status whose message carries every one of `needles`. */
 function assertFails(cwd: string, base: string, needles: readonly string[]): void {
   const result = runRaw(cwd, base);
   assert.notStrictEqual(result.status, 0, `expected the branch diff to fail (stdout: ${result.stdout})`);
@@ -199,10 +164,6 @@ function assertFails(cwd: string, base: string, needles: readonly string[]): voi
   }
 }
 
-/**
- * Whether one object is present locally. The probe disables lazy fetch, so it never reaches the
- * promisor remote and keeps reporting the object as missing until something else fetches it.
- */
 function hasBlob(cwd: string, oid: string): boolean {
   const probe = spawnSync('git', ['--no-lazy-fetch', 'cat-file', '-e', oid], {
     cwd,
@@ -212,7 +173,6 @@ function hasBlob(cwd: string, oid: string): boolean {
   return probe.status === 0;
 }
 
-/** Parse one staging probe payload: the tree status, the repository index and the commit made. */
 function toStaging(value: unknown): StagingReport {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('the staging probe must report a mapping');
   const payload = value as Record<string, unknown>;
@@ -223,12 +183,6 @@ function toStaging(value: unknown): StagingReport {
   };
 }
 
-/**
- * A caller — a shell, an editor, a Git hook or a wrapping test runner — can export `GIT_*` variables
- * that point outside the fixture. The shared fixtures must drop them, or the fixture `git add` fills
- * that other index while the repository it was handed keeps an empty one, and the commit that
- * follows records nothing.
- */
 test('stages in its own repository when the caller exports hostile Git locations', () => {
   const repo = createRepo('hostile-env');
   const home = join(sandbox.root, 'hostile-env-home');

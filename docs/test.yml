@@ -1,0 +1,18 @@
+global:
+  env:
+    text:
+      LOG_LEVEL: info
+      DB_NAME: my-app
+
+app:
+  container:
+    env:
+      text:
+        LOG_LEVEL: debug
+        DB_NAME: my-app
+    resources:
+      requests:
+        cpu: 100m
+        memory: 64Mi
+      limits:
+        memory: 1Gi

@@ -16,10 +16,10 @@ program
 
 program
   .command('check')
-  .description('decide every selected scope against its rule with the configured backend, and print each rule, its examples, the surviving scope candidates and their decisions as JSON')
+  .description('decide every selected scope against its rule with the configured backend — one call per scope, or one per group when the rule groups its decisions — and print each rule, its examples, the surviving scope candidates and their decisions as JSON')
   .argument('[path]', 'source file or directory to check; defaults to the current directory', '.')
   .option('--rules <path>', 'rule YAML file or folder; defaults to the discovered rules')
-  .option('--diff-only', 'check the committed change from a merge base instead of reading working-tree sources')
+  .option('--diff-only', 'check the committed change from a merge base instead of reading working-tree sources; a rule that groups its decisions still reads the current tree')
   .option('--base <ref>', 'ref to merge-base HEAD against with --diff-only; defaults to origin/HEAD, then origin/main, origin/master, main, master')
   .action(checkCommand);
 

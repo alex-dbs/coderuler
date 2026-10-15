@@ -1,18 +1,3 @@
-/**
- * End-to-end tests for `check --diff-only` and `check --base`. Every case builds a real git
- * repository inside the shared sandbox — commits, branches and remote-tracking refs are created
- * with the git binary and a fixture identity, never the developer's checkout or config — and then
- * spawns the real CLI on the absolute root `index.ts` with an isolated `HOME`. The case's decision
- * backend is a real HTTP server this process runs on a loopback port, so the committed scope each
- * run reports is decided locally and never reaches a real backend; the request is what pins that
- * the scope travels with its per-file patch. The cases pin the observable contract of the diff-only
- * mode instead of a git header's formatting: which committed changes become candidates, that the
- * snapshots come from the frozen HEAD and not the working tree, how the target and renames scope
- * them, and every failure path. Assertions read the consumer data — the logical filepath, the scope
- * id and data, and the relevant changed lines of the per-file patch. Base-ref inference is pinned at
- * the module layer by `git-diff.test.ts`, so the CLI smokes the default base, the explicit one and
- * the advanced one here.
- */
 import assert from 'node:assert/strict';
 import { mkdirSync, renameSync, rmSync, symlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -37,7 +22,6 @@ import {
   type SandboxRoot,
 } from '../tests/support.ts';
 
-/** The trusted memory-ratio rule: a keyed container scope with a memory filter, changed by default. */
 const MEMORY_RATIO_RULE = join(GOLDEN_ROOT, 'memory-ratio', 'rule.yaml');
 
 let sandbox!: SandboxRoot;
@@ -53,42 +37,35 @@ after(async () => {
   await backend.close();
 });
 
-/** Create one isolated project directory, home and out-of-tree rules directory, then `git init`. */
 function createRepo(label: string, branch = 'main'): Sandbox {
   const repo = sandbox.isolated(label);
   runGit(repo.cwd, ['init', '-q', '-b', branch], repo.env);
   return repo;
 }
 
-/** Rename one repository-relative path inside the same repository. */
 function move(repo: Sandbox, from: string, to: string): void {
   const target = join(repo.cwd, to);
   mkdirSync(dirname(target), { recursive: true });
   renameSync(join(repo.cwd, from), target);
 }
 
-/** Stage every change and commit it. */
 function commit(repo: Sandbox, message: string): void {
   runGit(repo.cwd, ['add', '-A'], repo.env);
   runGit(repo.cwd, ['commit', '-q', '-m', message], repo.env);
 }
 
-/** Resolve one revision to its frozen object id. */
 function revParse(repo: Sandbox, rev: string): string {
   return runGit(repo.cwd, ['rev-parse', rev], repo.env).trim();
 }
 
-/** Start a new branch at the current HEAD and switch to it. */
 function checkoutNew(repo: Sandbox, name: string): void {
   runGit(repo.cwd, ['checkout', '-q', '-b', name], repo.env);
 }
 
-/** Point a remote-tracking branch at one commit, without any network access. */
 function publish(repo: Sandbox, name: string, sha: string): void {
   runGit(repo.cwd, ['update-ref', `refs/remotes/origin/${name}`, sha], repo.env);
 }
 
-/** One container entry of a fixture values file, in the shape the YAML scope plugin reports. */
 function container(name: string, limit: string, request = '512Mi'): string {
   return [
     `  - name: ${name}`,
@@ -101,12 +78,10 @@ function container(name: string, limit: string, request = '512Mi'): string {
   ].join('\n');
 }
 
-/** The fixture values file: one `containers` sequence of the given entries. */
 function values(...containers: readonly string[]): string {
   return `${['containers:', ...containers].join('\n')}\n`;
 }
 
-/** The plain data the yaml plugin reports for one container entry of {@link container}. */
 function containerData(name: string, limit: string, request = '512Mi'): unknown {
   return {
     name,
@@ -115,7 +90,6 @@ function containerData(name: string, limit: string, request = '512Mi'): unknown 
   };
 }
 
-/** One YAML rule selecting `$.containers[*]` keyed by `$.name`, optionally with `changed: false`. */
 function containersRule(name: string, included: readonly string[], changed?: boolean): string {
   const lines = ["version: 'v1'", `name: '${name}'`, 'files:', '  included:'];
   for (const glob of included) lines.push(`    - '${glob}'`);
@@ -125,12 +99,10 @@ function containersRule(name: string, included: readonly string[], changed?: boo
   return `${lines.join('\n')}\n`;
 }
 
-/** The changed line of a container's memory field in the fixture indentation. */
 function memoryLine(value: string): string {
   return `        memory: ${value}`;
 }
 
-/** One parsed context: the logical filepath, the scope id and data, and the per-file patch if any. */
 interface ParsedContext {
   readonly filepath: string;
   readonly id: string;
@@ -138,12 +110,10 @@ interface ParsedContext {
   readonly diff: string | undefined;
 }
 
-/** One diff context: a parsed context whose per-file patch is guaranteed present. */
 interface DiffContext extends ParsedContext {
   readonly diff: string;
 }
 
-/** Parse one context, rejecting an unexpected payload. */
 function toContext(value: unknown, where: string): ParsedContext {
   if (!isMapping(value)) throw new Error(`${where} must be a mapping`);
   const scope = value.scope;
@@ -158,12 +128,10 @@ function toContext(value: unknown, where: string): ParsedContext {
   };
 }
 
-/** The parsed contexts of one entry. */
 function contextsOf(entry: CheckEntry, label: string): ParsedContext[] {
   return entry.contexts.map((value: unknown, index: number) => toContext(value, `${label}.contexts[${index}]`));
 }
 
-/** The diff contexts of a one-rule run, each of which must carry its per-file patch. */
 function diffContexts(result: CliResult, label: string): DiffContext[] {
   const entry = soleEntry(result, label);
   return contextsOf(entry, label).map((context, index) => {
@@ -173,7 +141,6 @@ function diffContexts(result: CliResult, label: string): DiffContext[] {
   });
 }
 
-/** The filepaths of a set of contexts. */
 function filepaths(contexts: readonly ParsedContext[]): string[] {
   return contexts.map(context => context.filepath);
 }
@@ -516,8 +483,14 @@ test('check --diff-only decides each changed scope and sends the context it revi
   assert.strictEqual(backend.requests.length, 1, 'the changed scope is what was decided');
   const body = backend.requests[0]!.body;
   if (!isMapping(body)) throw new Error('the decision request must be a JSON mapping');
-  // The scope travels whole, its per-file patch included: the request carries the reported context.
-  assert.deepStrictEqual(body.state, entry.contexts[0], 'the request must carry the context the report does');
+  // The scope is sent data-first: its location, its per-file patch and the data selected for it,
+  // with the raw source text left out because the parsed data already carries the scope.
+  const reviewed = contexts[0]!;
+  assert.deepStrictEqual(
+    body.state,
+    { filepath: reviewed.filepath, diff: reviewed.diff, scope: { id: reviewed.id, data: reviewed.data } },
+    'the request must carry the context the report does',
+  );
   backend.reset();
 });
 
@@ -572,11 +545,8 @@ test('check --diff-only skips symlink and submodule entries', async () => {
 test('check --diff-only fails before reading any source', async () => {
   interface FailureCase {
     readonly label: string;
-    /** The branch the fixture repository starts on. */
     readonly branch?: string;
-    /** Break the repository in a way the default fixture cannot express. */
     readonly prepare?: (repo: Sandbox) => void;
-    /** The CLI arguments to run against a rule written for the case. */
     readonly args: (rulePath: string) => readonly string[];
   }
 
