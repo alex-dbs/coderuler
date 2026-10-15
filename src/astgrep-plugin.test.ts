@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { registerDynamicLanguage, type DynamicLangRegistrations } from '@ast-grep/napi';
-import { astGrepPlugin } from './plugins/astgrep.ts';
-import { createAstGrepLanguageRegistrations } from './plugins/astgrep-languages.ts';
-import type { ScopeMatch } from './plugins/types.ts';
-import { compileRule, type CompiledRule } from './rule.ts';
+import { astGrepPlugin } from './adapter/scope/astgrep.ts';
+import { createAstGrepLanguageRegistrations } from './adapter/scope/astgrep-languages.ts';
+import type { ScopeMatch } from './app/scope/types.ts';
+import { compileRule, type CompiledRule } from './infra/rules.ts';
 
 const loadCommonJs = createRequire(import.meta.url);
 const mojoRegistration = loadCommonJs('@ast-grep/lang-go') as DynamicLangRegistrations[string];

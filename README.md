@@ -13,12 +13,47 @@ deterministic, network-free core, and the [golden tests](#checks) exercise it wi
 The rule schema, plugins, matching semantics,
 [limitations](docs/rulekeeper-design.md#limitations), and
 [decision boundary](docs/rulekeeper-design.md#the-decision-boundary) are documented in
-[docs/rulekeeper-design.md](docs/rulekeeper-design.md); the design decisions, bug fixes, and accepted
-trade-offs behind the current code are recorded in [docs/retrospective.md](docs/retrospective.md).
+[docs/rulekeeper-design.md](docs/rulekeeper-design.md).
 
 The ast-grep plugin supports all **31 officially published languages**, with case-insensitive names
 and common aliases such as `py`, `rs`, and `c++`. See the
 [language catalog and custom-grammar setup](docs/rulekeeper-design.md#builtin-plugins).
+
+## Architecture
+
+The sources are a hexagonal layout: one pure application core, adapters that drive and serve it, and a
+single composition root wiring them.
+
+- **Application core** — [src/app/](src/app/) holds the use cases: [check](src/app/check.ts),
+  [validate](src/app/validate.ts), rule [loading](src/app/load-rules.ts) and
+  [compilation](src/app/rule/compile.ts), [context collection](src/app/collect-contexts.ts),
+  [grouping](src/app/decision/group.ts), and the thresholding [decision service](src/app/decision/service.ts).
+  They depend only on the ports they declare: [rule files](src/app/ports/rules.ts),
+  [sources](src/app/ports/sources.ts), [diagnostics](src/app/ports/diagnostics.ts), the
+  [decision backend](src/app/decision/port.ts), and the [scope plugin](src/app/scope/types.ts) contract.
+  The core is pure policy — no process, filesystem, Git, or network access, and no timers — with I/O
+  concurrency bounded in [src/app/concurrency.ts](src/app/concurrency.ts).
+- **Adapters** — [src/adapter/](src/adapter/) implements those ports: the
+  [Commander program](src/adapter/cli/program.ts) and its [check](src/adapter/cli/check.ts) /
+  [validate](src/adapter/cli/validate.ts) verbs with [reporting](src/adapter/cli/check-report.ts),
+  [diagnostics](src/adapter/console/diagnostics.ts), [rule files](src/adapter/filesystem/rule-files.ts)
+  and [source reads](src/adapter/filesystem/sources.ts), [Git diffs](src/adapter/git/diff.ts), rule
+  [YAML decoding](src/adapter/rule/yaml.ts), the [scope plugins](src/adapter/scope/) (yaml, protobuf,
+  ast-grep), and the [Jev HTTP backend](src/adapter/decision/jev.ts).
+- **Infrastructure** — [src/infra/](src/infra/) is configuration and composition only:
+  [runtime.ts](src/infra/runtime.ts) loads `.env` and injects adapters into the use cases,
+  [decision.ts](src/infra/decision.ts) resolves the backend and provider environment,
+  [plugins.ts](src/infra/plugins.ts) builds the builtin plugin registry, and
+  [rules.ts](src/infra/rules.ts) binds decoding to compilation. [index.ts](index.ts) is only the
+  bootstrap that calls `runCli()`.
+
+Dependencies point inward: the application core imports its own modules and pure library functions
+(`node:path`, `node:util`, `jsonpath-plus`); adapters depend on application contracts and use cases, never
+infrastructure; infrastructure composes both. Adding a plugin or backend does not require a core change:
+a plugin declares a `format` and returns a `select`, is registered through [createPluginRegistry](src/infra/plugins.ts), and is then named
+by `format` in a rule; a backend implements [`DecisionBackend.decide`](src/app/decision/port.ts), is
+wrapped by `DecisionService` for thresholding, and is wired in [src/infra/decision.ts](src/infra/decision.ts)
+beside the `RK_BACKEND` check.
 
 ## Requirements
 
@@ -239,8 +274,12 @@ key deliberately before reviewing a repository whose contents must not leave the
 
 Run `node /absolute/path/to/rulekeeper/index.ts check` from the project you want to review.
 `npm start -- check` also works from this repository; use `npm run --silent start -- check --json` when
-`stdout` must contain only the JSON array rather than the human summary. All Commander declarations live
-in [index.ts](index.ts), with implementations in [command/](command/).
+`stdout` must contain only the JSON array rather than the human summary. [index.ts](index.ts) is only the
+bootstrap: the Commander declarations live in
+[src/adapter/cli/program.ts](src/adapter/cli/program.ts), with the verb implementations in
+[src/adapter/cli/check.ts](src/adapter/cli/check.ts) and
+[src/adapter/cli/validate.ts](src/adapter/cli/validate.ts) and the runtime wiring in
+[src/infra/runtime.ts](src/infra/runtime.ts).
 
 ### Troubleshooting
 
@@ -284,5 +323,7 @@ npm test
 The 39 matcher fixtures under `tests/golden/` are deterministic and never call a decision provider, so
 they run without a key or network access; they are what `npm run test:golden` runs. Grouped decisions
 are covered separately by 11 hand-authored cases in `tests/decision-golden.json`, alongside
-end-to-end grouped CLI runs against a local loopback HTTP backend — never a live provider. Both are
+end-to-end grouped CLI runs against a local loopback HTTP backend — never a live provider. The
+application use cases are also exercised directly, with in-memory ports and a stub backend, in
+[src/check-use-case.test.ts](src/check-use-case.test.ts). Both are
 part of `npm test`, which discovers `src/*.test.ts`, and are not part of `npm run test:golden`.

@@ -5,7 +5,7 @@ their applicability. Run it on a whole file, or use base/head revision selection
 The resulting pre-decision context contains the policy, illustrative examples, and surviving scopes;
 the [decision boundary](#the-decision-boundary) — wired up by the `check` CLI — decides each context on
 its own, or each [group](#decision-grouping) a grouped rule builds.
-See [src/rule.ts](../src/rule.ts) for the API and
+See [src/app/rule/types.ts](../src/app/rule/types.ts) for the API and
 [docs/rules/billing-http-url.yaml](rules/billing-http-url.yaml) for the complete example rule — a
 protobuf RPC rule whose fields the list below follows.
 
@@ -44,7 +44,7 @@ Groups must be nonempty, can nest, and are fully validated at compile time. Cycl
 unknown operators are rejected. JSONPaths start with `$` and use non-executable selection only:
 script expressions and JSONPath predicate expressions are rejected, not evaluated.
 
-One shared helper, [src/jsonpath.ts](../src/jsonpath.ts), rejects executable forms for every JSONPath
+One shared helper, [src/app/jsonpath.ts](../src/app/jsonpath.ts), rejects executable forms for every JSONPath
 selector this tool compiles — the filter, the YAML scope's `path` and `key`, and the protobuf scope's
 `path` — so the rule is stated once instead of per caller. Rejection runs on the library's own
 normalized tokens, because quoting hides nothing: `['(0)']` normalizes to the same token as `[(0)]`.
@@ -153,7 +153,7 @@ as-is; a revision input uses its `head` alone (`head: ''` is a deleted file and 
 reading a base), and the returned contexts carry no `diff`. The filter still decides which selected
 scopes a group reviews.
 
-Grouping happens in [src/decision/group.ts](../src/decision/group.ts) and preserves encounter order:
+Grouping happens in [src/app/decision/group.ts](../src/app/decision/group.ts) and preserves encounter order:
 groups in the order their first scope was met, files in first-met order within a group, scopes in source
 order. Folder and project groups first make each filepath relative to the project root
 (`process.cwd()`), which is also the project group's `'.'`; a filepath resolving outside that root is
@@ -199,7 +199,7 @@ env scopes are then judged as one group. The grouping is what makes the policy d
 scope on its own cannot see what `global.env.text` declares, while one group carries both, each scope's
 id naming its location (`0:/global/env`, `0:/app/container/env`). A name shared by two containers is fine,
 and so is the declared value being identical — only a container redeclaring a name `global.env.text`
-already declares is a violation, which is the case in the sample [docs/test.yml](test.yml) for
+already declares is a violation, which is the case in the sample [tests/manual/default.yml](../tests/manual/default.yml) for
 `DB_NAME`. `group_by: folder` (with `level: -1` for the parent directory) judges the selected files of
 one directory as a group instead, and `group_by: project` judges the whole target as a single group;
 both apply the same policy across every selected file, so a container in one file redeclaring a global
@@ -207,7 +207,9 @@ declared in another selected file is caught too.
 
 ## Builtin plugins
 
-The three builtins live in [src/plugins/](../src/plugins/). `parseRule`/`compileRule` default to a private
+The three builtins live in [src/adapter/scope/](../src/adapter/scope/). Their registry is seeded by the
+composition root in [src/infra/plugins.ts](../src/infra/plugins.ts) (`createPluginRegistry`), and the
+composed `parseRule`/`compileRule` in [src/infra/rules.ts](../src/infra/rules.ts) default to a private
 registry containing them.
 
 ### `format: yaml` — options `{ path, key? }`
@@ -283,7 +285,7 @@ native call that ast-grep permits:
 
 ```ts
 import { registerDynamicLanguage } from '@ast-grep/napi';
-import { createAstGrepLanguageRegistrations } from './src/plugins/index.ts';
+import { createAstGrepLanguageRegistrations } from './src/adapter/scope/astgrep-languages.ts';
 
 export function registerReviewLanguages(custom: Parameters<typeof registerDynamicLanguage>[0]) {
   registerDynamicLanguage({ ...createAstGrepLanguageRegistrations(), ...custom });
@@ -332,12 +334,13 @@ not confuse the two.
 ## Adding a custom plugin
 
 Plugins are trusted code the host injects; a rule's YAML never names a module to import, and nothing is
-loaded dynamically or installed from rule data. Implement `ScopePlugin` and pass it to
-`createPluginRegistry`, then to `parseRule` or `compileRule`:
+loaded dynamically or installed from rule data. Implement the app-owned `ScopePlugin` contract and pass
+an instance to the infra `createPluginRegistry`, then to the composed `parseRule` or `compileRule`:
 
 ```ts
-import { createPluginRegistry, type ScopePlugin } from './src/plugins/index.ts';
-import { parseRule } from './src/rule.ts';
+import type { ScopePlugin } from './src/app/scope/types.ts';
+import { createPluginRegistry } from './src/infra/plugins.ts';
+import { parseRule } from './src/infra/rules.ts';
 
 // Takes no options: one scope per file, identified by its filepath, whose source is the whole file.
 const wholeFilePlugin: ScopePlugin = {
@@ -376,6 +379,25 @@ exactly the plugins passed. `register` rejects an empty or duplicate format and 
 unknown one, so a rule naming an unregistered format fails at compile. `parseRule(source, registry?)`
 and `compileRule(definition, registry?)` reuse a registry across rules.
 
+`PluginRegistry`, `ScopePlugin`, and `CompiledScope` are app contracts
+([src/app/scope/registry.ts](../src/app/scope/registry.ts),
+[src/app/scope/types.ts](../src/app/scope/types.ts)); the builtin-seeding factory and the composed entry
+points are infra. The two `compileRule` functions differ in what the caller supplies:
+
+- The composed [src/infra/rules.ts](../src/infra/rules.ts) `compileRule(definition, registry?)` and
+  `parseRule(source, registry?)` supply the wiring: `registry` defaults to a lazily created
+  `createPluginRegistry()`, the YAML text is decoded by [src/adapter/rule/yaml.ts](../src/adapter/rule/yaml.ts)
+  (`decodeRule`), and the warning sink is the console
+  [src/adapter/console/warnings.ts](../src/adapter/console/warnings.ts) `warnUnknownField`.
+- The pure core [src/app/rule/compile.ts](../src/app/rule/compile.ts)
+  `compileRule(definition, dependencies)` takes `RuleCompileDependencies` —
+  `{ registry, warnUnknownField }` from [src/app/rule/types.ts](../src/app/rule/types.ts) — explicitly,
+  so nothing in `app` reaches a console, a YAML parser, or a builtin adapter. It compiles the descriptor
+  ([src/app/rule/descriptor.ts](../src/app/rule/descriptor.ts)) and then calls
+  `dependencies.registry.get(format).compile(options, { warnUnknownField: dependencies.warnUnknownField })`,
+  which is how the warning sink reaches a plugin: the optional `ScopeCompileContext` is the injection
+  point, so a plugin can report an unknown option without importing the console writer at all.
+
 ## Use the core
 
 Requires Node.js 24 or later; there is no build step. Run `npm ci`, then execute this as an ES module
@@ -383,7 +405,7 @@ from the repository root:
 
 ```js
 import { readFile } from 'node:fs/promises';
-import { parseRule } from './src/rule.ts';
+import { parseRule } from './src/infra/rules.ts';
 
 const rule = parseRule(await readFile('docs/rules/billing-http-url.yaml', 'utf8'));
 const contexts = rule.match({
@@ -406,15 +428,15 @@ compiles. Matching itself still runs per call — the ast-grep plugin re-runs it
 
 ## The decision boundary
 
-The matcher ends at the context contract; deciding a context lives in [src/decision/](../src/decision/),
-three small pieces behind one interface:
+The matcher ends at the context contract; deciding a context lives behind one interface, split between
+app-owned orchestration and a concrete transport adapter:
 
-- [src/decision/port.ts](../src/decision/port.ts) — `DecisionBackend`, whose single method
+- [src/app/decision/port.ts](../src/app/decision/port.ts) — `DecisionBackend`, whose single method
   `decide(request: DecisionRequest): Promise<BackendDecision>` answers one `context` against one
   `instructions` (the rule text, the normalized examples, and the question). `context` is the projected
   request state — one scope, or one group of files — and no particular provider's wire format is part of
   this contract.
-- [src/decision/service.ts](../src/decision/service.ts) — `DecisionService`, the facade. Its
+- [src/app/decision/service.ts](../src/app/decision/service.ts) — `DecisionService`, the facade. Its
   `decide({ context, rule, examples })` takes a [DecisionContext](#decision-grouping) — one scope or one
   group — projects it into the request state, builds the question once, and reads the answer into
   `{ follows, probability, model }`, where `follows` is exactly `probability > threshold` (a tie is not a
@@ -423,7 +445,8 @@ three small pieces behind one interface:
   `null`, `false` and `0` stay payloads rather than reading as absent; only a scope with no payload falls
   back to its matched `source`. The request therefore never carries the same selection twice, and a group
   travels as its descriptor plus the member files and scopes.
-- [src/decision/jev.ts](../src/decision/jev.ts) — `JevAdapter`, the only backend today. It posts to
+- [src/adapter/decision/jev.ts](../src/adapter/decision/jev.ts) — `JevAdapter`, the only backend today and
+  the only piece that imports a transport (axios). It posts to
   the `v1/systemone` endpoint path relative to the configured base URL and validates the response
   field by field before returning anything.
 
@@ -436,7 +459,8 @@ scope or a whole group: the service sends the projected state unchanged and the 
 a group is never split into per-scope calls and a provider failure leaves the whole group undecided
 rather than partly answered.
 
-[src/decision/config.ts](../src/decision/config.ts) is the CLI's factory: `createDecisionService(env?, diagnostics?, thresholdOverride?)`
+[src/infra/decision.ts](../src/infra/decision.ts) is the composition root's factory (injected by
+[src/infra/runtime.ts](../src/infra/runtime.ts)): `createDecisionService(env?, diagnostics?, thresholdOverride?)`
 reads the environment at call time and selects a backend **by name**, with one `if` arm per backend
 rather than a registry or plugin framework — adding a backend means adding its arm here, not
 extending the port. The settings are `RK_BACKEND` (default `jev`, the only supported value),
@@ -469,18 +493,37 @@ key, the request body, or the raw axios error, and there is no fake fallback.
 
 ## The wrapper CLI
 
-The Commander declarations live in [index.ts](../index.ts); implementations live in
-[command/check.ts](../command/check.ts) and [command/validate.ts](../command/validate.ts).
-Handlers import no Commander. [src/rule-loader.ts](../src/rule-loader.ts) handles rule loading.
+The Commander declarations live in [src/adapter/cli/program.ts](../src/adapter/cli/program.ts); command
+implementations live in [src/adapter/cli/check.ts](../src/adapter/cli/check.ts) and
+[src/adapter/cli/validate.ts](../src/adapter/cli/validate.ts). Handlers import no Commander.
+Root [index.ts](../index.ts) is bootstrap only — it calls `runCli` from
+[src/infra/runtime.ts](../src/infra/runtime.ts), which composes the use cases and owns the single error
+boundary. The layers point inward: `src/app` holds the use cases, ports, and contracts and imports only
+app code and pure libraries (`node:path`, `node:util`, `jsonpath-plus`) — never Node process/fs I/O,
+Commander, YAML decoding, a native parser, or a concrete adapter; `src/adapter` implements the ports
+against those libraries and never imports `src/infra`; `src/infra` is the composition root that may
+import every layer.
+Rule loading is orchestrated by [src/app/load-rules.ts](../src/app/load-rules.ts)
+(`createRuleLoader(files, compile)`) over the [src/app/ports/rules.ts](../src/app/ports/rules.ts) ports,
+whose filesystem adapter is [src/adapter/filesystem/rule-files.ts](../src/adapter/filesystem/rule-files.ts);
+source collection is orchestrated by [src/app/collect-contexts.ts](../src/app/collect-contexts.ts)
+(`createContextCollector(sources)`) over [src/app/ports/sources.ts](../src/app/ports/sources.ts), with
+the traversal/read and Git adapters in [src/adapter/filesystem/sources.ts](../src/adapter/filesystem/sources.ts)
+and [src/adapter/git/diff.ts](../src/adapter/git/diff.ts).
 `check` reports a compact human summary and live progress by default and the machine-readable result
-with `--json`; that formatting lives in [command/check-report.ts](../command/check-report.ts) behind the
-`CheckReporter` interface, so the core only makes optional `rulesLoaded`/`sources`/`sourceComplete`/
-`decisions`/`decisionComplete`/`finish`/`stop` calls and never builds an output format of its own. The
-root entry point owns the single error boundary: failures exit nonzero with a concise stderr message and
-no partial stdout — no JSON and no summary.
+with `--json`; that formatting lives in [src/adapter/cli/check-report.ts](../src/adapter/cli/check-report.ts)
+behind the `CheckReporter` interface, so the app never builds an output format of its own. The app
+[src/app/check.ts](../src/app/check.ts) reports progress through the
+[`CheckProgress`](../src/app/check-result.ts) callbacks (`rulesLoaded`/`sources`/`sourceComplete`/
+`decisions`/`decisionComplete`) and returns the `CheckedRule[]` results; the CLI owns `finish`/`stop`,
+the `--json` stdout write, and the `finally` that stops the reporter. That split is why a failing run
+writes no partial stdout: the composition root's error boundary exits nonzero with a concise stderr
+message and no JSON and no summary.
 Diagnostic modes suppress reporter activity, not its final summary. An optional per-run
-[`Diagnostics`](../src/diagnostics.ts) sink is passed through rule loading, source collection, and the
-concrete HTTP adapter; library calls without a sink remain silent apart from existing warnings.
+[`Diagnostics`](../src/app/ports/diagnostics.ts) port is passed through rule loading, source collection,
+and the concrete HTTP adapter, with the stderr implementation in
+[src/adapter/console/diagnostics.ts](../src/adapter/console/diagnostics.ts); library calls without a
+sink remain silent apart from existing warnings.
 
 ### Checking files
 
@@ -600,7 +643,7 @@ the network. For a run that does have scope-mode rules to compare, an unavailabl
 missing Git executable, non-repository directory, or lack of a common ancestor is an error. `--base`
 without `--diff-only` is rejected before I/O.
 
-[src/git-diff.ts](../src/git-diff.ts) runs Git without a shell. NUL-delimited raw metadata preserves
+[src/adapter/git/diff.ts](../src/adapter/git/diff.ts) runs Git without a shell. NUL-delimited raw metadata preserves
 spaces, tabs, and newlines in filenames; literal pathspecs prevent filename glob expansion.
 Snapshots come from recorded blob IDs, never from source files on disk. Patches disable external
 diff tools and text conversion.
@@ -657,8 +700,15 @@ other filesystem errors propagate. Finding no rules fails with an actionable err
 recursively under an explicit rule directory. Empty explicit directories fail. Explicitly named
 rule paths may themselves be symlinks, but nested symlink entries are still skipped.
 
-`discoverRuleFiles({ cwd?, home? })` returns absolute paths; optional roots are useful for embedded
-callers. `loadRules(rulePath?)` returns `{ filepath, rule: CompiledRule }[]`. Rule files are read and
+[src/adapter/filesystem/rule-files.ts](../src/adapter/filesystem/rule-files.ts) owns rule discovery: its
+`discoverRuleFiles({ cwd?, home? })` returns absolute paths, and its `createRuleFiles()` adapter
+implements the app [`RuleFiles`](../src/app/ports/rules.ts) port — `find(rulePath?)`, which resolves to a
+`RuleDiscovery` of `{ files, missingRulesError? }`, holding the sorted absolute paths and, when none were
+found, the actionable error instead of throwing from the port, plus `read(filepath)`.
+`loadRules(rulePath?, concurrency?, diagnostics?)` is the app [`RuleLoader`](../src/app/ports/rules.ts)
+built by `createRuleLoader(files, compile)` in [src/app/load-rules.ts](../src/app/load-rules.ts); it
+returns `{ filepath, rule: CompiledRule }[]`. If present, `missingRulesError` is thrown before any read, so
+finding no rules fails identically through the composition. Rule files are read and
 compiled concurrently, and the returned array keeps the sorted discovery order regardless of which
 file finishes first. Every file must read and compile successfully before loading returns; invalid
 rules are never silently skipped. Read/compile errors identify the rule path.
@@ -764,5 +814,3 @@ runs `src/golden.test.ts` alone.
 - `npm start -- validate docs/rules/billing-http-url.yaml` — the wrapper CLI compiles the example rule
 - `npm start -- check` with `TYPESAFE_API_KEY` set — the wrapper CLI
   decides every selected scope, or every group a grouped rule built, against the configured provider
-- [docs/retrospective.md](retrospective.md) — the maintainability pass behind this design: decisions,
-  fixes, and accepted trade-offs

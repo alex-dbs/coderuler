@@ -5,7 +5,8 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 
-import { parseRule, type CompiledRule, type Context } from './rule.ts';
+import { parseRule, type CompiledRule } from './infra/rules.ts';
+import type { Context } from './app/rule/types.ts';
 
 const GOLDEN_ROOT = fileURLToPath(new URL('../tests/golden/', import.meta.url));
 const RULE_FILE = 'rule.yaml';

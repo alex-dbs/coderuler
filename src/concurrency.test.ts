@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { DEFAULT_CONCURRENCY, mapConcurrent, parseConcurrency } from './concurrency.ts';
+import { DEFAULT_CONCURRENCY, mapConcurrent, parseConcurrency } from './app/concurrency.ts';
 
 interface Deferred<T> {
   readonly promise: Promise<T>;

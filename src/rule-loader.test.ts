@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { test } from 'node:test';
 
-import { discoverRuleFiles, loadRules } from './rule-loader.ts';
+import { createRuleFiles, discoverRuleFiles } from './adapter/filesystem/rule-files.ts';
+import { createRuleLoader } from './app/load-rules.ts';
+import type { DiagnosticFields, Diagnostics } from './app/ports/diagnostics.ts';
+import { parseRule } from './infra/rules.ts';
+
+const loadRules = createRuleLoader(createRuleFiles(), parseRule);
 
 interface Roots {
   readonly project: string;
@@ -200,11 +205,20 @@ test('an explicit directory with no rule files fails naming that directory, not 
     writeFileSync(join(root, 'notes.txt'), ruleYaml('Not a rule'), 'utf8');
     writeFileSync(join(root, 'sub', 'rule.json'), '{}\n', 'utf8');
 
-    await assert.rejects(loadRules(root), (error: unknown) => {
+    const reported: [string, DiagnosticFields | undefined][] = [];
+    const diagnostics: Diagnostics = { important: (event, fields) => reported.push([event, fields]) };
+
+    await assert.rejects(loadRules(root, undefined, diagnostics), (error: unknown) => {
       const failure = error as Error;
       assert.ok(failure.message.includes(root), `expected the failure to name ${root}: ${failure.message}`);
       return true;
     });
+
+    assert.deepEqual(reported.map(([event]) => event), ['rules.discovered']);
+    const [event, fields] = reported[0]!;
+    assert.strictEqual(event, 'rules.discovered');
+    assert.strictEqual(fields?.source, 'explicit');
+    assert.strictEqual(fields?.files, 0);
   });
 });
 

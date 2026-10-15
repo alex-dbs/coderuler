@@ -3,9 +3,9 @@ import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
 
-import { groupContexts, type DecisionContext } from './decision/group.ts';
-import type { ScopeMatch } from './plugins/index.ts';
-import { parseRule, type CompiledRule } from './rule.ts';
+import { groupContexts, type DecisionContext } from './app/decision/group.ts';
+import type { ScopeMatch } from './app/scope/types.ts';
+import { parseRule, type CompiledRule } from './infra/rules.ts';
 import {
   assertFailed,
   createSandbox,

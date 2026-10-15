@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 
 import { createSandbox, isolatedEnv, ROOT, runGit, writeFile, type SandboxRoot } from '../tests/support.ts';
 
-const MODULE = pathToFileURL(join(ROOT, 'src', 'git-diff.ts')).href;
+const MODULE = pathToFileURL(join(ROOT, 'src', 'adapter', 'git', 'diff.ts')).href;
 
 const SUPPORT = pathToFileURL(join(ROOT, 'tests', 'support.ts')).href;
 

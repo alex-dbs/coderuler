@@ -2,18 +2,20 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { test, type TestContext } from 'node:test';
 import { stripVTControlCharacters } from 'node:util';
-import {
-  compileRule,
-  parseRule,
-  type CompiledRule,
-  type DecisionGrouping,
-  type FileInput,
-  type MatchOptions,
-  type RuleExamples,
-  type RuleInput,
-} from './rule.ts';
-import { createPluginRegistry, PluginRegistry, astGrepPlugin, protobufPlugin, yamlPlugin } from './plugins/index.ts';
-import type { ScopeMatch, ScopePlugin } from './plugins/index.ts';
+import { compileRule, parseRule, type CompiledRule } from './infra/rules.ts';
+import type {
+  DecisionGrouping,
+  FileInput,
+  MatchOptions,
+  RuleExamples,
+  RuleInput,
+} from './app/rule/types.ts';
+import { PluginRegistry } from './app/scope/registry.ts';
+import type { ScopeMatch, ScopePlugin } from './app/scope/types.ts';
+import { createPluginRegistry } from './infra/plugins.ts';
+import { astGrepPlugin } from './adapter/scope/astgrep.ts';
+import { protobufPlugin } from './adapter/scope/protobuf.ts';
+import { yamlPlugin } from './adapter/scope/yaml.ts';
 
 const kvPlugin: ScopePlugin = {
   format: 'kv',
@@ -126,7 +128,7 @@ test('obsolete and unknown top-level keys warn and are ignored, with no alias', 
 
 test('an unknown field warns in yellow on stderr and writes nothing to stdout', () => {
   const script = [
-    `import { compileRule } from ${JSON.stringify(new URL('./rule.ts', import.meta.url).href)};`,
+    `import { compileRule } from ${JSON.stringify(new URL('./infra/rules.ts', import.meta.url).href)};`,
     'const rule = compileRule({',
     "  version: 'v1',",
     "  name: 'R',",

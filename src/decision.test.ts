@@ -4,12 +4,12 @@ import { createServer, type Server } from 'node:http';
 import { after, before, test } from 'node:test';
 
 import { isMapping } from '../tests/support.ts';
-import { createDecisionService } from './decision/config.ts';
-import { JevAdapter } from './decision/jev.ts';
-import type { DecisionState } from './decision/port.ts';
-import { DecisionService, type DecisionInput } from './decision/service.ts';
-import type { DiagnosticFields, Diagnostics } from './diagnostics.ts';
-import type { Context, RuleExamples } from './rule.ts';
+import { JevAdapter } from './adapter/decision/jev.ts';
+import type { DecisionState } from './app/decision/port.ts';
+import { DecisionService, type DecisionInput } from './app/decision/service.ts';
+import type { DiagnosticFields, Diagnostics } from './app/ports/diagnostics.ts';
+import type { Context, RuleExamples } from './app/rule/types.ts';
+import { createDecisionService } from './infra/decision.ts';
 
 const API_KEY = 'loopback-key';
 const RULE = 'Every handler must return a promise.';

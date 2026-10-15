@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { yamlPlugin } from './plugins/yaml.ts';
+import { yamlPlugin } from './adapter/scope/yaml.ts';
 
 const FILEPATH = 'charts/app/values.yaml';
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { protobufPlugin } from './plugins/protobuf.ts';
-import type { LineSpan } from './plugins/types.ts';
+import { protobufPlugin } from './adapter/scope/protobuf.ts';
+import type { LineSpan } from './app/scope/types.ts';
 
 const SELECT_ALL = protobufPlugin.compile({ path: '$.rpcs[*]' });
 const FILE = 'proto/billing/v1/invoice.proto';

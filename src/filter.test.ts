@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { compileFilter } from './filter.ts';
-import type { ScopeMatch } from './plugins/index.ts';
-import type { JsonValue } from './plugins/types.ts';
+import { compileFilter } from './app/filter.ts';
+import type { JsonValue, ScopeMatch } from './app/scope/types.ts';
 
 const BASE: ScopeMatch = { id: 's', source: 'text' };
 

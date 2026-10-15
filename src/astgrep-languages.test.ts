@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parse } from '@ast-grep/napi';
-import { astGrepPlugin } from './plugins/astgrep.ts';
-import type { ScopeMatch } from './plugins/types.ts';
+import { astGrepPlugin } from './adapter/scope/astgrep.ts';
+import type { ScopeMatch } from './app/scope/types.ts';
 
 const CATALOG: readonly string[] = [
   'angular',

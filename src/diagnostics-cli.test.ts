@@ -501,3 +501,54 @@ test('an interactive human run prints diagnostics instead of a spinner', async (
   assertNoAnsi(result, 'tty diagnostics');
   assert.notStrictEqual(result.stdout.trim(), '', 'the human summary must still print on stdout');
 });
+
+test('a rules directory holding no rule reports the empty discovery before failing', async () => {
+  const project = bare.isolated('no-rules-explicit');
+  const directory = join(project.cwd, 'no-rules');
+  writeFile(join(directory, 'notes.txt'), 'not a rule\n');
+
+  const result = await runCli(['check', '.', '--rules', directory, '--debug'], project);
+  assertFailed(result, 'an explicit rules directory holding no rule');
+
+  const lines = diagnosticLines(result, 'debug');
+  const discovered = lines.filter(line => line.startsWith('[debug] rules.discovered '));
+  assert.strictEqual(discovered.length, 1, `one discovery report expected (stderr: ${result.stderr})`);
+  assert.match(discovered[0]!, /^\[debug\] rules\.discovered source="explicit" files=0 ms=\d+$/);
+  assert.deepStrictEqual(
+    lines.filter(line => line.startsWith('[debug] run.failed ')),
+    ['[debug] run.failed phase="rules" reason="Error"'],
+    'the empty discovery must fail in the rules phase',
+  );
+  assert.ok(
+    lines.indexOf(discovered[0]!) < lines.indexOf('[debug] run.failed phase="rules" reason="Error"'),
+    `the discovery report must precede the failure (stderr: ${result.stderr})`,
+  );
+  assert.ok(!emits(result, 'debug', 'rules.loaded'), 'a run without a rule must not report a load');
+  assert.ok(result.stderr.includes(directory), `the failure must name ${directory}: ${result.stderr}`);
+});
+
+test('a project and home root holding no rule report the empty discovery before failing', async () => {
+  const project = bare.isolated('no-rules-roots');
+
+  const result = await runCli(['check', '.', '--debug'], project, {}, HUMAN);
+  assertFailed(result, 'a project and home root holding no rule');
+
+  const lines = diagnosticLines(result, 'debug');
+  const discovered = lines.filter(line => line.startsWith('[debug] rules.discovered '));
+  assert.strictEqual(discovered.length, 1, `one discovery report expected (stderr: ${result.stderr})`);
+  assert.match(discovered[0]!, /^\[debug\] rules\.discovered source="discovery" files=0 ms=\d+$/);
+  const failures = lines.filter(line => line.startsWith('[debug] run.failed '));
+  assert.deepStrictEqual(failures, ['[debug] run.failed phase="rules" reason="Error"']);
+  assert.ok(
+    lines.indexOf(discovered[0]!) < lines.indexOf(failures[0]!),
+    `the discovery report must precede the failure (stderr: ${result.stderr})`,
+  );
+  assert.ok(!emits(result, 'debug', 'rules.loaded'), 'a run without a rule must not report a load');
+  const stray = strayStderrLines(result);
+  assert.strictEqual(stray.length, 1, `the failure must stand alone (stderr: ${result.stderr})`);
+  const roots = [join(project.cwd, '.rulekeeper'), join(project.home, '.rulekeeper')];
+  assert.ok(
+    roots.every(root => stray[0]!.includes(root)),
+    `the failure must name both searched roots ${roots.join(' and ')}: ${stray[0]}`,
+  );
+});

@@ -19,6 +19,9 @@ import {
   type SchedulingFixture,
 } from '../tests/support.ts';
 
+import { checkCommand } from './adapter/cli/check.ts';
+import type { Check } from './app/check.ts';
+
 const HUMAN: CliPresentationOptions = { json: false };
 
 let backend!: DecisionFixture;
@@ -401,6 +404,118 @@ test('a failing check writes nothing to stdout in either presentation', async ()
 
   assert.strictEqual(backend.requests.length, 0, 'a missing key must fail before any request');
   backend.reset();
+});
+
+function recordingStream(into: string[]): (chunk: string | Uint8Array) => boolean {
+  return chunk => {
+    into.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+    return true;
+  };
+}
+
+function assertReportFailure(stderr: readonly string[], written: number, where: string): void {
+  const failing = stderr.filter(chunk => chunk.includes('run.failed'));
+  assert.strictEqual(failing.length, 1, `${where}: the report failure must be logged exactly once (stderr: ${JSON.stringify(stderr)})`);
+  assert.strictEqual(failing[0], '[debug] run.failed phase="report" reason="Error"\n', `${where}: the loss must be named as the report phase`);
+  const separator = stderr.indexOf('\n');
+  assert.ok(separator !== -1 && separator < stderr.indexOf(failing[0]!), `${where}: the blank diagnostic separator must precede the failure`);
+  assert.strictEqual(written, 1, `${where}: the failed report must not be retried`);
+}
+
+function assertSeparatorFailure(stderr: readonly string[], written: number, where: string): void {
+  const failing = stderr.filter(chunk => chunk.includes('run.failed'));
+  assert.strictEqual(failing.length, 1, `${where}: the separator failure must be logged exactly once (stderr: ${JSON.stringify(stderr)})`);
+  assert.strictEqual(failing[0], '[debug] run.failed phase="decisions" reason="Error"\n', `${where}: the loss must be named as the decisions phase`);
+  assert.strictEqual(stderr.includes('\n'), false, `${where}: a separator that failed to write must not be retried`);
+  assert.strictEqual(written, 0, `${where}: a failed separator must not be followed by a report`);
+}
+
+test('a JSON report that fails after a successful check logs the report phase once and rethrows', async (t) => {
+  const failure = new Error('stdout is closed');
+  const stderr: string[] = [];
+  let written = 0;
+  t.mock.method(process.stderr, 'write', recordingStream(stderr));
+  t.mock.method(process.stdout, 'write', () => {
+    written += 1;
+    throw failure;
+  });
+  const application: Check = async () => [];
+
+  await assert.rejects(
+    () => checkCommand(application, '.', { json: true, debug: true }),
+    (error: unknown) => error === failure,
+  );
+
+  assert.ok(stderr[0]!.startsWith('[debug] run.start '), `the run must still announce itself (stderr: ${JSON.stringify(stderr)})`);
+  assertReportFailure(stderr, written, 'JSON report');
+});
+
+test('a human report that fails after a successful check logs the report phase once and rethrows', async (t) => {
+  const failure = new Error('stdout is closed');
+  const stderr: string[] = [];
+  let written = 0;
+  t.mock.method(process.stderr, 'write', recordingStream(stderr));
+  t.mock.method(process.stdout, 'write', () => {
+    written += 1;
+    throw failure;
+  });
+  const application: Check = async () => [];
+
+  await assert.rejects(
+    () => checkCommand(application, '.', { debug: true }),
+    (error: unknown) => error === failure,
+  );
+
+  assertReportFailure(stderr, written, 'human report');
+});
+
+test('a separator that fails once logs the decisions phase once and never reports', async (t) => {
+  const failure = new Error('stderr is closed');
+  const stderr: string[] = [];
+  let written = 0;
+  let separatorFailed = false;
+  t.mock.method(process.stderr, 'write', (chunk: string | Uint8Array) => {
+    const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8');
+    if (text === '\n' && !separatorFailed) {
+      separatorFailed = true;
+      throw failure;
+    }
+    stderr.push(text);
+    return true;
+  });
+  t.mock.method(process.stdout, 'write', () => {
+    written += 1;
+    return true;
+  });
+  const application: Check = async () => [];
+
+  await assert.rejects(
+    () => checkCommand(application, '.', { json: true, debug: true }),
+    (error: unknown) => error === failure,
+  );
+
+  assert.ok(stderr[0]!.startsWith('[debug] run.start '), `the run must still announce itself (stderr: ${JSON.stringify(stderr)})`);
+  assertSeparatorFailure(stderr, written, 'separator');
+});
+
+test('a pipeline failure stays the application diagnostic and never reaches stdout or the report phase', async (t) => {
+  const failure = new Error('rules are broken');
+  const stderr: string[] = [];
+  const stdout: string[] = [];
+  t.mock.method(process.stderr, 'write', recordingStream(stderr));
+  t.mock.method(process.stdout, 'write', recordingStream(stdout));
+  const application: Check = async () => {
+    throw failure;
+  };
+
+  await assert.rejects(
+    () => checkCommand(application, '.', { json: true, debug: true }),
+    (error: unknown) => error === failure,
+  );
+
+  assert.doesNotMatch(stderr.join(''), /run\.failed/, 'the application owns the pipeline failure diagnostic');
+  assert.strictEqual(stderr.includes('\n'), false, 'a failed pipeline must not emit the blank diagnostic separator');
+  assert.deepStrictEqual(stdout, [], 'a failed check must write nothing to stdout');
 });
 
 test('a narrow terminal still shows the full rule identity and the violation count of a scope summary', async () => {
