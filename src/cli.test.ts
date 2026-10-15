@@ -16,6 +16,7 @@ import {
   soleEntry,
   startDecisionFixture,
   writeFile,
+  yamlRule,
   type DecisionFixture,
   type Sandbox,
   type SandboxRoot,
@@ -35,24 +36,6 @@ after(async () => {
   sandbox.cleanup();
   await backend.close();
 });
-
-function yamlRule(
-  name: string,
-  rule: string,
-  files: { readonly included: readonly string[]; readonly excluded?: readonly string[] },
-  filter?: readonly string[],
-): string {
-  const lines = ["version: 'v1'", `name: '${name}'`, 'files:', '  included:'];
-  for (const glob of files.included) lines.push(`    - '${glob}'`);
-  if (files.excluded !== undefined) {
-    lines.push('  excluded:');
-    for (const glob of files.excluded) lines.push(`    - '${glob}'`);
-  }
-  lines.push('scope:', '  format: yaml', "  path: '$'");
-  if (filter !== undefined) lines.push('filter:', ...filter);
-  lines.push(`rule: '${rule}'`, '');
-  return lines.join('\n');
-}
 
 interface GoldenFileCase {
   readonly rulePath: string;
@@ -467,11 +450,11 @@ test('check decides every context and reports each scope under its own filepath 
   ]);
 
   // A probability that only ties the boundary is not a positive: neither scope follows the rule.
-  backend.probability = 0.5;
+  backend.probability = 0.4;
   const tie = soleEntry(await runCli(['check', '.', '--rules', rulePath], project), 'decisions tie');
   assert.deepStrictEqual(tie.decisions, [
-    { filepath: 'src/a.yaml', scopeId: '0:', follows: false, probability: 0.5, model: 'testmodel' },
-    { filepath: 'src/b.yaml', scopeId: '0:', follows: false, probability: 0.5, model: 'testmodel' },
+    { filepath: 'src/a.yaml', scopeId: '0:', follows: false, probability: 0.4, model: 'testmodel' },
+    { filepath: 'src/b.yaml', scopeId: '0:', follows: false, probability: 0.4, model: 'testmodel' },
   ]);
   backend.reset();
 });
@@ -555,9 +538,10 @@ test('check prints nothing when the backend fails after answering an earlier con
   writeFile(join(project.cwd, 'src', 'a.yaml'), '{service: {name: api}}');
   writeFile(join(project.cwd, 'src', 'b.yaml'), '{service: {name: legacy}}');
 
-  // The first context is answered and the second is not: the run must not report the first decision alone.
+  // One decision at a time, so the first context is answered and the second is not: the run must not
+  // report the first decision alone and must take no third job after the failure.
   backend.failFromRequest = 1;
-  const result = await runCli(['check', '.', '--rules', rulePath], project);
+  const result = await runCli(['check', '.', '--rules', rulePath, '--concurrency', '1'], project);
   assertFailed(result, 'backend failure');
   assert.strictEqual(backend.requests.length, 2, 'the run must stop at the context that failed');
   backend.reset();
@@ -575,7 +559,6 @@ test('check and validate never call the backend when there is nothing to decide'
   // Neither run is given a credential at all, so a run that tried to ask for a decision would fail
   // before sending anything: reaching a normal exit proves the backend was never consulted.
   const noCredentials: NodeJS.ProcessEnv = {
-    RULEKEEPER_DECISION_API_KEY: undefined,
     TYPESAFE_API_KEY: undefined,
   };
   const entry = soleEntry(
@@ -591,6 +574,52 @@ test('check and validate never call the backend when there is nothing to decide'
   assert.strictEqual(backend.requests.length, 0, 'neither run may have asked for a decision');
 });
 
+test('a rule with unknown fields still runs, warning on stderr and keeping stdout clean', async () => {
+  backend.reset();
+  const project = sandbox.isolated('unknown-fields');
+  const rulePath = writeFile(
+    join(project.rules, 'typo.yaml'),
+    [
+      "version: 'v1'",
+      "name: 'Typo review'",
+      'files:',
+      '  included:',
+      "    - '**/*.yaml'",
+      '  ignored:',
+      "    - '**/*.json'",
+      'scope:',
+      '  format: yaml',
+      "  path: '$'",
+      'examples: { good: [g], typo: [] }',
+      'decision:',
+      '  group_by: project',
+      '  depth: 2',
+      'prompt: a legacy instruction',
+      "rule: 'Review every source.'",
+      '',
+    ].join('\n'),
+  );
+  writeFile(join(project.cwd, 'src', 'a.yaml'), '{service: {name: api}}');
+  const warnings = [
+    'WARN Unknown field: rule.prompt (ignored)',
+    'WARN Unknown field: rule.files.ignored (ignored)',
+    'WARN Unknown field: rule.examples.typo (ignored)',
+    'WARN Unknown field: rule.decision.depth (ignored)',
+  ];
+
+  const validated = await runCli(['validate', rulePath], project);
+  assert.strictEqual(validated.status, 0, `validate: expected success (stderr: ${validated.stderr})`);
+  assert.doesNotMatch(validated.stdout, /WARN|Unknown field/, 'warnings must stay off stdout');
+  assert.deepStrictEqual(validated.stderr.split('\n').slice(0, -1).sort(), [...warnings].sort());
+
+  const entry = soleEntry(await runCli(['check', '.', '--rules', rulePath], project), 'unknown fields');
+  assert.strictEqual(entry.name, 'Typo review', 'the rule must still be reviewed under its known name');
+  assert.strictEqual(entry.rule, 'Review every source.', 'the known instruction must survive verbatim');
+  assert.strictEqual(entry.decisions.length, 1, 'the ignored fields must not stop the decision');
+  assert.strictEqual(backend.requests.length, 1, 'the ignored fields must not drop the source');
+  backend.reset();
+});
+
 test('check fails without a backend key instead of reaching a backend', async () => {
   backend.reset();
   const project = sandbox.isolated('check-missing-key');
@@ -601,9 +630,7 @@ test('check fails without a backend key instead of reaching a backend', async ()
   writeFile(join(project.cwd, 'src', 'a.yaml'), '{service: {name: api}}');
 
   // The sandbox points at the fixture; this run withholds every key, so it must fail before asking.
-  // The key fallback itself is pinned by the adapter's own loopback suite, not here.
   const result = await runCli(['check', '.', '--rules', rulePath], project, {
-    RULEKEEPER_DECISION_API_KEY: undefined,
     TYPESAFE_API_KEY: undefined,
   });
   assertFailed(result, 'missing backend key');
@@ -618,9 +645,9 @@ test('the CLI loads decision settings from .env without overriding shell setting
   );
   writeFile(join(project.cwd, 'app.yaml'), '{name: api}');
   writeFile(join(project.cwd, '.env'), [
-    `RULEKEEPER_DECISION_BASE_URL=${backend.baseUrl}`,
-    'RULEKEEPER_DECISION_API_KEY=dotenv-key',
-    'RULEKEEPER_DECISION_MODEL=dotenv-model',
+    `TYPESAFE_BASE_URL=${backend.baseUrl}`,
+    'TYPESAFE_API_KEY=dotenv-key',
+    'TYPESAFE_DEFAULT_MODEL=dotenv-model',
     '',
   ].join('\n'));
 
@@ -630,10 +657,9 @@ test('the CLI loads decision settings from .env without overriding shell setting
   ] as const) {
     backend.reset();
     const entry = soleEntry(await runCli(['check', '.', '--rules', rulePath], project, {
-      RULEKEEPER_DECISION_BASE_URL: undefined,
-      RULEKEEPER_DECISION_API_KEY: key,
-      RULEKEEPER_DECISION_MODEL: model,
-      TYPESAFE_API_KEY: undefined,
+      TYPESAFE_BASE_URL: undefined,
+      TYPESAFE_API_KEY: key,
+      TYPESAFE_DEFAULT_MODEL: model,
     }), 'dotenv configuration');
     assert.deepStrictEqual(entry.decisions, [
       { filepath: 'app.yaml', scopeId: '0:', follows: true, probability: 0.9, model: 'testmodel' },

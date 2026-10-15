@@ -1,5 +1,7 @@
 import { JSONPath } from 'jsonpath-plus';
 import { assertNonExecutable } from '../jsonpath.ts';
+import { warnUnknownField } from '../warnings.ts';
+import { SourceLines } from './lines.ts';
 import { readRpcRecords } from './protobuf-parser.ts';
 import type { CompiledScope, JsonValue, ScopeInput, ScopeMatch, ScopePlugin } from './types.ts';
 
@@ -18,18 +20,25 @@ class ProtobufScope implements CompiledScope {
     records.forEach((record, position) => index.set(record.data, position));
     const raw = JSONPath({ path: this.path, json: { rpcs: records.map((record) => record.data) }, eval: false });
     const selected = Array.isArray(raw) ? raw : [raw];
+    if (selected.length === 0) return [];
+    const lines = new SourceLines(input.source);
     return selected.map((result) => {
       const position = result !== null && typeof result === 'object' ? index.get(result) : undefined;
       if (position === undefined) throw new Error('protobuf scope path selected a node that is not an RPC record');
       const record = records[position]!;
-      return { id: record.id, source: record.source, data: record.data as unknown as JsonValue };
+      return {
+        id: record.id,
+        source: record.source,
+        data: record.data as unknown as JsonValue,
+        lines: lines.span(record.start, record.end),
+      };
     });
   }
 }
 
 function compileProtobufScope(options: Readonly<Record<string, unknown>>): CompiledScope {
   for (const key of Object.keys(options)) {
-    if (key !== 'path') throw new Error(`Unknown protobuf scope option '${key}'`);
+    if (key !== 'path') warnUnknownField(`rule.scope.${key}`);
   }
   const path = options.path;
   if (typeof path !== 'string' || path.length === 0) {

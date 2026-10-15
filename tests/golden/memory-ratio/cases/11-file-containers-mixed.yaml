@@ -25,6 +25,7 @@ expected:
   contexts:
     - filepath: charts/payments-api/values.yaml
       scope:
+        lines: {start: 2, end: 8}
         id: '0:payments-api'
         source: |
           name: payments-api
@@ -44,6 +45,7 @@ expected:
               memory: 2Gi
     - filepath: charts/payments-api/values.yaml
       scope:
+        lines: {start: 9, end: 13}
         id: '0:ledger'
         source: |
           name: ledger
@@ -59,6 +61,7 @@ expected:
               memory: 256Mi
     - filepath: charts/payments-api/values.yaml
       scope:
+        lines: {start: 14, end: 18}
         id: '0:cache'
         source: |
           name: cache

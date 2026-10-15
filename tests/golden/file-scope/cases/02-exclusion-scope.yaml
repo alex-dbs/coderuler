@@ -26,6 +26,7 @@ expected:
         +  limits:
         +    memory: 1Gi
       scope:
+        lines: {start: 1, end: 4}
         id: '0:'
         source: |
           image: api

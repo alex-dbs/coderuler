@@ -36,6 +36,7 @@ expected:
         -    out := make([]string, 0, len(tags))
         +    out := make([]string, len(tags))
       scope:
+        lines: {start: 3, end: 9}
         id: function_declaration:addTags
         source: |-
           func addTags(tags []string) []string {

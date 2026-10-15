@@ -2,6 +2,7 @@ import type { ScopeMatch } from '../plugins/types.ts';
 import type { RuleExamples } from '../rule.ts';
 import type { DecisionContext } from './group.ts';
 import type { DecisionBackend, DecisionInstructions, DecisionScope, DecisionScopeState, DecisionState } from './port.ts';
+import { DEFAULT_THRESHOLD, validateThreshold } from './threshold.ts';
 
 export interface Decision {
   readonly follows: boolean;
@@ -42,9 +43,11 @@ function projectState(context: DecisionContext): DecisionState {
 
 export class DecisionService {
   readonly #backend: DecisionBackend;
+  readonly #threshold: number;
 
-  constructor(backend: DecisionBackend) {
+  constructor(backend: DecisionBackend, threshold: number = DEFAULT_THRESHOLD) {
     this.#backend = backend;
+    this.#threshold = validateThreshold(threshold);
   }
 
   async decide(input: DecisionInput): Promise<Decision> {
@@ -54,6 +57,6 @@ export class DecisionService {
       question: 'group' in input.context ? GROUP_QUESTION : SCOPE_QUESTION,
     };
     const { probability, model } = await this.#backend.decide({ context: projectState(input.context), instructions });
-    return { follows: probability > 0.5, probability, model };
+    return { follows: probability > this.#threshold, probability, model };
   }
 }

@@ -59,6 +59,7 @@ expected:
         +      limits:
         +        memory: 3Gi
       scope:
+        lines: {start: 2, end: 8}
         id: '0:payments-api'
         source: |
           name: payments-api
@@ -97,6 +98,7 @@ expected:
         +      limits:
         +        memory: 3Gi
       scope:
+        lines: {start: 9, end: 15}
         id: '0:ledger'
         source: |
           name: ledger

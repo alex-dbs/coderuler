@@ -23,6 +23,8 @@ type ProtoRpcData = {
 interface ProtoRpcRecord {
   readonly id: string;
   readonly source: string;
+  readonly start: number;
+  readonly end: number;
   readonly data: ProtoRpcData;
 }
 
@@ -351,6 +353,8 @@ interface PendingRecord {
   readonly name: string;
   readonly bindings: readonly ProtoHttpBinding[];
   readonly source: string;
+  readonly start: number;
+  readonly end: number;
 }
 
 class ProtoReader {
@@ -383,7 +387,7 @@ class ProtoReader {
         name: record.name,
         http: { bindings: record.bindings },
       };
-      return { id, source: record.source, data };
+      return { id, source: record.source, start: record.start, end: record.end, data };
     });
   }
 
@@ -476,6 +480,8 @@ class ProtoReader {
       name,
       bindings,
       source: this.source.slice(startOffset, endOffset),
+      start: startOffset,
+      end: endOffset,
     });
     return cursor;
   }

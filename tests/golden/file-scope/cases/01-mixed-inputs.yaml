@@ -29,6 +29,7 @@ expected:
         +  ports: [80, 443]
         +replicas: 2
       scope:
+        lines: {start: 1, end: 1}
         id: '0:'
         source: '{service: {name: api, ports: [80, 443]}, replicas: 2}'
         data:

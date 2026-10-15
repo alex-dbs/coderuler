@@ -238,13 +238,13 @@ function contextViews(entry: CheckEntry, label: string): ContextView[] {
   });
 }
 
-function requestState(index: number, label: string): Record<string, unknown> {
-  const request = backend.requests[index];
-  if (request === undefined) throw new Error(`${label}: no request was recorded`);
-  if (!isMapping(request.body)) throw new Error(`${label}: the request body must be a JSON mapping`);
-  const state = request.body.state;
-  if (!isMapping(state)) throw new Error(`${label}: the request must carry a state mapping`);
-  return state;
+function findState(match: (state: Record<string, unknown>) => boolean, label: string): Record<string, unknown> {
+  for (const request of backend.requests) {
+    if (!isMapping(request.body)) continue;
+    const state = request.body.state;
+    if (isMapping(state) && match(state)) return state;
+  }
+  throw new Error(`${label}: no recorded request carried the expected state`);
 }
 
 test('check groups a project from the current tree with no repository and an unused base', async () => {
@@ -277,7 +277,7 @@ test('check groups a project from the current tree with no repository and an unu
     },
   ]);
   assert.strictEqual(backend.requests.length, 1, 'one group must be one decision');
-  assert.deepStrictEqual(requestState(0, 'grouped without a repository'), {
+  assert.deepStrictEqual(findState(state => isMapping(state.group) && state.group.path === '.', 'grouped without a repository'), {
     group: { type: 'project', path: '.' },
     files: [
       { filepath: 'src/app.yaml', scopes: [{ id: '0:', data: { name: 'src-app' } }] },
@@ -335,7 +335,7 @@ test('check reads the committed change for a scope rule and the current tree for
   ]);
 
   assert.strictEqual(backend.requests.length, 2, 'one committed scope and one current-tree group');
-  const scopeState = requestState(0, 'mixed modes');
+  const scopeState = findState(state => state.filepath === 'charts/app/values.yaml', 'mixed modes');
   assert.strictEqual(scopeState.filepath, 'charts/app/values.yaml');
   assert.deepStrictEqual(scopeState.scope, { id: '0:', data: { name: 'committed' } });
   const patch = scopeState.diff;
@@ -343,7 +343,7 @@ test('check reads the committed change for a scope rule and the current tree for
     typeof patch === 'string' && patch.includes('-name: base') && patch.includes('+name: committed'),
     'the scope rule must review the committed change, not the working tree',
   );
-  assert.deepStrictEqual(requestState(1, 'mixed modes'), {
+  assert.deepStrictEqual(findState(state => isMapping(state.group) && state.group.path === '.', 'mixed modes'), {
     group: { type: 'project', path: '.' },
     files: [
       { filepath: 'charts/app/values.yaml', scopes: [{ id: '0:', data: { name: 'dirty' } }] },
@@ -381,7 +381,8 @@ test('check narrows a grouped rule to the target and keeps the group of the narr
       `${label}: wrong groups`,
     );
     assert.strictEqual(backend.requests.length, 1, `${label}: one group must be one decision`);
-    assert.deepStrictEqual(requestState(0, label).group, { type: 'folder', path: 'charts/app' }, `${label}: wrong group path`);
+    const state = findState(state => isMapping(state.group) && state.group.path === 'charts/app', label);
+    assert.deepStrictEqual(state.group, { type: 'folder', path: 'charts/app' }, `${label}: wrong group path`);
     backend.reset();
   }
 });
@@ -466,7 +467,7 @@ test('check asks once per group and lists every member scope in order', async ()
   ]);
   // Five scopes in two groups: a group is answered once, never split, and never fanned out per scope.
   assert.strictEqual(backend.requests.length, 2, 'one group must be one decision');
-  assert.deepStrictEqual(requestState(0, 'grouped members').files, [
+  assert.deepStrictEqual(findState(state => isMapping(state.group) && state.group.path === 'src/app/values.yaml', 'grouped members').files, [
     {
       filepath: 'src/app/values.yaml',
       scopes: [
@@ -476,7 +477,7 @@ test('check asks once per group and lists every member scope in order', async ()
       ],
     },
   ]);
-  assert.deepStrictEqual(requestState(1, 'grouped members').files, [
+  assert.deepStrictEqual(findState(state => isMapping(state.group) && state.group.path === 'src/lib/values.yaml', 'grouped members').files, [
     {
       filepath: 'src/lib/values.yaml',
       scopes: [
@@ -536,8 +537,10 @@ test('check stops at the group the backend fails on and writes nothing', async (
   const rulePath = writeFile(join(project.rules, 'items.yaml'), itemRule('failing review', ['group_by: file']));
   for (const name of ['a', 'b', 'c']) writeFile(join(project.cwd, `${name}.yaml`), items(name));
 
+  // One group at a time, so the first group is answered and the second is not, and the third is
+  // never taken once the failure is observed.
   backend.failFromRequest = 1;
-  assertFailed(await runCli(['check', '.', '--rules', rulePath], project), 'grouped failure');
+  assertFailed(await runCli(['check', '.', '--rules', rulePath, '--concurrency', '1'], project), 'grouped failure');
   assert.strictEqual(backend.requests.length, 2, 'the run must stop at the group that failed');
   backend.reset();
 });
@@ -590,8 +593,14 @@ test('check sends a source-only scope with its source for a grouped rule', async
 
   // An ast-grep scope carries no data at all, so the raw contexts report the matched source.
   assert.deepStrictEqual(entry.contexts, [
-    { filepath: 'src/script.js', scope: { id: 'function_declaration:alpha', source: ALPHA, captures: {} } },
-    { filepath: 'src/script.js', scope: { id: 'function_declaration:beta', source: BETA, captures: {} } },
+    {
+      filepath: 'src/script.js',
+      scope: { id: 'function_declaration:alpha', source: ALPHA, captures: {}, lines: { start: 1, end: 3 } },
+    },
+    {
+      filepath: 'src/script.js',
+      scope: { id: 'function_declaration:beta', source: BETA, captures: {}, lines: { start: 5, end: 7 } },
+    },
   ]);
   assert.deepStrictEqual(entry.decisions, [
     {
@@ -606,7 +615,7 @@ test('check sends a source-only scope with its source for a grouped rule', async
     },
   ]);
   // With no data to send, the scope's own source travels instead — never an empty placeholder.
-  assert.deepStrictEqual(requestState(0, 'grouped source-only scopes'), {
+  assert.deepStrictEqual(findState(state => isMapping(state.group) && state.group.path === 'src/script.js', 'grouped source-only scopes'), {
     group: { type: 'file', path: 'src/script.js' },
     files: [
       {

@@ -255,3 +255,34 @@ test('an explicit path that is itself a symlink is followed, and loads under the
     assert.equal(single[0]!.rule.name, 'Named rule');
   });
 });
+
+test('loadRules compiles under an explicit concurrency with the discovery order and failures intact', async () => {
+  await withRoots(async ({ home }) => {
+    const root = join(home, 'rules');
+    const first = writeRule(root, 'a.yaml', 'A rule');
+    const second = writeRule(root, join('nested', 'b.yml'), 'B rule');
+    const third = writeRule(root, join('nested', 'deeper', 'c.yaml'), 'C rule');
+
+    const serial = await loadRules(root, 1);
+    const parallel = await loadRules(root, 8);
+
+    assert.deepEqual(serial.map(entry => entry.filepath), [first, second, third]);
+    assert.deepEqual(parallel.map(entry => entry.filepath), [first, second, third]);
+    assert.deepEqual(parallel.map(entry => entry.rule.name), ['A rule', 'B rule', 'C rule']);
+
+    await assert.rejects(loadRules(root, 0), (error: unknown) => {
+      assert.match((error as Error).message, /--concurrency/);
+      return true;
+    });
+
+    const broken = writeRule(root, join('nested', 'z-broken.yaml'), 'Broken rule');
+    writeFileSync(broken, "version: 'v1'\nname: Broken rule\nscope:\n  format: yaml\n  path: '$'\n", 'utf8');
+
+    await assert.rejects(loadRules(root, 4), (error: unknown) => {
+      const failure = error as Error;
+      assert.match(failure.message, /z-broken\.yaml/);
+      assert.ok(failure.cause instanceof Error);
+      return true;
+    });
+  });
+});

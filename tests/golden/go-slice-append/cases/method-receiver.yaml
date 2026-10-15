@@ -69,6 +69,7 @@ expected:
              }
          }
       scope:
+        lines: {start: 11, end: 16}
         id: method_declaration:Cart.Add
         source: |-
           func (c *Cart) Add(items ...string) {

@@ -34,6 +34,7 @@ expected:
   contexts:
     - filepath: internal/store/review.go
       scope:
+        lines: {start: 3, end: 9}
         id: function_declaration:addTags
         source: |-
           func addTags(tags []string) []string {
@@ -49,6 +50,7 @@ expected:
             - tag
     - filepath: internal/store/review.go
       scope:
+        lines: {start: 11, end: 17}
         id: function_declaration:growScores
         source: |-
           func growScores(scores []int) []int {

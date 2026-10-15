@@ -42,6 +42,55 @@ test('the root selector uses the empty JSON Pointer and exact document source', 
   assert.deepStrictEqual(scopes[0]?.data, { a: 1 });
 });
 
+test('reports the absolute line span of the selected node, clamped to its last character', () => {
+  const byKey = yamlPlugin.compile({ path: '$.containers[*]', key: '$.name' }).select({ filepath: FILEPATH, source: CONTAINERS });
+  assert.deepStrictEqual(byKey.map(entry => entry.lines), [
+    { start: 2, end: 2 },
+    { start: 3, end: 3 },
+  ]);
+
+  // The document node of `a: 1\n` ends after the trailing newline, which is still line 1.
+  const root = yamlPlugin.compile({ path: '$' }).select({ filepath: FILEPATH, source: 'a: 1\n' });
+  assert.deepStrictEqual(root.map(entry => entry.lines), [{ start: 1, end: 1 }]);
+
+  const crlf = yamlPlugin.compile({ path: '$.*' }).select({ filepath: FILEPATH, source: 'a: 1\r\nb: 2\r\n' });
+  assert.deepStrictEqual(crlf.map(entry => entry.lines), [
+    { start: 1, end: 1 },
+    { start: 2, end: 2 },
+  ]);
+
+  const block = yamlPlugin
+    .compile({ path: '$.containers[*]' })
+    .select({ filepath: FILEPATH, source: 'containers:\n  - name: api\n    resources:\n      limits:\n        memory: 1Gi\n' });
+  assert.deepStrictEqual(block.map(entry => entry.lines), [{ start: 2, end: 5 }]);
+});
+
+test('locates every selection at its own lines, aliases and repeated snippets included', () => {
+  const aliased = yamlPlugin.compile({ path: '$.containers[*]' }).select({
+    filepath: FILEPATH,
+    source: 'defaults: &defaults {request: 512Mi, limit: 1Gi}\ncontainers:\n  - {<<: *defaults, name: api}\n  - *defaults\n',
+  });
+  assert.deepStrictEqual(aliased.map(entry => entry.lines), [
+    { start: 3, end: 3 },
+    { start: 4, end: 4 },
+  ]);
+
+  const repeated = [
+    'containers:',
+    '  - {name: api, request: 1, limit: 2}',
+    '---',
+    'containers:',
+    '  - {name: api, request: 1, limit: 2}',
+    '',
+  ].join('\n');
+  const scopes = yamlPlugin.compile({ path: '$.containers[*]' }).select({ filepath: FILEPATH, source: repeated });
+  assert.equal(scopes[0]?.source, scopes[1]?.source);
+  assert.deepStrictEqual(scopes.map(entry => entry.lines), [
+    { start: 2, end: 2 },
+    { start: 5, end: 5 },
+  ]);
+});
+
 test('the document index distinguishes scopes from separate documents', () => {
   const source = [
     'containers:',
@@ -158,11 +207,10 @@ test('a key selector at the root still resolves zero and the empty string', () =
   assert.deepStrictEqual(scopes.map(entry => entry.source), ['""', '0']);
 });
 
-test('compile rejects missing, empty, non-string and unknown options', () => {
+test('compile rejects missing, empty and non-string options', () => {
   assert.throws(() => yamlPlugin.compile({}), Error);
   assert.throws(() => yamlPlugin.compile({ path: '' }), Error);
   assert.throws(() => yamlPlugin.compile({ path: 1 }), Error);
-  assert.throws(() => yamlPlugin.compile({ path: '$', extra: true }), Error);
   assert.throws(() => yamlPlugin.compile({ path: '$', key: '' }), Error);
 });
 

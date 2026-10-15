@@ -8,6 +8,7 @@ import { createDecisionService } from './decision/config.ts';
 import { JevAdapter } from './decision/jev.ts';
 import type { DecisionState } from './decision/port.ts';
 import { DecisionService, type DecisionInput } from './decision/service.ts';
+import type { DiagnosticFields, Diagnostics } from './diagnostics.ts';
 import type { Context, RuleExamples } from './rule.ts';
 
 const API_KEY = 'loopback-key';
@@ -114,15 +115,17 @@ async function startLoopback(): Promise<Loopback> {
 function decisionEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(process.env)) {
-    if (name.startsWith('RULEKEEPER_DECISION_') || name === 'TYPESAFE_API_KEY') continue;
+    if (name.startsWith('RK_') || name.startsWith('TYPESAFE_')) continue;
     env[name] = value;
   }
   return { ...env, ...overrides };
 }
 
-function serviceFor(backend: Loopback, overrides: NodeJS.ProcessEnv = {}): DecisionService {
+function serviceFor(backend: Loopback, overrides: NodeJS.ProcessEnv = {}, threshold?: number): DecisionService {
   return createDecisionService(
-    decisionEnv({ RULEKEEPER_DECISION_BASE_URL: backend.baseUrl, RULEKEEPER_DECISION_API_KEY: API_KEY, ...overrides }),
+    decisionEnv({ TYPESAFE_BASE_URL: backend.baseUrl, TYPESAFE_API_KEY: API_KEY, ...overrides }),
+    undefined,
+    threshold,
   );
 }
 
@@ -303,17 +306,17 @@ test('the endpoint path is appended to whatever base path the deployment configu
   ] as const) {
     backend.reset();
     backend.answer = noulReply(0.2);
-    await serviceFor(backend, { RULEKEEPER_DECISION_BASE_URL: `${backend.origin}${basePath}` }).decide(INPUT);
+    await serviceFor(backend, { TYPESAFE_BASE_URL: `${backend.origin}${basePath}` }).decide(INPUT);
     assert.equal(onlySent(backend).path, path);
   }
 });
 
-test('a probability of exactly 0.5 is not a following decision, and the answer is preserved', async () => {
+test('a probability of exactly 0.4 is not a following decision, and the answer is preserved', async () => {
   for (const [noul, follows] of [
     [0, false],
-    [0.4999999, false],
-    [0.5, false],
-    [0.5000001, true],
+    [0.3999999, false],
+    [0.4, false],
+    [0.4000001, true],
     [0.9, true],
     [1, true],
   ] as const) {
@@ -375,7 +378,7 @@ test('an unreachable endpoint fails as a network error without the key', async (
   const origin = `http://127.0.0.1:${boundPort(temporary)}`;
   await stopServer(temporary);
 
-  const error = await failed(() => serviceFor(backend, { RULEKEEPER_DECISION_BASE_URL: origin }).decide(INPUT));
+  const error = await failed(() => serviceFor(backend, { TYPESAFE_BASE_URL: origin }).decide(INPUT));
 
   assert.match(error.message, /ECONNREFUSED/);
   assert.ok(!error.message.includes(API_KEY), 'the failure must not carry the key');
@@ -408,40 +411,130 @@ test('a base URL that cannot reach the endpoint is refused before any request', 
 
 test('configuration refuses an unknown backend, an empty setting and a missing key', () => {
   for (const [label, overrides] of [
-    ['an unknown backend', { RULEKEEPER_DECISION_BACKEND: 'other', RULEKEEPER_DECISION_API_KEY: API_KEY }],
-    ['a blank backend', { RULEKEEPER_DECISION_BACKEND: '  ', RULEKEEPER_DECISION_API_KEY: API_KEY }],
-    ['a blank model', { RULEKEEPER_DECISION_API_KEY: API_KEY, RULEKEEPER_DECISION_MODEL: ' ' }],
-    ['a blank base URL', { RULEKEEPER_DECISION_API_KEY: API_KEY, RULEKEEPER_DECISION_BASE_URL: '' }],
-    ['a base URL that is not a URL', { RULEKEEPER_DECISION_API_KEY: API_KEY, RULEKEEPER_DECISION_BASE_URL: 'api.example.com' }],
+    ['an unknown backend', { RK_BACKEND: 'other', TYPESAFE_API_KEY: API_KEY }],
+    ['a blank backend', { RK_BACKEND: '  ', TYPESAFE_API_KEY: API_KEY }],
+    ['a blank model', { TYPESAFE_API_KEY: API_KEY, TYPESAFE_DEFAULT_MODEL: ' ' }],
+    ['a blank base URL', { TYPESAFE_API_KEY: API_KEY, TYPESAFE_BASE_URL: '' }],
+    ['a base URL that is not a URL', { TYPESAFE_API_KEY: API_KEY, TYPESAFE_BASE_URL: 'api.example.com' }],
     ['no key at all', {}],
-    ['a blank key', { RULEKEEPER_DECISION_API_KEY: '  ' }],
+    ['a blank key', { TYPESAFE_API_KEY: '  ' }],
   ] as const) {
     assert.throws(() => createDecisionService(decisionEnv(overrides)), Error, label);
   }
 });
 
-test('the official key and the default model are used when only TYPESAFE_API_KEY is set', async () => {
-  backend.reset();
-
-  const decision = await createDecisionService(
-    decisionEnv({ RULEKEEPER_DECISION_BASE_URL: backend.baseUrl, TYPESAFE_API_KEY: 'official-key' }),
-  ).decide(INPUT);
-
-  assert.equal(onlySent(backend).authorization, 'Bearer official-key');
-  assert.equal(wireBody(backend).model, 'jev-latest');
-  assert.deepEqual(decision, { follows: true, probability: 0.9, model: 'jev-1.13.0' });
+test('a supplied threshold decides strictly above itself, and zero and one are usable boundaries', async () => {
+  for (const [threshold, noul, follows] of [
+    [0, 0, false],
+    [0, 0.0000001, true],
+    [0.4, 0.4, false],
+    [0.4, 0.4000001, true],
+    [0.5, 0.9, true],
+    [1, 0.9999999, false],
+    [1, 1, false],
+  ] as const) {
+    backend.reset();
+    backend.answer = noulReply(noul);
+    const decision = await serviceFor(backend, {}, threshold).decide(INPUT);
+    assert.deepEqual(
+      decision,
+      { follows, probability: noul, model: 'jev-1.13.0' },
+      `a threshold of ${threshold} with a noul of ${noul}`,
+    );
+  }
 });
 
-test('the rulekeeper key and model win over the official key and the default model', async () => {
+test('RK_THRESHOLD configures the run, reading a zero threshold as zero rather than as absent', async () => {
+  for (const [value, noul, follows] of [
+    ['0.6', 0.6, false],
+    ['0.6', 0.6000001, true],
+    ['0', 0, false],
+    ['0', 0.0000001, true],
+    ['1', 1, false],
+  ] as const) {
+    backend.reset();
+    backend.answer = noulReply(noul);
+    const decision = await serviceFor(backend, { RK_THRESHOLD: value }).decide(INPUT);
+    assert.deepEqual(
+      decision,
+      { follows, probability: noul, model: 'jev-1.13.0' },
+      `RK_THRESHOLD ${value} with a noul of ${noul}`,
+    );
+  }
+});
+
+test('a supplied threshold outranks RK_THRESHOLD, which outranks the default', async () => {
+  for (const [label, overrides, threshold, noul, follows] of [
+    ['nothing configured ties at the default', {}, undefined, 0.4, false],
+    ['nothing configured follows above the default', {}, undefined, 0.4000001, true],
+    ['a setting alone', { RK_THRESHOLD: '0.9' }, undefined, 0.7, false],
+    ['a supplied threshold beside a setting', { RK_THRESHOLD: '0.9' }, 0.5, 0.7, true],
+    ['a supplied zero beside a setting', { RK_THRESHOLD: '0.9' }, 0, 0.0000001, true],
+  ] as const) {
+    backend.reset();
+    backend.answer = noulReply(noul);
+    const decision = await serviceFor(backend, overrides, threshold).decide(INPUT);
+    assert.deepEqual(decision, { follows, probability: noul, model: 'jev-1.13.0' }, label);
+  }
+});
+
+test('an unusable threshold is refused before any request', async () => {
   backend.reset();
+  for (const value of ['', '   ', 'abc', 'NaN', 'Infinity', '-0.5', '1.5', '2', '0.5.5']) {
+    assert.throws(() => serviceFor(backend, { RK_THRESHOLD: value }), Error, `RK_THRESHOLD ${JSON.stringify(value)}`);
+  }
+  for (const threshold of [Number.NaN, Number.POSITIVE_INFINITY, -0.5, 1.5, 2]) {
+    assert.throws(() => serviceFor(backend, {}, threshold), Error, `a supplied threshold of ${String(threshold)}`);
+  }
+  assert.equal(backend.sent.length, 0, 'an unusable threshold must be refused before any request');
+});
 
-  await serviceFor(backend, {
-    RULEKEEPER_DECISION_API_KEY: 'rulekeeper-key',
-    TYPESAFE_API_KEY: 'official-key',
-    RULEKEEPER_DECISION_MODEL: 'jev-9.9.9',
-    RULEKEEPER_DECISION_BACKEND: 'jev',
-  }).decide(INPUT);
+test('the effective threshold and where it came from are reported once they are resolved', () => {
+  const events: { readonly event: string; readonly fields: DiagnosticFields | undefined }[] = [];
+  const diagnostics: Diagnostics = {
+    important: (event, fields) => {
+      events.push({ event, fields });
+    },
+  };
 
-  assert.equal(onlySent(backend).authorization, 'Bearer rulekeeper-key');
-  assert.equal(wireBody(backend).model, 'jev-9.9.9');
+  for (const [overrides, threshold, expected] of [
+    [{}, undefined, { threshold: 0.4, source: 'default' }],
+    [{ RK_THRESHOLD: '0.7' }, undefined, { threshold: 0.7, source: 'env' }],
+    [{ RK_THRESHOLD: '0.7' }, 0.2, { threshold: 0.2, source: 'flag' }],
+  ] as const) {
+    events.length = 0;
+    createDecisionService(decisionEnv({ TYPESAFE_API_KEY: API_KEY, ...overrides }), diagnostics, threshold);
+    assert.deepEqual(
+      events.filter(({ event }) => event === 'decision.threshold').map(({ fields }) => fields),
+      [expected],
+      `the threshold beside ${JSON.stringify(overrides)}`,
+    );
+  }
+});
+
+test('a group is judged against the same threshold as a scope decision', async () => {
+  const grouped: DecisionInput = {
+    rule: RULE,
+    examples: EXAMPLES,
+    context: {
+      group: { type: 'folder', path: 'src/payments' },
+      files: [
+        { filepath: 'src/payments/save.ts', scopes: [{ id: '0:', source: 'async function save() {}' }] },
+        { filepath: 'src/payments/refund.ts', scopes: [{ id: '0:', source: 'function refund() {}' }] },
+      ],
+    },
+  };
+
+  for (const [label, overrides, threshold, probability, follows] of [
+    ['the default threshold ties a group at exactly 0.4', {}, undefined, 0.4, false],
+    ['a supplied threshold below the group answer', {}, 0.2, 0.5, true],
+    ['a setting above the group answer', { RK_THRESHOLD: '0.8' }, undefined, 0.5, false],
+    ['a setting below the group answer', { RK_THRESHOLD: '0.4' }, undefined, 0.5, true],
+  ] as const) {
+    backend.reset();
+    backend.answer = noulReply(probability);
+    const decision = await serviceFor(backend, overrides, threshold).decide(grouped);
+    assert.deepEqual(decision, { follows, probability, model: 'jev-1.13.0' }, label);
+    assert.equal(backend.sent.length, 1, `${label}: one group must be one decision`);
+  }
 });

@@ -6,11 +6,17 @@ export type JsonValue =
   | readonly JsonValue[]
   | { readonly [key: string]: JsonValue };
 
+export interface LineSpan {
+  readonly start: number;
+  readonly end: number;
+}
+
 export interface ScopeMatch {
   readonly id: string;
   readonly source: string;
   readonly data?: JsonValue;
   readonly captures?: Readonly<Record<string, string | readonly string[]>>;
+  readonly lines?: LineSpan;
 }
 
 export interface ScopeInput {

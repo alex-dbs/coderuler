@@ -11,7 +11,9 @@ import {
 } from 'yaml';
 
 import { assertNonExecutable } from '../jsonpath.ts';
-import type { CompiledScope, JsonValue, ScopeMatch, ScopePlugin } from './types.ts';
+import { warnUnknownField } from '../warnings.ts';
+import { SourceLines } from './lines.ts';
+import type { CompiledScope, JsonValue, LineSpan, ScopeMatch, ScopePlugin } from './types.ts';
 
 type YamlDocument = Document.Parsed;
 
@@ -179,10 +181,10 @@ function pointerSegments(pointer: string): string[] {
     .map(segment => segment.replaceAll('~1', '/').replaceAll('~0', '~'));
 }
 
-function sourceOf(node: unknown, source: string): string {
+function locationOf(node: unknown, source: string, lines: SourceLines): { readonly source: string; readonly lines: LineSpan } {
   const range = isNode(node) ? node.range : undefined;
   if (!range) throw new Error('The selected YAML node has no source range');
-  return source.slice(range[0], range[1]);
+  return { source: source.slice(range[0], range[1]), lines: lines.span(range[0], range[1]) };
 }
 
 function queryAll(selector: string, data: JsonValue): ResolvedMatch[] {
@@ -230,6 +232,7 @@ function selectScopes(source: string, selector: string, keySelector: string | un
   }
   const scopes: ScopeMatch[] = [];
   const rootOnly = selector.trim() === '$';
+  const lines = new SourceLines(source);
 
   documents.forEach((document, index) => {
     const firstError = document.errors[0];
@@ -247,7 +250,8 @@ function selectScopes(source: string, selector: string, keySelector: string | un
       const id = keySelector === undefined
         ? `${index}:${match.pointer}`
         : `${index}:${keyValue(match.value, keySelector)}`;
-      scopes.push({ id, source: sourceOf(node, source), data: match.value });
+      const location = locationOf(node, source, lines);
+      scopes.push({ id, source: location.source, data: match.value, lines: location.lines });
     }
   });
 
@@ -258,7 +262,7 @@ export const yamlPlugin: ScopePlugin = {
   format: 'yaml',
   compile(options: Readonly<Record<string, unknown>>): CompiledScope {
     for (const key of Object.keys(options)) {
-      if (key !== 'path' && key !== 'key') throw new Error(`yaml scope has no option "${key}"`);
+      if (key !== 'path' && key !== 'key') warnUnknownField(`rule.scope.${key}`);
     }
 
     const selector = options.path;

@@ -160,7 +160,9 @@ test('keeps a declaration identity stable when earlier lines move', () => {
   const shifted = ['package store', '', '// a new leading comment', '', ADD_TAGS, ''].join('\n');
   const original = select({ language: 'golang', rule: GO_RULE }, GO_SOURCE);
   const moved = select({ language: 'golang', rule: GO_RULE }, shifted);
-  assert.deepEqual(moved, original);
+  assert.deepEqual(moved.map((scope) => scope.id), original.map((scope) => scope.id));
+  assert.deepEqual(original.map((scope) => scope.lines), [{ start: 3, end: 9 }]);
+  assert.deepEqual(moved.map((scope) => scope.lines), [{ start: 5, end: 11 }]);
 });
 
 function declarationRule(language: string, rule: Record<string, unknown>): CompiledRule {
@@ -198,11 +200,13 @@ test('keys legal TypeScript overloads with a deterministic ordinal instead of fa
     id: 'function_signature:collect',
     source: 'function collect(values: number[]): number[];',
     captures: {},
+    lines: { start: 1, end: 1 },
   };
   const second = {
     id: 'function_signature:collect#1',
     source: 'function collect(values: string[]): string[];',
     captures: {},
+    lines: { start: 2, end: 2 },
   };
   assert.deepEqual(rule.match({ filepath, source: TS_TWO_SIGNATURES }), [
     { filepath, scope: first },
@@ -238,11 +242,13 @@ test('keys a legal Java overload with a deterministic ordinal instead of failing
     id: 'class_declaration:Cart/method_declaration:add',
     source: 'void add(String item) {\n    items.add(item);\n  }',
     captures: {},
+    lines: { start: 2, end: 4 },
   };
   const count = {
     id: 'class_declaration:Cart/method_declaration:add#1',
     source: 'void add(int count) {\n    items.add(count);\n  }',
     captures: {},
+    lines: { start: 6, end: 8 },
   };
   assert.deepEqual(rule.match({ filepath, source: JAVA_OVERLOADED_ADD }), [
     { filepath, scope: add },
@@ -272,11 +278,13 @@ test('keys a Python redefinition with a deterministic ordinal instead of failing
     id: 'function_definition:add_tags',
     source: 'def add_tags(tags):\n    return tags',
     captures: {},
+    lines: { start: 1, end: 2 },
   };
   const values = {
     id: 'function_definition:add_tags#1',
     source: 'def add_tags(values):\n    return values',
     captures: {},
+    lines: { start: 4, end: 5 },
   };
   assert.deepEqual(rule.match({ filepath, source: PYTHON_REDEFINED_ADD_TAGS }), [
     { filepath, scope: tags },
@@ -300,9 +308,14 @@ test('keeps a declaration whose name already looks suffixed apart from a repeate
   // The string-literal method name is `"add#1"` including its quotes, so it never collides with the
   // ordinal id of the repeated `add`, whichever order the declarations appear in.
   assert.deepEqual(select({ language: 'javascript', rule: { kind: 'method_definition' } }, source), [
-    { id: 'class_declaration:Cart/method_definition:add', source: 'add() {}', captures: {} },
-    { id: 'class_declaration:Cart/method_definition:add#1', source: 'add() {}', captures: {} },
-    { id: 'class_declaration:Cart/method_definition:"add#1"', source: '"add#1"() {}', captures: {} },
+    { id: 'class_declaration:Cart/method_definition:add', source: 'add() {}', captures: {}, lines: { start: 2, end: 2 } },
+    { id: 'class_declaration:Cart/method_definition:add#1', source: 'add() {}', captures: {}, lines: { start: 3, end: 3 } },
+    {
+      id: 'class_declaration:Cart/method_definition:"add#1"',
+      source: '"add#1"() {}',
+      captures: {},
+      lines: { start: 4, end: 4 },
+    },
   ]);
 });
 
@@ -312,6 +325,24 @@ test('extracts UTF-8 source and capture text exactly', () => {
   assert.equal(matches[0]!.id, 'function_declaration:集める');
   assert.equal(matches[0]!.source, JS_SOURCE);
   assert.deepEqual(matches[0]!.captures, { ITEM: '値' });
+});
+
+test('reports absolute scope lines from parse positions, never from byte offsets or snippet text', () => {
+  const utf8 = select({ language: 'javascript', rule: JS_RULE }, JS_SOURCE);
+  assert.deepEqual(utf8[0]!.lines, { start: 1, end: 7 });
+  const crlf = JS_SOURCE.replaceAll('\n', '\r\n');
+  assert.deepEqual(select({ language: 'javascript', rule: JS_RULE }, crlf)[0]!.lines, { start: 1, end: 7 });
+});
+
+test('locates repeated identical declarations at their own lines', () => {
+  const body = ['func dup() {', '\tfor _, value := range values {', '\t\tout = append(out, value)', '\t}', '}'];
+  const source = ['package store', '', ...body, '', ...body, ''].join('\n');
+  const matches = select({ language: 'golang', rule: GO_RULE }, source);
+  assert.deepEqual(matches.map((scope) => scope.id), ['function_declaration:dup', 'function_declaration:dup#1']);
+  assert.deepEqual(matches.map((scope) => scope.lines), [
+    { start: 3, end: 7 },
+    { start: 9, end: 13 },
+  ]);
 });
 
 test('runs built-in TypeScript queries without any host registration', () => {
@@ -365,8 +396,7 @@ test('rejects an invalid native query while compiling', () => {
   );
 });
 
-test('rejects unknown and malformed scope options', () => {
-  assert.throws(() => astGrepPlugin.compile({ language: 'golang', rule: { kind: 'function_declaration' }, extra: 1 }), Error);
+test('rejects malformed scope options', () => {
   assert.throws(() => astGrepPlugin.compile({ language: 'golang', rule: 'function_declaration' }), Error);
   assert.throws(() => astGrepPlugin.compile({ language: 'golang', rule: { kind: 'function_declaration' }, constraints: [] }), Error);
   assert.throws(() => astGrepPlugin.compile({ language: 'golang', rule: { kind: 'function_declaration' }, utils: 'x' }), Error);

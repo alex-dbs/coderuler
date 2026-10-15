@@ -51,6 +51,7 @@ expected:
              return out
          }
       scope:
+        lines: {start: 3, end: 10}
         id: function_declaration:withHeader
         source: |-
           func withHeader(header string, values []string) []string {

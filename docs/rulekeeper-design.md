@@ -11,19 +11,21 @@ protobuf RPC rule whose fields the list below follows.
 
 ## Rule shape (`version: 'v1'`)
 
-`examples`, `filter` and `decision` are optional; the other five top-level fields are required.
+`title`, `examples`, `filter` and `decision` are optional; the other five top-level fields are required.
 
 - `version`: required, exactly the string `v1`. A missing value, numeric `1`, `v2`, or any older key fails to compile.
 - `name`: the rule's name.
 - `files.included` / `files.excluded`: include matching filepaths, then subtract exclusions. `included` must contain at least one glob; `excluded` is optional. An excluded file short-circuits extraction and needs no sources.
 - `scope`: required. `format` names a registered plugin; `changed` defaults to `true` for revision inputs and is ignored for file inputs; every other key is a plugin option.
 - `rule`: required, non-blank. A declarative policy statement — the requirement that a matched context is expected to satisfy — not an evaluator workflow and not a command sequence. State the requirement directly, as in `Memory limit must be less than or equal to memory request * 1.5`. It is the rule-level statement only, carried verbatim to the Jev boundary, and is a different field from the nested `scope.rule`, which is the native ast-grep structural selector (see below).
-- `examples`: optional. When present, a mapping whose only allowed keys are `good` and `bad`, each an optional sequence of non-blank strings. Each entry is a representative snippet that satisfies (`good`) or violates (`bad`) the policy, and comments in the YAML can note why. Snippet content, indentation, and newlines are preserved exactly. Omitted examples normalize to `{ good: [], bad: [] }`; an omitted category becomes `[]`. Nulls, incorrect types, blank entries, and unknown keys are rejected. Examples are illustrative: they are not executed, scored, or used to filter scopes.
+- `title`: optional, non-blank string. A short human-readable description printed beside violations, for example `Memory limit must not exceed 1.5 times the memory request.` It is static reporting metadata, not a model-generated reason, and is not sent to the decision provider.
+- `examples`: optional. A mapping with `good` and `bad`, each an optional sequence of non-blank strings. Each entry is a representative snippet that satisfies (`good`) or violates (`bad`) the policy, and comments in the YAML can note why. Snippet content, indentation, and newlines are preserved exactly. Omitted examples normalize to `{ good: [], bad: [] }`; an omitted category becomes `[]`. Nulls, incorrect types, and blank entries are rejected; unknown properties warn and are ignored. Examples are illustrative: they are not executed, scored, or used to filter scopes.
 - `filter`: optional applicability predicate over a selected scope, independent of execution mode. Omitted, every selected scope is eligible. See below.
 - `decision`: optional. How the selected scopes are grouped into review calls. Omitted, every scope is decided on its own (`group_by: scope`); `file`, `folder` and `project` judge one group at a time and read the current tree instead of a diff. See [decision grouping](#decision-grouping).
 
-There are no `variables`, `when`, `from`, `watch`, `context`, `condition`, `extract`, or `where` fields;
-unknown keys are rejected with no aliases. The only top-level fields are the eight above.
+The nine fields above are the recognized top-level properties. Unknown properties in rule mappings
+and builtin scope options emit yellow `WARN` logs on `stderr` and are ignored, with no aliases.
+Invalid known values and malformed filter or native-selector expressions still fail compilation.
 
 `scope.format` and `scope.changed` are stripped before the plugin sees the rest, so a plugin compiles
 only its own options and validates them itself.
@@ -47,7 +49,7 @@ selector this tool compiles — the filter, the YAML scope's `path` and `key`, a
 `path` — so the rule is stated once instead of per caller. Rejection runs on the library's own
 normalized tokens, because quoting hides nothing: `['(0)']` normalizes to the same token as `[(0)]`.
 
-Paths address the **scope wrapper** `{ id, source, data?, captures? }`, not the file, diff, or
+Paths address the **scope wrapper** `{ id, source, data?, captures?, lines? }`, not the file, diff, or
 context. `$.data.tags` tests the array itself; `$.data.tags[*]` tests its elements. Thus `['']`
 passes the former but not the latter. A path with no results fails `non_empty`.
 
@@ -103,7 +105,7 @@ parsed as the source of truth.
 ## The pre-decision context contract
 
 `match(input)` returns `Context[]`, each `{ filepath, scope }` for file inputs or
-`{ filepath, diff, scope }` for revision inputs, where `scope` is `{ id, source, data?, captures? }`:
+`{ filepath, diff, scope }` for revision inputs, where `scope` is `{ id, source, data?, captures?, lines? }`:
 
 ```ts
 interface ScopeMatch {
@@ -111,11 +113,14 @@ interface ScopeMatch {
   readonly source: string;
   readonly data?: JsonValue;
   readonly captures?: Readonly<Record<string, string | readonly string[]>>;
+  readonly lines?: { readonly start: number; readonly end: number };
 }
 ```
 
 `source` is the exact matched text. `data` is the plugin's JSON-compatible view of the scope, or
 omitted for syntactic nodes. `captures` holds named metavariables, or is omitted when a plugin has none.
+Builtin plugins include `lines`, the absolute 1-based inclusive source line range. Host plugins may
+omit it. Positions do not affect scope identity or change detection and are not sent to the provider.
 
 The pre-decision boundary is exactly
 `{ rule: rule.rule, examples: rule.examples, contexts: rule.match(input) }` — the static policy
@@ -129,8 +134,8 @@ no reporting; deciding a context is the separate [decision boundary](#the-decisi
 scope on its own. `group_by: file` judges one file's selected scopes together, `folder` one directory's,
 and `project` the whole selected tree. `level` is valid for `folder` alone: it defaults to `0` (the
 file's own directory), `-1` selects the parent, and so on, and any ancestor beyond the root clamps to
-`'.'`. `group_by` must name one of the four values, `level` must be a non-positive safe integer, and
-unknown keys are rejected — a typo cannot silently change the grouping.
+`'.'`. `group_by` must name one of the four values and `level` must be a non-positive safe integer.
+Unknown properties warn and are ignored; `level` on a non-folder grouping is likewise ignored.
 
 A grouped rule **ignores the diff entirely**. `file`, `folder` and `project` read the selected current
 working tree — unchanged, untracked and dirty files alike — so `check --diff-only` collects such a rule
@@ -159,13 +164,14 @@ cross-rule grouping and no chunking: zero contexts yield zero groups.
 Grouping reaches the decision payload as well as the matcher. One group is one request: the service
 ([below](#the-decision-boundary)) sends the group descriptor and its member files and scopes, and the
 backend answers once for the whole group, so a group is never split into per-scope calls and no member
-is decided twice. What is atomic is the report, not the provider's state: `stdout` gets the whole array
+is decided twice. What is atomic is the report, not the provider's state: `stdout` gets the whole result
 in one write, and only after every request has succeeded, so a provider failure leaves it empty instead
 of half-answered — but the requests that already succeeded are not rolled back, and the run aborts
-naming the failed decision on `stderr`. Grouped output stays a union with scope output: a scope-mode
-rule reports one `{ filepath, scopeId, follows, probability, model }` per context as before, while a
-grouped rule reports one `{ group: { type, path }, members: [{ filepath, scopeId }], follows,
-probability, model }` per group, its members ordered as the request listed them.
+naming the failed decision on `stderr`. Grouped output stays a union with scope output: the `--json`
+array reports one `{ filepath, scopeId, follows, probability, model }` per scope-mode context as before,
+while a grouped rule reports one `{ group: { type, path }, members: [{ filepath, scopeId }], follows,
+probability, model }` per group, its members ordered as the request listed them. The human report
+shows the rule name and title, followed by each member's filepath and source block.
 
 A complete rule judges each YAML file's `env` mappings together, so a container redeclaring a global
 name is visible in one review:
@@ -411,8 +417,8 @@ three small pieces behind one interface:
 - [src/decision/service.ts](../src/decision/service.ts) — `DecisionService`, the facade. Its
   `decide({ context, rule, examples })` takes a [DecisionContext](#decision-grouping) — one scope or one
   group — projects it into the request state, builds the question once, and reads the answer into
-  `{ follows, probability, model }`, where `follows` is exactly `probability > 0.5` (a tie is not a
-  following decision) and the backend's `probability` and `model` are preserved unchanged. A scope whose
+  `{ follows, probability, model }`, where `follows` is exactly `probability > threshold` (a tie is not a
+  following decision). The threshold defaults to `0.4`, and the backend's `probability` and `model` are preserved unchanged. A scope whose
   plugin exposes structured `data` travels as that payload, beside its `captures` when it has any, so
   `null`, `false` and `0` stay payloads rather than reading as absent; only a scope with no payload falls
   back to its matched `source`. The request therefore never carries the same selection twice, and a group
@@ -421,24 +427,32 @@ three small pieces behind one interface:
   the `v1/systemone` endpoint path relative to the configured base URL and validates the response
   field by field before returning anything.
 
-Use `new DecisionService(backend)` with any implementation of `DecisionBackend`, including an adapter
-written later. The implementation owns its transport and validates its response before returning a
+Use `new DecisionService(backend, threshold?)` with any implementation of `DecisionBackend`, including
+an adapter written later. The optional threshold defaults to `0.4` and must be finite and between `0`
+and `1` inclusive. The implementation owns its transport and validates its response before returning a
 finite `probability` between 0 and 1 and the model identifier. The caller still uses the same
 `service.decide({ context, rule, examples })` API. Each call is one decision, whether it carries one
 scope or a whole group: the service sends the projected state unchanged and the backend answers once, so
 a group is never split into per-scope calls and a provider failure leaves the whole group undecided
 rather than partly answered.
 
-[src/decision/config.ts](../src/decision/config.ts) is the CLI's factory: `createDecisionService(env)`
+[src/decision/config.ts](../src/decision/config.ts) is the CLI's factory: `createDecisionService(env?, diagnostics?, thresholdOverride?)`
 reads the environment at call time and selects a backend **by name**, with one `if` arm per backend
 rather than a registry or plugin framework — adding a backend means adding its arm here, not
-extending the port. The settings are `RULEKEEPER_DECISION_BACKEND` (default `jev`, the only supported
-value), `RULEKEEPER_DECISION_MODEL` (default `jev-latest`), `RULEKEEPER_DECISION_BASE_URL` (default
-`https://api.typesafe.ai`, the provider origin that the adapter appends its `v1/systemone` path to),
-and `RULEKEEPER_DECISION_API_KEY`, falling back to the official `TYPESAFE_API_KEY`. A variable set to
-blanks is a configuration error instead of a silent default, and the base URL must be an absolute
-`http`/`https` URL with no query, fragment, or embedded credentials. A missing key fails only when a
-context must actually be decided.
+extending the port. The settings are `RK_BACKEND` (default `jev`, the only supported value),
+`TYPESAFE_DEFAULT_MODEL` (default `jev-latest`), `TYPESAFE_BASE_URL` (default `https://api.typesafe.ai`,
+the provider origin that the adapter appends its `v1/systemone` path to), and `TYPESAFE_API_KEY`
+(required). A used variable set to blanks is a configuration error instead of a silent default,
+and the base URL must be an absolute `http`/`https` URL with no query, fragment, or embedded
+credentials. A missing key fails only when a context must actually be decided.
+
+Threshold precedence is `check --threshold` / the factory override, then `RK_THRESHOLD`, then `0.4`.
+Environment and flag values use plain decimal notation in `[0, 1]` (no signs, exponents, or hex);
+programmatic overrides must be finite numbers in the same range. Zero is a real override, not an
+absent value. Invalid used values fail before HTTP requests. A valid override skips the environment
+threshold entirely. Environment resolution remains lazy alongside provider configuration, while a
+CLI value is validated before scanning. The resolved threshold/source is logged in debug mode.
+Thresholds apply equally to scope and grouped decisions and never enter the provider payload.
 
 The CLI first loads an optional `.env` from its current working directory with Node's built-in
 loader; existing process variables win. A missing file is ignored, but other read errors fail
@@ -458,8 +472,15 @@ key, the request body, or the raw axios error, and there is no fake fallback.
 The Commander declarations live in [index.ts](../index.ts); implementations live in
 [command/check.ts](../command/check.ts) and [command/validate.ts](../command/validate.ts).
 Handlers import no Commander. [src/rule-loader.ts](../src/rule-loader.ts) handles rule loading.
-The root entry point owns the single error boundary: failures exit nonzero with a concise stderr
-message and no partial stdout.
+`check` reports a compact human summary and live progress by default and the machine-readable result
+with `--json`; that formatting lives in [command/check-report.ts](../command/check-report.ts) behind the
+`CheckReporter` interface, so the core only makes optional `rulesLoaded`/`sources`/`sourceComplete`/
+`decisions`/`decisionComplete`/`finish`/`stop` calls and never builds an output format of its own. The
+root entry point owns the single error boundary: failures exit nonzero with a concise stderr message and
+no partial stdout — no JSON and no summary.
+Diagnostic modes suppress reporter activity, not its final summary. An optional per-run
+[`Diagnostics`](../src/diagnostics.ts) sink is passed through rule loading, source collection, and the
+concrete HTTP adapter; library calls without a sink remain silent apart from existing warnings.
 
 ### Checking files
 
@@ -470,6 +491,8 @@ node index.ts check charts/values.yaml --rules rules/memory.yaml
 node index.ts check --rules ./rules
 node index.ts check --diff-only
 node index.ts check --diff-only --base origin/my-branch
+node index.ts check --concurrency 16
+node index.ts check --json
 ```
 
 `check [path]` defaults to the current working directory and recursively checks real files.
@@ -477,30 +500,82 @@ The optional target narrows the scan; it does not change rule discovery or rebas
 Logical paths are relative to `process.cwd()` and normalized to `/`. Run from the reviewed project
 using `node /absolute/path/to/rulekeeper/index.ts check` when the tool lives elsewhere.
 `npm start -- check` runs the same entry point from this repository; use
-`npm run --silent start -- check` to suppress npm's banner for machine-readable stdout.
+`npm run --silent start -- check --json` to suppress npm's banner and print only the JSON array for
+machine-readable stdout.
 
 Directory scans skip `.git`, `node_modules`, `.rulekeeper`, all symlink entries, and loaded rule
 descriptor files. An explicit symlink source target errors instead of following the link. This
 does not implement `.gitignore`. Branch comparison is opt-in with `--diff-only`.
 
 `CompiledRule.matchesFile(filepath)` exposes the same compiled include/exclude predicate used by
-`match`. Only sources selected by at least one rule are read, once per file and shared across
-selecting rules. In normal mode, each rule receives `match({ filepath, source })`, so
-`scope.changed` is ignored; filters still determine scope applicability. A rule whose
+`match`. Only sources selected by at least one rule are read, once per file — under the global
+`--concurrency` limit, rather than one file at a time — and shared across selecting rules. In normal
+mode, each rule receives `match({ filepath, source })`, so `scope.changed` is ignored; filters still
+determine scope applicability. A rule whose
 `decision.group_by` is `file`, `folder` or `project` reads that current tree in both modes, so a
 `--diff-only` run made only of such rules needs neither a repository nor Git — just a target that exists
 on disk. Parser errors name the rule and source file.
 
-Output is always an array of `{ ruleFile, name, rule, examples, contexts, decisions }`, even for one
-explicit rule. `ruleFile` is absolute. Contexts aggregate across selected files in lexical filepath
+By default `check` prints a compact human summary to `stdout` and live progress to `stderr` on a real
+terminal; a non-TTY run prints the plain summary with no ANSI or animation, and `--json` prints only the
+array below while suppressing all progress and summary. The summary opens with `🚀 N rules checked`,
+then the number of verifications run with passed and violating counts. Each verification is one scope
+or one group, not one rule or file. It also reports selected scopes, unique files, and elapsed time.
+A run with no matches prints `0 verifications ran (no matching scopes)` rather than claiming compliance.
+Each displayed violation starts with the rule name and optional `title` on one line, its
+`filepath:line-range` on the next, then the numbered matched source. Grouped violations include every
+member file and source block. Scope IDs and group descriptors remain in `--json`. Builtin scopes use absolute file line
+numbers, while host plugins without `lines` show unnumbered source. Blocks contain the exact selected
+text, which may begin partway through the first source line. Passing scopes are not printed. The
+10-decision display cap does not truncate individual blocks. Violations are red, passed counts green,
+and warnings yellow, respecting terminal support, `NO_COLOR`, and `FORCE_COLOR`; source stays plain.
+Terminal control sequences are removed from dynamic text. Unknown-property warnings stay on
+`stderr`, including with `--json`.
+
+The array that `--json` emits is `[{ ruleFile, name, title?, rule, examples, contexts, decisions }]`, even for
+one explicit rule. `ruleFile` is absolute. Contexts aggregate across selected files in lexical filepath
 order, and entries retain rule-loading order. `decisions` holds one entry per scope-mode context —
 `{ filepath, scopeId, follows, probability, model }` — or, for a grouped rule, one entry per group —
-`{ group: { type, path }, members: [{ filepath, scopeId }], follows, probability, model }` — each in
-request order, with a group's members in the order the group listed them. Every loaded rule has an
-entry, including those with no contexts. All compilation, reads, and matches finish, and every group is
-built, before any decision is requested, so a parse failure, a missing target or a member outside the
-project root has no external side effect; the whole array is written in one atomic `stdout` write only
-after every decision succeeds.
+`{ group: { type, path }, members: [{ filepath, scopeId }], follows, probability, model }` — each
+aligned with the context or group it answers, with a group's members in the order the group listed
+them. Every loaded rule has an entry, including those with no contexts. All compilation, reads, and
+matches finish, and every group is built, before any decision is requested, so a parse failure, a
+missing target or a member outside the project root has no external side effect.
+
+`--concurrency <number>` (default `8`) is the run's global limit on concurrent work, not a per-rule one:
+rule loading, source reads, Git snapshot reads, and HTTP decisions all draw on the same bound, applied
+to each phase rather than as one pool spanning every phase. It is validated before any rule or source
+read — only the working-directory `.env` is loaded earlier — and must parse as a positive integer: zero,
+negatives, fractions, and non-decimal spellings are rejected. `1` makes each phase serial. The limit
+covers filesystem, Git, and network work; matching and parsing are synchronous, so the setting never
+spreads work across cores. Replies may arrive in any order, but every decision is placed back at its own
+context's or group's position, so the reported order is the same as a serial run and never depends on
+the provider's timing. After the first failure no new job starts; work already in flight, including
+requests already sent, is awaited to completion and cannot be rolled back. The result is written in one
+atomic `stdout` write — the array under `--json`, the human summary otherwise — only after every decision
+succeeds, so a failed run leaves `stdout` empty.
+
+`check --debug` validates the requested concurrency, then forces the effective value to `1` for every
+phase. `--verbose` enables finer-grained logging at the configured concurrency; combining the flags
+enables both serial execution and full detail. The flags are check-only and do not change matching,
+grouping, request payloads, result ordering, or exit codes.
+
+Important `[debug]` events report effective run settings, phase counts/timings, the selected backend
+host/path/model, verification results, and HTTP status or failure codes. `[verbose]` adds rule and file
+identities, selection/skip reasons, read metadata, surviving contexts per rule/file, group membership,
+and HTTP request metadata. Matching logs describe eligible contexts after filtering, not individual
+predicate evaluations. Request IDs correlate HTTP events within the adapter.
+
+Every diagnostic line goes to `stderr`, including with `--json`; stdout retains its atomic result-only
+contract. Reporter activity is suppressed to keep the log readable, while the human final summary
+remains available. Backend configuration stays lazy: no selected verification means no key lookup or
+HTTP attempt. The sink is absent by default, and optional calls avoid diagnostic field/timer work
+when disabled.
+
+Diagnostic fields exclude credentials, authorization headers, policy/source/examples, request/response
+bodies, stack traces, and full Axios errors. Endpoint facts come from the validated HTTP client URL,
+not raw environment values; failures report safe status/code categories without echoing response text.
+
 
 `check` replaces the former `match` command; the library's revision matching API remains available.
 
@@ -560,10 +635,11 @@ pairs old/new blobs: a pure rename already selected by the same rule emits none,
 file into a rule's selection is treated as an addition for that rule. A rename plus a content edit
 compares corresponding old/new scopes.
 
-The output keeps the same one-entry-per-rule array: a scope-mode context gains a `diff`, a grouped rule
-still contributes its own current-tree groups, and each context or group gets one decision. Parser and
-duplicate-ID errors still propagate; comparison and matching must fully succeed before any decision is
-requested or any JSON is written.
+The output keeps the same one-entry-per-rule array under `--json`: a scope-mode context gains a `diff`, a
+grouped rule still contributes its own current-tree groups, and each context or group gets one decision.
+Parser and duplicate-ID errors still propagate; comparison and matching must fully succeed before any
+decision is requested or any result is written, and those decisions run under the same global
+`--concurrency` limit and stop-at-first-failure behavior as a plain run.
 
 
 ### Rule discovery and loading
@@ -582,9 +658,10 @@ recursively under an explicit rule directory. Empty explicit directories fail. E
 rule paths may themselves be symlinks, but nested symlink entries are still skipped.
 
 `discoverRuleFiles({ cwd?, home? })` returns absolute paths; optional roots are useful for embedded
-callers. `loadRules(rulePath?)` returns `{ filepath, rule: CompiledRule }[]`. Every file must read
-and compile successfully before loading returns; invalid rules are never silently skipped.
-Read/compile errors identify the rule path.
+callers. `loadRules(rulePath?)` returns `{ filepath, rule: CompiledRule }[]`. Rule files are read and
+compiled concurrently, and the returned array keeps the sorted discovery order regardless of which
+file finishes first. Every file must read and compile successfully before loading returns; invalid
+rules are never silently skipped. Read/compile errors identify the rule path.
 
 ### Validation and verdicts
 
@@ -593,12 +670,14 @@ argument uses the two default roots. It compiles every selected definition befor
 `Valid rule: <name> (v1)` line per rule. It never reads reviewed source files.
 
 `check`, unlike `validate`, crosses the decision boundary: it decides every context and group it
-collected against the configured backend (see [the decision boundary](#the-decision-boundary)) and prints
-one decision per context or group beside the contexts. Choosing the endpoint and the key is the user's
-call — the tool ships defaults for TypeSafe's Jev but never decides for you whether reviewed source may
-leave the machine. It reports answers, not a policy verdict: empty contexts and exit `0` do not prove
-the policy holds, and a run where every decision is `false` still exits `0`. A nonzero exit means a
-setup, parse, or provider failure, not a failing scope.
+collected against the configured backend (see [the decision boundary](#the-decision-boundary)) and
+reports one decision per context or group — beside the contexts in the `--json` array, as a bounded
+summary by default. Choosing the endpoint and the key is the user's call — the tool ships defaults for
+TypeSafe's Jev but never decides for you whether reviewed source may leave the machine. It reports
+answers, not a policy verdict: empty contexts, the explicit `0 verifications ran (no matching scopes)`
+summary, and exit `0` do not prove the policy holds, and a run where every decision is `false` still
+exits `0`. A nonzero exit means a setup, parse, or provider failure, not a failing scope, and it writes
+no result to `stdout` — no JSON and no summary.
 
 ## Limitations
 
@@ -606,7 +685,8 @@ setup, parse, or provider failure, not a failing scope.
 - **Protobuf** is a structural source reader, not a compiler: no imports, type resolution, or descriptor validation, and comments or URL braces must not corrupt boundaries. Unknown declarations are tolerated, but truncated/malformed selected RPCs error.
 - **ast-grep** matching is syntactic, with no type or dataflow verification. Unnamed or reordered matches can trigger extra review, and unnamed identity is a kind-plus-occurrence approximation; a repeated declaration's `#N` suffix is positional too, so inserting an overload ahead of another renumbers the later ids. Broad candidates intentionally keep correct code (for example capacity-only appends) rather than filtering it out.
 - **Examples** are representative snippets, not executable checks: this core only carries them verbatim to the boundary, never parsing, executing, or scoring them, and they never filter the contexts.
-- The core matcher makes no model, network, or CLI calls and has no reporter. The [wrapper CLI](#the-wrapper-cli) loads rules/files, optionally reads local Git objects for branch diffs, and — for `check` — sends each selected context or group to the configured decision provider over HTTP. Git refs are never fetched remotely. Neither command produces a policy verdict.
+- **Concurrency** — `--concurrency` (default `8`) is the run's global limit on concurrent work — rule loads, source reads, Git snapshot reads, and HTTP decisions — applied to each phase, not per rule. It bounds I/O only: matching and parsing stay synchronous on one thread, so it is not CPU parallelism. The underlying per-file Git snapshot still issues several Git reads, so it is not a global cap on OS subprocesses.
+- The core matcher makes no model, network, or CLI calls and has no reporter. The [wrapper CLI](#the-wrapper-cli) loads rules/files, optionally reads local Git objects for branch diffs, and — for `check` — sends each selected context or group to the configured decision provider over HTTP and renders the default progress and human summary, or the `--json` array, through its own reporter. Git refs are never fetched remotely. Neither command produces a policy verdict.
 
 ## Golden tests
 
@@ -682,7 +762,7 @@ runs `src/golden.test.ts` alone.
 - `npm run test:golden`
 - `npm test`
 - `npm start -- validate docs/rules/billing-http-url.yaml` — the wrapper CLI compiles the example rule
-- `npm start -- check` with `RULEKEEPER_DECISION_API_KEY` (or `TYPESAFE_API_KEY`) set — the wrapper CLI
+- `npm start -- check` with `TYPESAFE_API_KEY` set — the wrapper CLI
   decides every selected scope, or every group a grouped rule built, against the configured provider
 - [docs/retrospective.md](retrospective.md) — the maintainability pass behind this design: decisions,
   fixes, and accepted trade-offs

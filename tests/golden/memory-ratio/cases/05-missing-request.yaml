@@ -38,6 +38,7 @@ expected:
                limits:
                  memory: 1024Mi
       scope:
+        lines: {start: 2, end: 6}
         id: '0:payments-api'
         source: |
           name: payments-api

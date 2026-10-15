@@ -9,7 +9,7 @@ export { astGrepPlugin } from './astgrep.ts';
 export { createAstGrepLanguageRegistrations } from './astgrep-languages.ts';
 export { protobufPlugin } from './protobuf.ts';
 export { yamlPlugin } from './yaml.ts';
-export type { CompiledScope, JsonValue, ScopeInput, ScopeMatch, ScopePlugin } from './types.ts';
+export type { CompiledScope, JsonValue, LineSpan, ScopeInput, ScopeMatch, ScopePlugin } from './types.ts';
 
 export function createPluginRegistry(additional: readonly ScopePlugin[] = []): PluginRegistry {
   return new PluginRegistry([yamlPlugin, protobufPlugin, astGrepPlugin, ...additional]);

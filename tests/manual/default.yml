@@ -10,9 +10,3 @@ app:
       text:
         LOG_LEVEL: debug
         DB_NAME: my-app
-    resources:
-      requests:
-        cpu: 100m
-        memory: 64Mi
-      limits:
-        memory: 1Gi

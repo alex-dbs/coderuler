@@ -1,5 +1,7 @@
 import { parse, type NapiConfig, type SgNode } from '@ast-grep/napi';
+import { warnUnknownField } from '../warnings.ts';
 import { resolveAstGrepLanguage } from './astgrep-languages.ts';
+import { textLineSpan } from './lines.ts';
 import type { CompiledScope, ScopeInput, ScopeMatch, ScopePlugin } from './types.ts';
 
 interface CaptureSpec {
@@ -124,7 +126,7 @@ function uniqueIds(bases: readonly string[]): readonly string[] {
 
 function compileAstGrepScope(options: Readonly<Record<string, unknown>>): CompiledScope {
   for (const key of Object.keys(options)) {
-    if (!OPTION_KEYS.includes(key)) throw new Error(`Unknown ast-grep scope option '${key}'`);
+    if (!OPTION_KEYS.includes(key)) warnUnknownField(`rule.scope.${key}`);
   }
 
   const language = options.language;
@@ -169,11 +171,15 @@ function compileAstGrepScope(options: Readonly<Record<string, unknown>>): Compil
         bases.push(identityOf(node, occurrence));
       }
       const ids = uniqueIds(bases);
-      return matches.map((node, index) => ({
-        id: ids[index]!,
-        source: node.text(),
-        captures: readCaptures(node, captureSpecs),
-      }));
+      return matches.map((node, index) => {
+        const text = node.text();
+        return {
+          id: ids[index]!,
+          source: text,
+          captures: readCaptures(node, captureSpecs),
+          lines: textLineSpan(node.range().start.line + 1, text),
+        };
+      });
     },
   };
 }

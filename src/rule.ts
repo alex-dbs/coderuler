@@ -5,6 +5,7 @@ import { compileFilter } from './filter.ts';
 import type { CompiledFilter, FilterDefinition } from './filter.ts';
 import { createPluginRegistry, PluginRegistry } from './plugins/index.ts';
 import type { CompiledScope, ScopeMatch } from './plugins/index.ts';
+import { warnUnknownField } from './warnings.ts';
 
 export interface FileSelection {
   readonly included: readonly string[];
@@ -37,6 +38,7 @@ export interface RuleDefinition {
   readonly examples?: Readonly<Partial<RuleExamples>>;
   readonly filter?: FilterDefinition;
   readonly decision?: DecisionGrouping;
+  readonly title?: string;
 }
 
 export interface RuleInput {
@@ -67,6 +69,7 @@ export interface CompiledRule {
   readonly rule: string;
   readonly examples: RuleExamples;
   readonly decision: DecisionGrouping;
+  readonly title?: string;
   matchesFile(filepath: string): boolean;
   match(input: RuleInput | FileInput, options?: MatchOptions): Context[];
 }
@@ -80,6 +83,7 @@ const TOP_LEVEL_FIELDS: Record<string, true> = {
   examples: true,
   filter: true,
   decision: true,
+  title: true,
 };
 const FILE_FIELDS: Record<string, true> = { included: true, excluded: true };
 const EXAMPLE_FIELDS: Record<string, true> = { good: true, bad: true };
@@ -95,9 +99,9 @@ function isMapping(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function rejectUnknownKeys(value: Record<string, unknown>, allowed: Record<string, true>, path: string): void {
+function warnUnknownKeys(value: Record<string, unknown>, allowed: Record<string, true>, path: string): void {
   for (const key of Object.keys(value)) {
-    if (!Object.hasOwn(allowed, key)) throw new Error(`Unknown field: ${path}.${key}`);
+    if (!Object.hasOwn(allowed, key)) warnUnknownField(`${path}.${key}`);
   }
 }
 
@@ -122,16 +126,24 @@ function exampleList(value: unknown, path: string): string[] {
 function compileExamples(value: unknown): RuleExamples {
   if (value === undefined) return { good: [], bad: [] };
   if (!isMapping(value)) throw new Error('rule.examples must be a mapping');
-  rejectUnknownKeys(value, EXAMPLE_FIELDS, 'rule.examples');
+  warnUnknownKeys(value, EXAMPLE_FIELDS, 'rule.examples');
   return {
     good: value.good === undefined ? [] : exampleList(value.good, 'rule.examples.good'),
     bad: value.bad === undefined ? [] : exampleList(value.bad, 'rule.examples.bad'),
   };
 }
 
+function optionalTitle(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error('rule.title must be a non-empty string');
+  }
+  return value;
+}
+
 function compileSelection(value: unknown): CompiledSelection {
   if (!isMapping(value)) throw new Error('rule.files must be a mapping');
-  rejectUnknownKeys(value, FILE_FIELDS, 'rule.files');
+  warnUnknownKeys(value, FILE_FIELDS, 'rule.files');
   const included = stringList(value.included, 'rule.files.included');
   if (included.length === 0) throw new Error('rule.files.included must contain at least one glob');
   return { included, excluded: value.excluded === undefined ? [] : stringList(value.excluded, 'rule.files.excluded') };
@@ -145,10 +157,10 @@ function compileDecision(value: unknown): DecisionGrouping {
     throw new Error('rule.decision.group_by must be one of "scope", "file", "folder" or "project"');
   }
   if (rawGroupBy !== 'folder') {
-    rejectUnknownKeys(value, DECISION_FIELDS, 'rule.decision');
+    warnUnknownKeys(value, DECISION_FIELDS, 'rule.decision');
     return { group_by: rawGroupBy };
   }
-  rejectUnknownKeys(value, DECISION_FOLDER_FIELDS, 'rule.decision');
+  warnUnknownKeys(value, DECISION_FOLDER_FIELDS, 'rule.decision');
   const { level } = value;
   if (level === undefined) return { group_by: 'folder', level: 0 };
   if (typeof level !== 'number' || !Number.isSafeInteger(level) || level > 0) {
@@ -211,7 +223,7 @@ function defaultRegistry(): PluginRegistry {
 
 export function compileRule(definition: unknown, registry?: PluginRegistry): CompiledRule {
   if (!isMapping(definition)) throw new Error('Rule must be a YAML mapping');
-  rejectUnknownKeys(definition, TOP_LEVEL_FIELDS, 'rule');
+  warnUnknownKeys(definition, TOP_LEVEL_FIELDS, 'rule');
 
   const { version, name, rule: instruction, examples: rawExamples } = definition;
   if (version !== 'v1') throw new Error('rule.version must be the string "v1"');
@@ -219,6 +231,9 @@ export function compileRule(definition: unknown, registry?: PluginRegistry): Com
   if (typeof instruction !== 'string' || instruction.trim() === '') {
     throw new Error('rule.rule must be a non-empty string');
   }
+  // The title is validated here, before any source is seen, so a malformed description fails a rule
+  // even when a future match selects no scope at all.
+  const title = optionalTitle(definition.title);
   const examples = compileExamples(rawExamples);
   // The filter is validated here, before any source is seen, so an invalid or executable filter
   // fails a rule even when a future match selects no scope at all.
@@ -276,6 +291,7 @@ export function compileRule(definition: unknown, registry?: PluginRegistry): Com
     rule: instruction,
     examples,
     decision,
+    ...(title === undefined ? {} : { title }),
     matchesFile,
     match(input: RuleInput | FileInput, options?: MatchOptions): Context[] {
       const changedOnly = changedOnlyOf(options);

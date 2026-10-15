@@ -44,6 +44,7 @@ expected:
         -        memory: 1024Mi
         +        memory: 2Gi
       scope:
+        lines: {start: 2, end: 8}
         id: '0:payments-api'
         source: |
           name: payments-api

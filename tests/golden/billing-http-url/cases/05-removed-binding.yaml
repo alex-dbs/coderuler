@@ -45,6 +45,7 @@ expected:
         -        get: "/v1/billing/invoices/{invoice_id}"
         -      }
       scope:
+        lines: {start: 6, end: 10}
         id: acme.billing.v1.BillingService.CreateInvoice
         source: |-
           rpc CreateInvoice(CreateInvoiceRequest) returns (CreateInvoiceResponse) {

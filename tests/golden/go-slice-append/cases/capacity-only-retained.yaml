@@ -48,6 +48,7 @@ expected:
              return out
          }
       scope:
+        lines: {start: 3, end: 9}
         id: function_declaration:growScores
         source: |-
           func growScores(scores []int) []int {

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { protobufPlugin } from './plugins/protobuf.ts';
+import type { LineSpan } from './plugins/types.ts';
 
 const SELECT_ALL = protobufPlugin.compile({ path: '$.rpcs[*]' });
 const FILE = 'proto/billing/v1/invoice.proto';
@@ -19,7 +20,26 @@ function inService(statement: string, packageName = 'acme.billing.v1'): string {
   return `package ${packageName};\nservice S {\n  ${statement}\n}\n`;
 }
 
+// The plugin derives lines from parser offsets, so the expectation finds every occurrence of the
+// statement in the full source text instead of trusting the snippet to be unique.
+function statementLines(source: string, statement: string): readonly LineSpan[] {
+  const breaks = statement.match(/\n/g);
+  const spans: LineSpan[] = [];
+  for (let index = source.indexOf(statement); index !== -1; index = source.indexOf(statement, index + statement.length)) {
+    const start = source.slice(0, index).split('\n').length;
+    spans.push({ start, end: start + (breaks === null ? 0 : breaks.length) });
+  }
+  return spans;
+}
+
+function expectedLines(source: string, statement: string): LineSpan {
+  const spans = statementLines(source, statement);
+  assert.equal(spans.length, 1, 'the statement must occur exactly once in the source');
+  return spans[0]!;
+}
+
 function expectedContext(
+  source: string,
   statement: string,
   name: string,
   bindings: readonly Binding[],
@@ -30,6 +50,7 @@ function expectedContext(
   return {
     id,
     source: statement,
+    lines: expectedLines(source, statement),
     data: { id, package: packageName, service: serviceName, name, http: { bindings } },
   };
 }
@@ -49,6 +70,7 @@ test('extracts one RPC with exact source and exact data', () => {
     {
       id: 'acme.billing.v1.BillingService.GetInvoice',
       source: GET_INVOICE_RPC,
+      lines: expectedLines(BASIC_SOURCE, GET_INVOICE_RPC),
       data: {
         id: 'acme.billing.v1.BillingService.GetInvoice',
         package: 'acme.billing.v1',
@@ -82,7 +104,8 @@ const RPC_FORMS: readonly { readonly label: string; readonly name: string; reado
 
 test('preserves the exact source of every RPC form, unannotated RPCs included', () => {
   for (const item of RPC_FORMS) {
-    assert.deepStrictEqual(select(inService(item.statement)), [expectedContext(item.statement, item.name, [])], item.label);
+    const source = inService(item.statement);
+    assert.deepStrictEqual(select(source), [expectedContext(source, item.statement, item.name, [])], item.label);
   }
 });
 
@@ -292,7 +315,12 @@ const OPTION_CASES: readonly {
 
 test('reads aggregate, angle-bracket, list and dotted google.api.http forms into ordered bindings', () => {
   for (const item of OPTION_CASES) {
-    assert.deepStrictEqual(select(inService(item.statement)), [expectedContext(item.statement, item.name, item.bindings)], item.label);
+    const source = inService(item.statement);
+    assert.deepStrictEqual(
+      select(source),
+      [expectedContext(source, item.statement, item.name, item.bindings)],
+      item.label,
+    );
   }
 });
 
@@ -305,14 +333,14 @@ test('comments and braces inside strings never corrupt statement boundaries', ()
     '  }',
   );
   const source = `package acme.billing.v1;\nservice S {\n  // rpc Fake(A) returns (B);\n  /* rpc Also(N) returns (M) { } */\n  # rpc Hash(H) returns (I);\n  ${statement}\n}\n`;
-  assert.deepStrictEqual(select(source), [expectedContext(statement, 'Real', [{ method: 'GET', url: '/v1/real/{id}' }])]);
+  assert.deepStrictEqual(select(source), [expectedContext(source, statement, 'Real', [{ method: 'GET', url: '/v1/real/{id}' }])]);
 });
 
 test('skips unknown angle-bracket options before a service and its real RPC', () => {
   const statement = 'rpc Real(A) returns (B);';
   const option = 'option (unknown) = < before: 1; service: "x"; text: "> }"; nested: < after: 2; > >;';
   const source = `${option}\nservice S {\n  ${option}\n  ${statement}\n}\n`;
-  assert.deepStrictEqual(select(source), [expectedContext(statement, 'Real', [], '')]);
+  assert.deepStrictEqual(select(source), [expectedContext(source, statement, 'Real', [], '')]);
 });
 
 const ESCAPE_CASES: readonly { readonly label: string; readonly literal: string; readonly url: string }[] = [
@@ -340,9 +368,10 @@ const ESCAPE_CASES: readonly { readonly label: string; readonly literal: string;
 test('decodes escape forms to the same URL as the equivalent literal Unicode', () => {
   for (const item of ESCAPE_CASES) {
     const statement = rpc(`rpc Get(E) returns (R) { option (google.api.http) = { get: ${item.literal} }; }`);
+    const source = inService(statement);
     assert.deepStrictEqual(
-      select(inService(statement)),
-      [expectedContext(statement, 'Get', [{ method: 'GET', url: item.url }])],
+      select(source),
+      [expectedContext(source, statement, 'Get', [{ method: 'GET', url: item.url }])],
       item.label,
     );
   }
@@ -364,17 +393,17 @@ test('a byte-order mark never swallows the declaration it precedes', () => {
   const bindings: readonly Binding[] = [{ method: 'GET', url: '/v1/items' }];
   const prefixed = `\uFEFFpackage acme.v1;\nservice S {\n  ${statement}\n}\n`;
   const contexts = select(prefixed);
-  assert.deepStrictEqual(contexts, [expectedContext(statement, 'Get', bindings, 'acme.v1')]);
+  assert.deepStrictEqual(contexts, [expectedContext(prefixed, statement, 'Get', bindings, 'acme.v1')]);
   // Token spans stay in the original coordinates, so the source is an exact slice of the file.
   assert.ok(prefixed.includes(contexts[0]!.source));
   const withoutPackage = `\uFEFFservice S {\n  ${statement}\n}\n`;
-  assert.deepStrictEqual(select(withoutPackage), [expectedContext(statement, 'Get', bindings, '')]);
+  assert.deepStrictEqual(select(withoutPackage), [expectedContext(withoutPackage, statement, 'Get', bindings, '')]);
 });
 
 test('a missing package leaves an empty package field and a service-qualified id', () => {
   const statement = 'rpc Ping(PingRequest) returns (PingResponse);';
   const source = `service Health {\n  ${statement}\n}\n`;
-  assert.deepStrictEqual(select(source), [expectedContext(statement, 'Ping', [], '', 'Health')]);
+  assert.deepStrictEqual(select(source), [expectedContext(source, statement, 'Ping', [], '', 'Health')]);
 });
 
 test('a package change alters both the id and the data for the same RPC source', () => {
@@ -389,7 +418,7 @@ test('a package change alters both the id and the data for the same RPC source',
 test('applies a package declared after the service to every record', () => {
   const statement = 'rpc Ping(PingRequest) returns (PingResponse);';
   const source = `service S {\n  ${statement}\n}\npackage acme.health.v1;\n`;
-  assert.deepStrictEqual(select(source), [expectedContext(statement, 'Ping', [], 'acme.health.v1')]);
+  assert.deepStrictEqual(select(source), [expectedContext(source, statement, 'Ping', [], 'acme.health.v1')]);
 });
 
 test('orders records by declaration order across services', () => {
@@ -402,6 +431,18 @@ test('orders records by declaration order across services', () => {
   );
 });
 
+test('places byte-identical RPCs at their own lines instead of locating them by snippet text', () => {
+  const statement = 'rpc Ping(PingRequest) returns (PingResponse);';
+  const source = `package acme.billing.v1;\nservice A {\n  ${statement}\n}\n\n\nservice B {\n  ${statement}\n}\n`;
+  const spans = statementLines(source, statement);
+  assert.equal(spans.length, 2);
+  assert.notDeepStrictEqual(spans[0], spans[1]);
+  assert.deepStrictEqual(select(source).map((context) => ({ id: context.id, lines: context.lines })), [
+    { id: 'acme.billing.v1.A.Ping', lines: spans[0]! },
+    { id: 'acme.billing.v1.B.Ping', lines: spans[1]! },
+  ]);
+});
+
 test('selects records through non-default JSONPath selectors and returns nothing when unmatched', () => {
   const single = protobufPlugin.compile({ path: '$..rpcs[0]' });
   const first = single.select({ filepath: 'x.proto', source: BASIC_SOURCE });
@@ -412,14 +453,13 @@ test('selects records through non-default JSONPath selectors and returns nothing
   assert.deepStrictEqual(select(''), []);
 });
 
-test('rejects executable, malformed and unknown compile options', () => {
+test('rejects executable and malformed compile options', () => {
   assert.throws(() => protobufPlugin.compile({}));
   assert.throws(() => protobufPlugin.compile({ path: '' }));
   assert.throws(() => protobufPlugin.compile({ path: 'rpcs[*]' }));
   assert.throws(() => protobufPlugin.compile({ path: '$.rpcs[?(@.name=="x")]' }));
   assert.throws(() => protobufPlugin.compile({ path: '$.rpcs[(1)]' }));
   assert.throws(() => protobufPlugin.compile({ path: "$.rpcs['(1)']" }));
-  assert.throws(() => protobufPlugin.compile({ path: '$.rpcs[*]', extra: true }));
 });
 
 test('rejects selections that are not RPC records', () => {

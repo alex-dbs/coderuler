@@ -15,7 +15,8 @@ const CASE_KEYS: readonly string[] = ['inputs', 'expected'];
 const INPUT_KEYS: readonly string[] = ['filepath', 'diff', 'head', 'base', 'source'];
 const REVISION_KEYS: readonly string[] = ['diff', 'head', 'base'];
 const CONTEXT_KEYS: readonly string[] = ['filepath', 'diff', 'scope'];
-const SCOPE_KEYS: readonly string[] = ['id', 'source', 'data', 'captures'];
+const SCOPE_KEYS: readonly string[] = ['id', 'source', 'data', 'captures', 'lines'];
+const LINE_KEYS: readonly string[] = ['start', 'end'];
 
 type Stage = 'compile' | 'match';
 
@@ -66,6 +67,13 @@ function requireMapping(value: unknown, keys: readonly string[], where: string):
   return value;
 }
 
+function requireLineNumber(value: unknown, where: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    throw new Error(`${where} must be a positive integer line number`);
+  }
+  return value;
+}
+
 function requireString(value: unknown, where: string): string {
   if (typeof value !== 'string') throw new Error(`${where} must be a string`);
   return value;
@@ -100,6 +108,12 @@ function requireContexts(value: unknown, where: string): readonly unknown[] {
     requireString(scope.source, `${at}.scope.source`);
     if (Object.hasOwn(scope, 'data')) assertJson(scope.data, `${at}.scope.data`);
     if (Object.hasOwn(scope, 'captures')) assertJson(scope.captures, `${at}.scope.captures`);
+    if (Object.hasOwn(scope, 'lines')) {
+      const span = requireMapping(scope.lines, LINE_KEYS, `${at}.scope.lines`);
+      const start = requireLineNumber(span.start, `${at}.scope.lines.start`);
+      const end = requireLineNumber(span.end, `${at}.scope.lines.end`);
+      if (end < start) throw new Error(`${at}.scope.lines.end (${end}) must not precede .start (${start})`);
+    }
   });
   return value;
 }

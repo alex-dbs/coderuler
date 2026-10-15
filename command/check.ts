@@ -1,234 +1,140 @@
-import type { Stats } from 'node:fs';
-import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-
+import { DEFAULT_CONCURRENCY, mapConcurrent } from '../src/concurrency.ts';
 import { createDecisionService } from '../src/decision/config.ts';
-import { groupContexts, type DecisionContext, type GroupedContext } from '../src/decision/group.ts';
+import { groupContexts, type DecisionContext } from '../src/decision/group.ts';
 import type { Decision, DecisionService } from '../src/decision/service.ts';
-import { branchDiff, readBranchFile } from '../src/git-diff.ts';
-import { type CompiledRule, type Context, type FileInput, type MatchOptions, type RuleExamples, type RuleInput } from '../src/rule.ts';
+import { validateThreshold } from '../src/decision/threshold.ts';
+import {
+  createDiagnostics,
+  type DiagnosticFields,
+  type DiagnosticOptions,
+  type Diagnostics,
+} from '../src/diagnostics.ts';
+import type { Context } from '../src/rule.ts';
 import { loadRules, type LoadedRule } from '../src/rule-loader.ts';
+import { createCheckReporter, type CheckedDecision, type CheckedRule } from './check-report.ts';
+import { collectContexts, descriptorIdentities, type SourceProgress } from './check-sources.ts';
 
-export interface CheckOptions {
+export interface CheckOptions extends DiagnosticOptions {
   readonly rules?: string;
   readonly diffOnly?: boolean;
   readonly base?: string;
+  readonly concurrency?: number;
+  readonly threshold?: number;
+  readonly json?: boolean;
 }
 
-interface SourceCandidate {
-  readonly absolute: string;
-  readonly logical: string;
+interface DecisionJob {
+  readonly index: number;
+  readonly context: DecisionContext;
 }
 
-const SKIPPED_DIRECTORIES: Record<string, true> = {
-  '.git': true,
-  node_modules: true,
-  '.rulekeeper': true,
-};
-
-interface CheckedScopeDecision {
-  readonly filepath: string;
-  readonly scopeId: string;
-  readonly follows: boolean;
-  readonly probability: number;
-  readonly model: string;
-}
-
-interface CheckedGroupDecision {
-  readonly group: GroupedContext['group'];
-  readonly members: readonly { readonly filepath: string; readonly scopeId: string }[];
-  readonly follows: boolean;
-  readonly probability: number;
-  readonly model: string;
-}
-
-type CheckedDecision = CheckedScopeDecision | CheckedGroupDecision;
-
-interface CheckedRule {
-  readonly ruleFile: string;
-  readonly name: string;
-  readonly rule: string;
-  readonly examples: RuleExamples;
-  readonly contexts: readonly Context[];
-  readonly decisions: readonly CheckedDecision[];
-}
-
-async function collectSources(directory: string, files: string[]): Promise<void> {
-  const entries = await readdir(directory, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.isSymbolicLink()) continue;
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) {
-      if (SKIPPED_DIRECTORIES[entry.name] !== true) await collectSources(path, files);
-    } else if (entry.isFile()) {
-      files.push(path);
-    }
-  }
-}
-
-async function resolveSources(target: string): Promise<SourceCandidate[]> {
-  const absolute = resolve(target);
-  let stats: Stats;
-  try {
-    stats = await lstat(absolute);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new Error(`Source path ${absolute} does not exist`, { cause: error });
-    }
-    throw error;
-  }
-  if (stats.isSymbolicLink()) {
-    throw new Error(`Source path ${absolute} is a symbolic link; point check at the real file or directory`);
-  }
-
-  const files: string[] = [];
-  if (stats.isDirectory()) await collectSources(absolute, files);
-  else if (stats.isFile()) files.push(absolute);
-  else throw new Error(`Source path ${absolute} is neither a file nor a directory`);
-
-  const realRoot = await realpath(absolute);
-  return files
-    .map((path) => ({
-      // An unaliased target keeps the walked path itself rather than a copy of it.
-      absolute: realRoot === absolute ? path : join(realRoot, relative(absolute, path)),
-      logical: relative(process.cwd(), path).split(sep).join('/'),
-    }))
-    .sort((a, b) => (a.logical < b.logical ? -1 : a.logical > b.logical ? 1 : 0));
-}
-
-async function descriptorPaths(loaded: readonly LoadedRule[]): Promise<Set<string>> {
-  const identities = new Set<string>();
-  for (const { filepath } of loaded) {
-    identities.add(filepath);
-    identities.add(await realpath(filepath));
-  }
-  return identities;
-}
-
-const DIFF_HEAD_MODES: Record<string, true> = { '100644': true, '100755': true, '000000': true };
-
-function selectingRules(loaded: readonly LoadedRule[], filepath: string, mask?: readonly boolean[]): number[] {
-  const selected: number[] = [];
-  for (let index = 0; index < loaded.length; index++) {
-    if ((mask === undefined || mask[index] === true) && loaded[index]!.rule.matchesFile(filepath)) selected.push(index);
-  }
-  return selected;
-}
-
-function matchedContexts(
-  ruleFile: string,
-  rule: CompiledRule,
-  filepath: string,
-  input: RuleInput | FileInput,
-  options?: MatchOptions,
-): Context[] {
-  try {
-    return rule.match(input, options);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`Rule ${ruleFile} failed on ${filepath}: ${detail}`, { cause: error });
-  }
-}
-
-async function collectDiffContexts(
-  target: string,
-  options: CheckOptions,
-  loaded: readonly LoadedRule[],
-  rulePaths: ReadonlySet<string>,
-  mask?: readonly boolean[],
-): Promise<Context[][]> {
-  const branch = await branchDiff(options.base);
-  const targetAbsolute = resolve(target);
-  const targetWithinRepo = relative(branch.repoRoot, targetAbsolute);
-  if (targetWithinRepo !== '' && (targetWithinRepo === '..' || targetWithinRepo.startsWith(`..${sep}`) || isAbsolute(targetWithinRepo))) {
-    throw new Error(`Source path ${targetAbsolute} is outside the repository ${branch.repoRoot}`);
-  }
-
-  const cwd = process.cwd();
-  const contextsByRule = loaded.map((): Context[] => []);
-
-  for (const file of branch.files) {
-    // A symlink or submodule is not readable source text, so it is not a candidate even when a
-    // glob would select its path.
-    if (DIFF_HEAD_MODES[file.headMode] !== true) continue;
-    // A change under a directory no source may come from is not a candidate either.
-    if (file.filepath.split('/').some(segment => SKIPPED_DIRECTORIES[segment] === true)) continue;
-    const absolute = join(branch.repoRoot, file.filepath);
-    // A rule descriptor inside the target is never a source, even when a glob would select it: the
-    // committed path is canonical, so comparing it to the descriptor paths excludes the file
-    // however the caller named the rule — and without stat'ing a source that may not exist on disk.
-    if (rulePaths.has(absolute)) continue;
-    // The target scoping stays lexical: diff mode never consults the working tree.
-    if (absolute !== targetAbsolute && !absolute.startsWith(targetAbsolute + sep)) continue;
-    const logical = relative(cwd, absolute).split(sep).join('/');
-
-    const selected = selectingRules(loaded, logical, mask);
-    if (selected.length === 0) continue;
-
-    // One read per changed file, shared by every rule that selects it.
-    let snapshot: { base: string; head: string; diff: string };
-    try {
-      snapshot = await readBranchFile(branch, file);
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(`Diff for ${logical} could not be read: ${detail}`, { cause: error });
-    }
-    const previous = relative(cwd, join(branch.repoRoot, file.previousPath)).split(sep).join('/');
-
-    for (const index of selected) {
-      const { filepath: ruleFile, rule } = loaded[index]!;
-      const base = rule.matchesFile(previous) ? snapshot.base : '';
-      const input: RuleInput = { filepath: logical, diff: snapshot.diff, head: snapshot.head, base };
-      for (const context of matchedContexts(ruleFile, rule, logical, input, { changedOnly: true })) {
-        contextsByRule[index]!.push(context);
-      }
-    }
-  }
-
-  return contextsByRule;
-}
-
-function writeChecked(
+function buildChecked(
   loaded: readonly LoadedRule[],
   contextsByRule: readonly Context[][],
   decisionsByRule: readonly CheckedDecision[][],
-): void {
-  const checked: CheckedRule[] = loaded.map(({ filepath, rule }, index) => ({
+): CheckedRule[] {
+  return loaded.map(({ filepath, rule }, index) => ({
     ruleFile: filepath,
     name: rule.name,
     rule: rule.rule,
     examples: rule.examples,
     contexts: contextsByRule[index]!,
     decisions: decisionsByRule[index]!,
+    ...(rule.title === undefined ? {} : { title: rule.title }),
   }));
-  process.stdout.write(`${JSON.stringify(checked, null, 2)}\n`);
+}
+
+function concurrencyOf(value: number | undefined, diagnostics: Diagnostics | undefined): number {
+  if (value === undefined) return DEFAULT_CONCURRENCY;
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    diagnostics?.important('run.invalid', { option: 'concurrency', value: String(value) });
+    throw new Error(`--concurrency must be a positive integer, got ${String(value)}`);
+  }
+  return value;
+}
+
+function thresholdOf(value: number | undefined, diagnostics: Diagnostics | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  try {
+    return validateThreshold(value);
+  } catch (error) {
+    diagnostics?.important('run.invalid', { option: 'threshold', value: String(value) });
+    throw error;
+  }
+}
+
+function failureReason(error: unknown): string {
+  if (!(error instanceof Error)) return typeof error;
+  const code = 'code' in error && typeof error.code === 'string' ? error.code : undefined;
+  return code === undefined ? error.name : `${error.name} ${code}`;
+}
+
+function decisionIdentity(context: DecisionContext, rule: string): DiagnosticFields {
+  return 'group' in context
+    ? { rule, group: context.group.type, group_path: context.group.path }
+    : { rule, filepath: context.filepath, scope_id: context.scope.id };
 }
 
 async function decideContexts(
   loaded: readonly LoadedRule[],
   decisionContextsByRule: readonly (readonly DecisionContext[])[],
+  concurrency: number,
+  threshold: number | undefined,
+  onDecision: () => void,
+  diagnostics: Diagnostics | undefined,
 ): Promise<CheckedDecision[][]> {
-  const decisionsByRule = decisionContextsByRule.map((): CheckedDecision[] => []);
-  let service: DecisionService | undefined;
+  const jobs: DecisionJob[] = [];
   for (let index = 0; index < loaded.length; index++) {
-    const { filepath: ruleFile, rule } = loaded[index]!;
-    for (const context of decisionContextsByRule[index]!) {
-      // Created lazily on the first context, so only a run that has something to decide reads the
-      // backend configuration.
-      const active = (service ??= createDecisionService());
-      let decision: Decision;
-      try {
-        decision = await active.decide({ context, rule: rule.rule, examples: rule.examples });
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        const subject = 'group' in context
-          ? `${context.group.type} group ${context.group.path}`
-          : `${context.filepath} scope ${context.scope.id}`;
-        throw new Error(`Decision for ${subject} of rule ${ruleFile} failed: ${detail}`, { cause: error });
-      }
-      decisionsByRule[index]!.push(decisionRecord(context, decision));
-    }
+    for (const context of decisionContextsByRule[index]!) jobs.push({ index, context });
   }
+
+  let service: DecisionService | undefined;
+  const decisions = await mapConcurrent(jobs, concurrency, async (job) => {
+    const { filepath: ruleFile, rule } = loaded[job.index]!;
+    const active = (service ??= createDecisionService(undefined, diagnostics, threshold));
+    diagnostics?.important('decision.start', decisionIdentity(job.context, rule.name));
+    let startedAt = 0;
+    if (diagnostics !== undefined) startedAt = performance.now();
+    let decision: Decision;
+    try {
+      decision = await active.decide({ context: job.context, rule: rule.rule, examples: rule.examples });
+    } catch (error) {
+      diagnostics?.important('decision.failed', {
+        ...decisionIdentity(job.context, rule.name),
+        reason: failureReason(error),
+      });
+      const detail = error instanceof Error ? error.message : String(error);
+      const subject = 'group' in job.context
+        ? `${job.context.group.type} group ${job.context.group.path}`
+        : `${job.context.filepath} scope ${job.context.scope.id}`;
+      throw new Error(`Decision for ${subject} of rule ${ruleFile} failed: ${detail}`, { cause: error });
+    }
+    const verbose = diagnostics?.verbose;
+    if (verbose !== undefined && 'group' in job.context) {
+      const { group, files } = job.context;
+      for (const file of files) {
+        for (const scope of file.scopes) {
+          verbose('decision.group.member', {
+            group: group.path,
+            filepath: file.filepath,
+            scope_id: scope.id,
+          });
+        }
+      }
+    }
+    diagnostics?.important('decision.result', {
+      ...decisionIdentity(job.context, rule.name),
+      follows: decision.follows,
+      probability: decision.probability,
+      model: decision.model,
+      ms: Math.round(performance.now() - startedAt),
+    });
+    onDecision();
+    return decisionRecord(job.context, decision);
+  });
+
+  const decisionsByRule = loaded.map((): CheckedDecision[] => []);
+  jobs.forEach((job, position) => decisionsByRule[job.index]!.push(decisions[position]!));
   return decisionsByRule;
 }
 
@@ -251,82 +157,141 @@ function decisionRecord(context: DecisionContext, decision: Decision): CheckedDe
   };
 }
 
-async function collectTreeContexts(
-  target: string,
-  loaded: readonly LoadedRule[],
-  rulePaths: ReadonlySet<string>,
-  mask?: readonly boolean[],
-): Promise<Context[][]> {
-  const sources = await resolveSources(target);
-
-  const contextsByRule = loaded.map((): Context[] => []);
-  for (const source of sources) {
-    // A rule descriptor inside the target is never a source, even when a glob would select it: the
-    // candidate is a real path, so a rule reached through an explicit `--rules` link is excluded too.
-    if (rulePaths.has(source.absolute)) continue;
-
-    const selected = selectingRules(loaded, source.logical, mask);
-    if (selected.length === 0) continue;
-
-    let text: string;
-    try {
-      text = await readFile(source.absolute, 'utf8');
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(`Source file ${source.logical} could not be read: ${detail}`, { cause: error });
-    }
-
-    for (const index of selected) {
-      const { filepath: ruleFile, rule } = loaded[index]!;
-      const input: FileInput = { filepath: source.logical, source: text };
-      for (const context of matchedContexts(ruleFile, rule, source.logical, input)) {
-        contextsByRule[index]!.push(context);
-      }
-    }
-  }
-
-  return contextsByRule;
-}
-
-async function collectContexts(
-  target: string,
-  options: CheckOptions,
-  loaded: readonly LoadedRule[],
-  grouped: readonly boolean[],
-  rulePaths: ReadonlySet<string>,
-): Promise<Context[][]> {
-  if (options.diffOnly !== true) {
-    return collectTreeContexts(target, loaded, rulePaths);
-  }
-
-  // A grouped rule ignores the diff, so it is collected from the current tree, while a scope-mode
-  // rule is collected from the committed change. A pass runs only when some rule needs it, so a run
-  // with no scope-mode rule never touches the repository, and each rule is filled from its own pass.
-  const treeByRule = grouped.some(Boolean) ? await collectTreeContexts(target, loaded, rulePaths, grouped) : undefined;
-  const scope = grouped.map((isGrouped) => !isGrouped);
-  const diffByRule = scope.some(Boolean) ? await collectDiffContexts(target, options, loaded, rulePaths, scope) : undefined;
-
-  return loaded.map((_, index) => (grouped[index] === true ? treeByRule![index]! : diffByRule![index]!));
-}
-
 export async function checkCommand(target: string, options: CheckOptions): Promise<void> {
+  const diagnostics = createDiagnostics(options);
+  const requestedConcurrency = concurrencyOf(options.concurrency, diagnostics);
+  const threshold = thresholdOf(options.threshold, diagnostics);
   if (options.base !== undefined && options.diffOnly !== true) {
+    diagnostics?.important('run.invalid', { option: 'base', reason: 'requires diff-only' });
     throw new Error('--base requires --diff-only');
   }
 
-  const loaded = await loadRules(options.rules);
-  // Prepared once from every loaded rule and shared by both collectors, so a descriptor cannot slip
-  // into either pass whichever grouping its own rule uses.
-  const rulePaths = await descriptorPaths(loaded);
-  const grouped = loaded.map(({ rule }) => rule.decision.group_by !== 'scope');
-  const contextsByRule = await collectContexts(target, options, loaded, grouped, rulePaths);
-  // Every group is built here, before the first request, so a member outside the working directory
-  // fails before any call while a scope-mode rule keeps its contexts as one decision each.
-  const decisionsByRule = await decideContexts(
-    loaded,
-    loaded.map(({ rule }, index) =>
+  const concurrency = options.debug === true ? 1 : requestedConcurrency;
+  diagnostics?.important('run.start', {
+    target,
+    mode: options.json === true ? 'json' : 'human',
+    diff_only: options.diffOnly === true,
+    base: options.base ?? 'default',
+    requested: requestedConcurrency,
+    concurrency,
+  });
+  if (options.debug === true && requestedConcurrency !== 1) {
+    diagnostics?.important('concurrency.forced', { effective: 1, requested: requestedConcurrency, reason: 'debug' });
+  }
+
+  const reporter =
+    options.json === true ? undefined : createCheckReporter({ activity: diagnostics === undefined });
+  let startedAt = 0;
+  let stageAt = 0;
+  if (diagnostics !== undefined) {
+    startedAt = performance.now();
+    stageAt = startedAt;
+  }
+  let phase = 'rules';
+  try {
+    const loaded = await loadRules(options.rules, concurrency, diagnostics);
+    reporter?.rulesLoaded(loaded.length);
+    if (diagnostics !== undefined) {
+      const now = performance.now();
+      diagnostics.important('rules.loaded', { count: loaded.length, ms: Math.round(now - stageAt) });
+      stageAt = now;
+    }
+
+    phase = 'identities';
+    const rulePaths = await descriptorIdentities(loaded, concurrency, diagnostics);
+    if (diagnostics !== undefined) {
+      const now = performance.now();
+      diagnostics.important('rules.paths', { count: rulePaths.size, ms: Math.round(now - stageAt) });
+      stageAt = now;
+    }
+
+    phase = 'sources';
+    const grouped = loaded.map(({ rule }) => rule.decision.group_by !== 'scope');
+    const progress: SourceProgress = {
+      start: (total) => reporter?.sources(total),
+      complete: () => reporter?.sourceComplete(),
+    };
+    const contextsByRule = await collectContexts(
+      target,
+      { diffOnly: options.diffOnly === true, base: options.base },
+      loaded,
+      grouped,
+      rulePaths,
+      concurrency,
+      progress,
+      diagnostics,
+    );
+    const sourceContexts = contextsByRule.reduce((total, contexts) => total + contexts.length, 0);
+    const matchingRules = contextsByRule.filter((contexts) => contexts.length > 0).length;
+    if (diagnostics !== undefined) {
+      const now = performance.now();
+      diagnostics.important('sources.collected', {
+        rules: loaded.length,
+        matched: matchingRules,
+        contexts: sourceContexts,
+        ms: Math.round(now - stageAt),
+      });
+      stageAt = now;
+    }
+
+    const decisionContextsByRule = loaded.map(({ rule }, index) =>
       rule.decision.group_by === 'scope' ? contextsByRule[index]! : groupContexts(contextsByRule[index]!, rule.decision),
-    ),
-  );
-  writeChecked(loaded, contextsByRule, decisionsByRule);
+    );
+    const units = decisionContextsByRule.reduce((total, contexts) => total + contexts.length, 0);
+    reporter?.decisions({ matchingRules, scopes: sourceContexts, total: units });
+    diagnostics?.important('decisions.planned', { rules: matchingRules, scopes: sourceContexts, units });
+
+    phase = 'decisions';
+    const decisionsByRule = await decideContexts(
+      loaded,
+      decisionContextsByRule,
+      concurrency,
+      threshold,
+      () => reporter?.decisionComplete(),
+      diagnostics,
+    );
+    const results = buildChecked(loaded, contextsByRule, decisionsByRule);
+
+    if (diagnostics !== undefined) {
+      const now = performance.now();
+      let decisionsRan = 0;
+      let passed = 0;
+      let selectedScopes = 0;
+      const files = new Set<string>();
+      for (const rule of results) {
+        selectedScopes += rule.contexts.length;
+        for (const context of rule.contexts) files.add(context.filepath);
+        for (const decision of rule.decisions) {
+          decisionsRan++;
+          if (decision.follows) passed++;
+        }
+      }
+      diagnostics.important('decisions.complete', {
+        units: decisionsRan,
+        passed,
+        violations: decisionsRan - passed,
+        ms: Math.round(now - stageAt),
+      });
+      diagnostics.important('run.complete', {
+        rules: results.length,
+        scopes: selectedScopes,
+        files: files.size,
+        units: decisionsRan,
+        ms: Math.round(now - startedAt),
+      });
+      process.stderr.write('\n');
+    }
+
+    phase = 'report';
+    if (reporter === undefined) {
+      process.stdout.write(`${JSON.stringify(results, null, 2)}\n`);
+    } else {
+      reporter.finish(results);
+    }
+  } catch (error) {
+    diagnostics?.important('run.failed', { phase, reason: failureReason(error) });
+    throw error;
+  } finally {
+    reporter?.stop();
+  }
 }

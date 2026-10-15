@@ -3,6 +3,8 @@ import { lstat, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+import { DEFAULT_CONCURRENCY, mapConcurrent } from './concurrency.ts';
+import type { Diagnostics } from './diagnostics.ts';
 import { parseRule, type CompiledRule } from './rule.ts';
 
 export interface RuleDiscoveryOptions {
@@ -95,9 +97,20 @@ async function compileFile(filepath: string): Promise<CompiledRule> {
   }
 }
 
-export async function loadRules(rulePath?: string): Promise<LoadedRule[]> {
+export async function loadRules(
+  rulePath?: string,
+  concurrency = DEFAULT_CONCURRENCY,
+  diagnostics?: Diagnostics,
+): Promise<LoadedRule[]> {
+  const started = diagnostics === undefined ? 0 : performance.now();
   const explicit = rulePath === undefined ? undefined : resolve(rulePath);
+  const source = explicit === undefined ? 'discovery' : 'explicit';
   const files = explicit === undefined ? await discoverRuleFiles() : await explicitRuleFiles(explicit);
+  diagnostics?.important('rules.discovered', {
+    source,
+    files: files.length,
+    ms: Math.round(performance.now() - started),
+  });
 
   if (files.length === 0) {
     if (explicit !== undefined) {
@@ -109,7 +122,24 @@ export async function loadRules(rulePath?: string): Promise<LoadedRule[]> {
     );
   }
 
-  const loaded: LoadedRule[] = [];
-  for (const filepath of files) loaded.push({ filepath, rule: await compileFile(filepath) });
+  const verbose = diagnostics?.verbose;
+  const loaded = await mapConcurrent(files, concurrency, async filepath => {
+    const compiled = verbose === undefined ? 0 : performance.now();
+    const rule = await compileFile(filepath);
+    if (verbose !== undefined) {
+      verbose('rules.rule', {
+        file: filepath,
+        name: rule.name,
+        version: rule.version,
+        group_by: rule.decision.group_by,
+        level: rule.decision.group_by === 'folder' ? rule.decision.level : undefined,
+        examples_good: rule.examples.good.length,
+        examples_bad: rule.examples.bad.length,
+        ms: Math.round(performance.now() - compiled),
+      });
+    }
+    return { filepath, rule };
+  });
+
   return loaded;
 }

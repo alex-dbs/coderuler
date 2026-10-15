@@ -176,6 +176,7 @@ const C_FUNCTION_FIXTURE: LanguageFixture = {
   expected: [
     {
       id: 'function_definition#0',
+      lines: { start: 1, end: 3 },
       source: ['int add(int a, int b) {', '  return a + b;', '}'].join('\n'),
       captures: { LEFT: 'a', RIGHT: 'b' },
     },
@@ -188,6 +189,7 @@ const GLIMMER_TEMPLATE_FIXTURE: LanguageFixture = {
   expected: [
     {
       id: 'glimmer_template#0',
+      lines: { start: 1, end: 3 },
       source: ['<template>', '  <div class="card">{{@title}}</div>', '</template>'].join('\n'),
       captures: {},
     },
@@ -209,6 +211,7 @@ const CASES: readonly LanguageCase[] = [
     expected: [
       {
         id: 'element#0',
+        lines: { start: 1, end: 3 },
         source: ['<div *ngIf="items.length > 0">', '  <p>{{ title }}</p>', '</div>'].join('\n'),
         captures: {},
       },
@@ -221,6 +224,7 @@ const CASES: readonly LanguageCase[] = [
     expected: [
       {
         id: 'function_definition:greet',
+        lines: { start: 1, end: 3 },
         source: ['greet() {', '  echo "hello"', '}'].join('\n'),
         captures: { MSG: '"hello"' },
       },
@@ -233,6 +237,7 @@ const CASES: readonly LanguageCase[] = [
     expected: [
       {
         id: 'resource_declaration#0',
+        lines: { start: 3, end: 6 },
         source: [
           "resource store 'Microsoft.Storage/storageAccounts@2023-01-01' = {",
           "  name: 'store'",
@@ -258,6 +263,7 @@ const CASES: readonly LanguageCase[] = [
     expected: [
       {
         id: 'class_declaration:Cart/method_declaration:Add',
+        lines: { start: 2, end: 4 },
         source: ['public void Add(string item) {', '    items.Add(item);', '  }'].join('\n'),
         captures: { ITEM: 'item' },
       },
@@ -270,6 +276,7 @@ const CASES: readonly LanguageCase[] = [
     expected: [
       {
         id: 'class_definition:Cart',
+        lines: { start: 1, end: 5 },
         source: ['class Cart {', '  int add(int a, int b) {', '    return a + b;', '  }', '}'].join('\n'),
         captures: {},
       },
@@ -282,6 +289,7 @@ const CASES: readonly LanguageCase[] = [
     expected: [
       {
         id: 'call#0',
+        lines: { start: 2, end: 4 },
         source: ['def add(a, b) do', '    a + b', '  end'].join('\n'),
         captures: { NAME: 'add', A: 'a', B: 'b', BODY: ['a + b'] },
       },
@@ -299,13 +307,13 @@ const CASES: readonly LanguageCase[] = [
     language: 'go',
     source: GO_SOURCE,
     rule: GO_RULE,
-    expected: [{ id: 'function_declaration:addTags', source: GO_ADD_TAGS, captures: { SLICE: 'out', ARGS: ['tag'] } }],
+    expected: [{ id: 'function_declaration:addTags', lines: { start: 3, end: 9 }, source: GO_ADD_TAGS, captures: { SLICE: 'out', ARGS: ['tag'] } }],
   },
   {
     language: 'haskell',
     source: HASKELL_SOURCE,
     rule: { kind: 'signature' },
-    expected: [{ id: 'signature:add', source: 'add :: Int -> Int -> Int', captures: {} }],
+    expected: [{ id: 'signature:add', lines: { start: 3, end: 3 }, source: 'add :: Int -> Int -> Int', captures: {} }],
   },
   {
     language: 'java',
@@ -314,6 +322,7 @@ const CASES: readonly LanguageCase[] = [
     expected: [
       {
         id: 'class_declaration:Cart/method_declaration:add',
+        lines: { start: 2, end: 4 },
         source: ['void add(String item) {', '    items.add(item);', '  }'].join('\n'),
         captures: { ITEM: 'item' },
       },
@@ -323,7 +332,7 @@ const CASES: readonly LanguageCase[] = [
     language: 'json',
     source: JSON_SOURCE,
     rule: { kind: 'pair', has: { kind: 'string', pattern: '"tags"', stopBy: 'end' } },
-    expected: [{ id: 'pair#0', source: '"tags": ["a", "b"]', captures: {} }],
+    expected: [{ id: 'pair#0', lines: { start: 3, end: 3 }, source: '"tags": ["a", "b"]', captures: {} }],
   },
   {
     language: 'kotlin',
@@ -332,6 +341,7 @@ const CASES: readonly LanguageCase[] = [
     expected: [
       {
         id: 'function_declaration#0',
+        lines: { start: 1, end: 3 },
         source: ['fun add(a: Int, b: Int): Int {', '  return a + b', '}'].join('\n'),
         captures: { LEFT: 'a', RIGHT: 'b' },
       },
@@ -344,6 +354,7 @@ const CASES: readonly LanguageCase[] = [
     expected: [
       {
         id: 'function_declaration:add',
+        lines: { start: 1, end: 3 },
         source: ['local function add(a, b)', '  return a + b', 'end'].join('\n'),
         captures: { LEFT: 'a', RIGHT: 'b' },
       },
@@ -353,7 +364,7 @@ const CASES: readonly LanguageCase[] = [
     language: 'markdown',
     source: MARKDOWN_SOURCE,
     rule: { kind: 'atx_heading', pattern: '# $TITLE' },
-    expected: [{ id: 'atx_heading#0', source: '# Title\n', captures: { TITLE: 'Title' } }],
+    expected: [{ id: 'atx_heading#0', lines: { start: 1, end: 1 }, source: '# Title\n', captures: { TITLE: 'Title' } }],
   },
   {
     language: 'php',
@@ -362,6 +373,7 @@ const CASES: readonly LanguageCase[] = [
     expected: [
       {
         id: 'function_definition:add',
+        lines: { start: 2, end: 4 },
         source: ['function add(int $a, int $b): int {', '  return $a + $b;', '}'].join('\n'),
         captures: {},
       },
@@ -374,6 +386,7 @@ const CASES: readonly LanguageCase[] = [
     expected: [
       {
         id: 'function_definition:add_tags',
+        lines: { start: 1, end: 5 },
         source: [
           'def add_tags(tags):',
           '    out = []',
@@ -392,6 +405,7 @@ const CASES: readonly LanguageCase[] = [
     expected: [
       {
         id: 'method:add',
+        lines: { start: 1, end: 3 },
         source: ['def add(a, b)', '  a + b', 'end'].join('\n'),
         captures: { LEFT: 'a', RIGHT: 'b' },
       },
@@ -404,6 +418,7 @@ const CASES: readonly LanguageCase[] = [
     expected: [
       {
         id: 'function_item:add',
+        lines: { start: 1, end: 3 },
         source: ['fn add(a: i32, b: i32) -> i32 {', '    a + b', '}'].join('\n'),
         captures: { LEFT: 'a', RIGHT: 'b' },
       },
@@ -416,6 +431,7 @@ const CASES: readonly LanguageCase[] = [
     expected: [
       {
         id: 'function_definition:add',
+        lines: { start: 1, end: 1 },
         source: 'def add(a: Int, b: Int): Int = a + b',
         captures: { LEFT: 'a', RIGHT: 'b' },
       },
@@ -428,6 +444,7 @@ const CASES: readonly LanguageCase[] = [
     expected: [
       {
         id: 'statement#0',
+        lines: { start: 1, end: 1 },
         source: 'SELECT id, name FROM users WHERE active = true',
         captures: { COLS: 'id, name', TABLE: 'users', COND: 'active = true' },
       },
@@ -443,6 +460,7 @@ const CASES: readonly LanguageCase[] = [
     expected: [
       {
         id: 'function_declaration:add',
+        lines: { start: 1, end: 3 },
         source: ['func add(_ a: Int, _ b: Int) -> Int {', '  return a + b', '}'].join('\n'),
         captures: { LEFT: 'a', RIGHT: 'b' },
       },
@@ -452,19 +470,19 @@ const CASES: readonly LanguageCase[] = [
     language: 'toml',
     source: TOML_SOURCE,
     rule: { kind: 'pair', pattern: 'name = $VALUE' },
-    expected: [{ id: 'pair#0', source: 'name = "store"', captures: { VALUE: '"store"' } }],
+    expected: [{ id: 'pair#0', lines: { start: 2, end: 2 }, source: 'name = "store"', captures: { VALUE: '"store"' } }],
   },
   {
     language: 'yaml',
     source: YAML_SOURCE,
     rule: { kind: 'block_mapping_pair', pattern: 'name: $VALUE' },
-    expected: [{ id: 'block_mapping_pair#0', source: 'name: store', captures: { VALUE: 'store' } }],
+    expected: [{ id: 'block_mapping_pair#0', lines: { start: 1, end: 1 }, source: 'name: store', captures: { VALUE: 'store' } }],
   },
   {
     language: 'css',
     source: CSS_SOURCE,
     rule: { kind: 'declaration', pattern: 'display: $VALUE;' },
-    expected: [{ id: 'declaration#0', source: 'display: flex;', captures: { VALUE: 'flex' } }],
+    expected: [{ id: 'declaration#0', lines: { start: 1, end: 1 }, source: 'display: flex;', captures: { VALUE: 'flex' } }],
   },
   {
     language: 'html',
@@ -473,6 +491,7 @@ const CASES: readonly LanguageCase[] = [
     expected: [
       {
         id: 'element#0',
+        lines: { start: 1, end: 1 },
         source: '<div class="cart"><span>Store</span></div>',
         captures: { CHILDREN: ['<span>Store</span>'] },
       },
@@ -489,13 +508,13 @@ const CASES: readonly LanguageCase[] = [
         has: { pattern: 'out.push($ITEM)', stopBy: 'end' },
       },
     },
-    expected: [{ id: 'function_declaration:collect', source: JAVASCRIPT_SOURCE, captures: { ITEM: 'value' } }],
+    expected: [{ id: 'function_declaration:collect', lines: { start: 1, end: 7 }, source: JAVASCRIPT_SOURCE, captures: { ITEM: 'value' } }],
   },
   {
     language: 'tsx',
     source: TSX_SOURCE,
     rule: { pattern: 'return <div className="card">{$CHILD}</div>;' },
-    expected: [{ id: 'return_statement#0', source: 'return <div className="card">{title}</div>;', captures: { CHILD: 'title' } }],
+    expected: [{ id: 'return_statement#0', lines: { start: 2, end: 2 }, source: 'return <div className="card">{title}</div>;', captures: { CHILD: 'title' } }],
   },
   {
     language: 'typescript',
@@ -507,6 +526,7 @@ const CASES: readonly LanguageCase[] = [
     expected: [
       {
         id: 'function_declaration:collect',
+        lines: { start: 1, end: 7 },
         source: [
           'function collect(values: number[]): number[] {',
           '  const out: number[] = [];',
@@ -579,9 +599,9 @@ test('compiles and matches several languages in one process, in any order', () =
 test('captures a $ metavariable name in a language whose identifiers start with $', () => {
   const matches = select('php', PHP_SOURCE, { kind: 'variable_name', pattern: '$A' });
   assert.deepEqual(matches, [
-    { id: 'variable_name#0', source: '$a', captures: { A: '$a' } },
-    { id: 'variable_name#1', source: '$b', captures: { A: '$b' } },
-    { id: 'variable_name#2', source: '$a', captures: { A: '$a' } },
-    { id: 'variable_name#3', source: '$b', captures: { A: '$b' } },
+    { id: 'variable_name#0', lines: { start: 2, end: 2 }, source: '$a', captures: { A: '$a' } },
+    { id: 'variable_name#1', lines: { start: 2, end: 2 }, source: '$b', captures: { A: '$b' } },
+    { id: 'variable_name#2', lines: { start: 3, end: 3 }, source: '$a', captures: { A: '$a' } },
+    { id: 'variable_name#3', lines: { start: 3, end: 3 }, source: '$b', captures: { A: '$b' } },
   ]);
 });
