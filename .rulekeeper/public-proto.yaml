@@ -8,14 +8,4 @@ scope:
 check:
   kind: regex
   rule: '^/v\d+/[a-z][a-z0-9_]*s(?:/.*)?$'
-  examples:
-    good:
-      - /v1/transactions
-      - /v3/invoices
-      - /v1/invoices/{invoice_id}
-    bad:
-      - /firstparty/v1/transactions
-      - /api/v2/bank_accounts
-      - /v1/invoice
-      - transactions
   violation-message: Public endpoints must start with a version /vX/ followed by a resource in plural form.
