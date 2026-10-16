@@ -108,10 +108,9 @@ function memoryDiagnostics(): { readonly diagnostics: Diagnostics; readonly even
   };
 }
 
-function ruleSource(name: string, groupBy: 'scope' | 'file', included: string, changed = true): string {
+function ruleSource(groupBy: 'scope' | 'file', included: string, changed = true): string {
   return [
     "version: 'v1'",
-    `name: ${name}`,
     'files:',
     '  included:',
     `    - '${included}'`,
@@ -121,15 +120,16 @@ function ruleSource(name: string, groupBy: 'scope' | 'file', included: string, c
     `  changed: ${changed}`,
     'decision:',
     `  group_by: ${groupBy}`,
-    `rule: Review ${name}.`,
+    'check:',
+    '  rule: Review the change.',
   ].join('\n');
 }
 
 function loaded(rules: readonly string[]): LoadedRule[] {
-  return rules.map((source, index) => ({
-    filepath: `/rules/rule-${index}.yaml`,
-    rule: parseRule(source),
-  }));
+  return rules.map((source, index) => {
+    const filepath = `/rules/rule-${index}.yaml`;
+    return { filepath, rule: parseRule(source, filepath) };
+  });
 }
 
 const API_YAML = 'service:\n  name: api\n';
@@ -138,8 +138,8 @@ const OLD_YAML = 'service:\n  name: old\n';
 
 test('diff-only collection routes grouped rules to the tree and scope rules to the changed sources', async () => {
   const rules = loaded([
-    ruleSource('Alpha review', 'scope', '**/*.yaml'),
-    ruleSource('Beta review', 'file', '**/*.yaml'),
+    ruleSource('scope', '**/*.yaml'),
+    ruleSource('file', '**/*.yaml'),
   ]);
   const memory = memoryRepository(
     [{ logical: 'src/grouped.yaml', source: API_YAML }],
@@ -222,7 +222,7 @@ test('diff-only collection routes grouped rules to the tree and scope rules to t
 });
 
 test('compares the base revision only for a rule that also selects the previous path', async () => {
-  const rules = loaded([ruleSource('Rename review', 'scope', '**/*.ts')]);
+  const rules = loaded([ruleSource('scope', '**/*.ts')]);
   const memory = memoryRepository(
     [],
     [
@@ -262,7 +262,7 @@ test('compares the base revision only for a rule that also selects the previous 
 });
 
 test('forces a changed-only comparison on a diff source even when the rule opts out of comparing', async () => {
-  const rules = loaded([ruleSource('Static review', 'scope', '**/*.yaml', false)]);
+  const rules = loaded([ruleSource('scope', '**/*.yaml', false)]);
   const memory = memoryRepository(
     [],
     [
@@ -289,7 +289,7 @@ test('forces a changed-only comparison on a diff source even when the rule opts 
 });
 
 test('resolves every rule identity alongside the path it was discovered under', async () => {
-  const rules = loaded([ruleSource('Alpha review', 'scope', '**/*.yaml'), ruleSource('Beta review', 'scope', '**/*.md')]);
+  const rules = loaded([ruleSource('scope', '**/*.yaml'), ruleSource('scope', '**/*.md')]);
   const memory = memoryRepository([], []);
 
   const identities = await memory.collector.identities(rules, 2);

@@ -40,9 +40,21 @@ function changedOnlyOf(options: MatchOptions | undefined): boolean {
   return changedOnly === true;
 }
 
-export function compileRule(definition: unknown, dependencies: RuleCompileDependencies): CompiledRule {
-  const descriptor = compileDescriptor(definition, dependencies.warnUnknownField);
-  const { name, rule: instruction, title, examples, decision, selection, filter } = descriptor;
+function scopeObserverOf(options: MatchOptions | undefined): ((context: Context, accepted: boolean) => void) | undefined {
+  if (typeof options !== 'object' || options === null) return undefined;
+  const { onScope } = options;
+  if (onScope === undefined) return undefined;
+  if (typeof onScope !== 'function') throw new Error('Match options.onScope must be a function');
+  return onScope;
+}
+
+export function compileRule(
+  definition: unknown,
+  filepath: string,
+  dependencies: RuleCompileDependencies,
+): CompiledRule {
+  const descriptor = compileDescriptor(definition, filepath, dependencies.warnUnknownField);
+  const { name, kind, rule: instruction, violationMessage, enabled, settings, examples, decision, selection, filter } = descriptor;
   const { changed, options, format } = descriptor.scope;
 
   const compiledScope: CompiledScope = dependencies.registry
@@ -75,14 +87,22 @@ export function compileRule(definition: unknown, dependencies: RuleCompileDepend
   const contextsOf = (
     filepath: string,
     scopes: readonly ScopeMatch[],
-    diff?: string,
-    baseById?: ReadonlyMap<string, ScopeMatch>,
+    diff: string | undefined,
+    baseById: ReadonlyMap<string, ScopeMatch> | undefined,
+    onScope: ((context: Context, accepted: boolean) => void) | undefined,
   ): Context[] => {
     const contexts: Context[] = [];
     for (const scope of scopes) {
       const previous = baseById?.get(scope.id);
       if (previous !== undefined && sameScope(previous, scope)) continue;
-      if (filter.applies(scope)) contexts.push(diff === undefined ? { filepath, scope } : { filepath, diff, scope });
+      const accepted = filter.applies(scope);
+      if (onScope === undefined) {
+        if (accepted) contexts.push(diff === undefined ? { filepath, scope } : { filepath, diff, scope });
+        continue;
+      }
+      const context = diff === undefined ? { filepath, scope } : { filepath, diff, scope };
+      onScope(context, accepted);
+      if (accepted) contexts.push(context);
     }
     return contexts;
   };
@@ -90,13 +110,17 @@ export function compileRule(definition: unknown, dependencies: RuleCompileDepend
   return {
     version: 'v1',
     name,
+    kind,
     rule: instruction,
+    ...(violationMessage === undefined ? {} : { violationMessage }),
+    enabled,
+    settings,
     examples,
     decision,
-    ...(title === undefined ? {} : { title }),
     matchesFile,
     match(input: RuleInput | FileInput, options?: MatchOptions): Context[] {
       const changedOnly = changedOnlyOf(options);
+      const onScope = scopeObserverOf(options);
       const filepath = input?.filepath;
       if (typeof filepath !== 'string') throw new Error('Rule match requires a filepath');
       if (!matchesFile(filepath)) return [];
@@ -111,14 +135,14 @@ export function compileRule(definition: unknown, dependencies: RuleCompileDepend
           }
           const { source } = input;
           if (typeof source !== 'string') throw new Error('A file match requires the source');
-          return contextsOf(filepath, scopesOf(filepath, source, 'file'));
+          return contextsOf(filepath, scopesOf(filepath, source, 'file'), undefined, undefined, onScope);
         }
         const { head } = input;
         if (typeof head !== 'string') throw new Error('Rule match requires the head revision');
         // A deleted file has no head to review, and a grouped rule reads no base snapshot to
         // validate against it.
         if (head === '') return [];
-        return contextsOf(filepath, scopesOf(filepath, head, 'head'));
+        return contextsOf(filepath, scopesOf(filepath, head, 'head'), undefined, undefined, onScope);
       }
 
       if ('source' in input) {
@@ -134,7 +158,7 @@ export function compileRule(definition: unknown, dependencies: RuleCompileDepend
         if (typeof source !== 'string') throw new Error('A file match requires the source');
         // File mode has no base to compare, so the filter alone decides which selected scopes are
         // reviewed.
-        return contextsOf(filepath, scopesOf(filepath, source, 'file'));
+        return contextsOf(filepath, scopesOf(filepath, source, 'file'), undefined, undefined, onScope);
       }
 
       const { diff, head } = input;
@@ -143,7 +167,7 @@ export function compileRule(definition: unknown, dependencies: RuleCompileDepend
 
       // `changedOnly` overrides the rule's own `scope.changed: false`: the caller is asking for a
       // revision comparison of this filepath, so an opt-out rule still compares base against head.
-      if (!changed && !changedOnly) return contextsOf(filepath, scopesOf(filepath, head, 'head'), diff);
+      if (!changed && !changedOnly) return contextsOf(filepath, scopesOf(filepath, head, 'head'), diff, undefined, onScope);
 
       const { base } = input;
       if (typeof base !== 'string') throw new Error('A changed rule requires the base revision');
@@ -162,7 +186,7 @@ export function compileRule(definition: unknown, dependencies: RuleCompileDepend
       // its own base scope rather than the prototype slot).
       const baseById = new Map<string, ScopeMatch>();
       for (const scope of scopesOf(filepath, base, 'base')) baseById.set(scope.id, scope);
-      return contextsOf(filepath, headScopes, diff, baseById);
+      return contextsOf(filepath, headScopes, diff, baseById, onScope);
     },
   };
 }

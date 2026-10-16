@@ -1,5 +1,4 @@
 version: 'v1'
-name: Selected source changes
 files:
   included:
     - config/**/*.yaml
@@ -9,4 +8,5 @@ scope:
   format: yaml
   path: '$'
   changed: false
-rule: Review selected source changes.
+check:
+  rule: Review selected source changes.

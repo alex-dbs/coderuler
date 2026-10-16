@@ -2,11 +2,12 @@ import { mapConcurrent } from './concurrency.ts';
 import type { CheckedDecision, CheckedRule } from './check-result.ts';
 import type { DecisionContext } from './decision/group.ts';
 import type { Decision, DecisionService } from './decision/service.ts';
+import { RegexEvaluator } from './decision/regex.ts';
 import type { DiagnosticFields, Diagnostics } from './ports/diagnostics.ts';
 import type { LoadedRule } from './ports/rules.ts';
-import type { Context } from './rule/types.ts';
+import type { Context, RuleSettings } from './rule/types.ts';
 
-export type DecisionServiceFactory = (diagnostics?: Diagnostics, threshold?: number) => DecisionService;
+export type DecisionServiceFactory = (settings: RuleSettings, diagnostics?: Diagnostics, threshold?: number) => DecisionService;
 
 export interface DecideContextsInput {
   readonly loaded: readonly LoadedRule[];
@@ -61,26 +62,38 @@ export async function decideContexts(input: DecideContextsInput): Promise<Checke
     for (const context of contexts[index]!) jobs.push({ index, context });
   }
 
-  let service: DecisionService | undefined;
+  const services: (DecisionService | undefined)[] = [];
+  const evaluators = loaded.map(({ rule }) => (rule.kind === 'regex' ? new RegexEvaluator(rule.rule) : undefined));
   const decisions = await mapConcurrent(jobs, concurrency, async (job) => {
     const { filepath: ruleFile, rule } = loaded[job.index]!;
-    const active = (service ??= createService(diagnostics, threshold));
+    let active: DecisionService | undefined;
+    if (rule.kind !== 'regex') {
+      active = services[job.index];
+      if (active === undefined) {
+        active = createService(rule.settings, diagnostics, threshold);
+        services[job.index] = active;
+      }
+    }
     diagnostics?.important('decision.start', decisionIdentity(job.context, rule.name));
     let startedAt = 0;
     if (diagnostics !== undefined) startedAt = performance.now();
     let decision: Decision;
-    try {
-      decision = await active.decide({ context: job.context, rule: rule.rule, examples: rule.examples });
-    } catch (error) {
-      diagnostics?.important('decision.failed', {
-        ...decisionIdentity(job.context, rule.name),
-        reason: failureReason(error),
-      });
-      const detail = error instanceof Error ? error.message : String(error);
-      const subject = 'group' in job.context
-        ? `${job.context.group.type} group ${job.context.group.path}`
-        : `${job.context.filepath} scope ${job.context.scope.id}`;
-      throw new Error(`Decision for ${subject} of rule ${ruleFile} failed: ${detail}`, { cause: error });
+    if (active === undefined) {
+      decision = evaluators[job.index]!.evaluate(job.context).decision;
+    } else {
+      try {
+        decision = await active.decide({ context: job.context, rule: rule.rule, examples: rule.examples });
+      } catch (error) {
+        diagnostics?.important('decision.failed', {
+          ...decisionIdentity(job.context, rule.name),
+          reason: failureReason(error),
+        });
+        const detail = error instanceof Error ? error.message : String(error);
+        const subject = 'group' in job.context
+          ? `${job.context.group.type} group ${job.context.group.path}`
+          : `${job.context.filepath} scope ${job.context.scope.id}`;
+        throw new Error(`Decision for ${subject} of rule ${ruleFile} failed: ${detail}`, { cause: error });
+      }
     }
     const verbose = diagnostics?.verbose;
     if (verbose !== undefined && 'group' in job.context) {
@@ -123,6 +136,6 @@ export function buildCheckedRules(
     examples: rule.examples,
     contexts: contextsByRule[index]!,
     decisions: decisionsByRule[index]!,
-    ...(rule.title === undefined ? {} : { title: rule.title }),
+    ...(rule.violationMessage === undefined ? {} : { violationMessage: rule.violationMessage }),
   }));
 }

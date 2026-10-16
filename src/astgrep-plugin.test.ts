@@ -166,13 +166,15 @@ test('keeps a declaration identity stable when earlier lines move', () => {
 });
 
 function declarationRule(language: string, rule: Record<string, unknown>): CompiledRule {
-  return compileRule({
-    version: 'v1',
-    name: 'Declarations',
-    files: { included: ['src/**'] },
-    scope: { format: 'ast-grep', language, rule },
-    rule: 'Review the selected declarations.',
-  });
+  return compileRule(
+    {
+      version: 'v1',
+      files: { included: ['src/**'] },
+      scope: { format: 'ast-grep', language, rule },
+      check: { kind: 'AI', rule: 'Review the selected declarations.' },
+    },
+    '/rules/declarations.yaml',
+  );
 }
 
 const TS_OVERLOAD_IMPLEMENTATION = [
@@ -360,7 +362,7 @@ test('returns an empty captures object when the rule binds no metavariables', ()
   assert.ok(!('data' in matches[0]!));
 });
 
-test('matches loop-scoped appends syntactically, keeping correct pre-sized candidates', () => {
+test('matches loop-scoped appends syntactically, retaining candidates regardless of slice sizing', () => {
   const noLoop = ['package store', '', 'func appendOne(values []string) []string {', '\treturn append(values, "x")', '}', ''].join('\n');
   const preSized = [
     'package store',

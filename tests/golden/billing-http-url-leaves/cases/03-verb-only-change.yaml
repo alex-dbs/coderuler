@@ -1,0 +1,34 @@
+inputs:
+  - filepath: proto/billing/v1/invoice.proto
+    diff: |
+      --- a/proto/billing/v1/invoice.proto
+      +++ b/proto/billing/v1/invoice.proto
+      @@ -8,1 +8,1 @@ service BillingService {
+      -      get: "/v1/billing/invoices/{invoice_id}"
+      +      post: "/v1/billing/invoices/{invoice_id}"
+    base: |
+      syntax = "proto3";
+
+      package acme.billing.v1;
+
+      service BillingService {
+        rpc GetInvoice(GetInvoiceRequest) returns (GetInvoiceResponse) {
+          option (google.api.http) = {
+            get: "/v1/billing/invoices/{invoice_id}"
+          };
+        }
+      }
+    head: |
+      syntax = "proto3";
+
+      package acme.billing.v1;
+
+      service BillingService {
+        rpc GetInvoice(GetInvoiceRequest) returns (GetInvoiceResponse) {
+          option (google.api.http) = {
+            post: "/v1/billing/invoices/{invoice_id}"
+          };
+        }
+      }
+expected:
+  contexts: []

@@ -1,23 +1,33 @@
+import { basename } from 'node:path';
 import { compileFilter } from '../filter.ts';
 import type { CompiledFilter } from '../filter.ts';
+import { validateThreshold } from '../decision/threshold.ts';
 import type { WarnUnknownField } from '../scope/types.ts';
-import type { DecisionGrouping, RuleExamples } from './types.ts';
+import type { DecisionGrouping, RuleExamples, RuleKind, RuleSettings } from './types.ts';
 
 const TOP_LEVEL_FIELDS: Record<string, true> = {
   version: true,
-  name: true,
   files: true,
   scope: true,
-  rule: true,
-  examples: true,
+  check: true,
   filter: true,
   decision: true,
-  title: true,
+  enabled: true,
+  settings: true,
+};
+const CHECK_FIELDS: Record<string, true> = {
+  kind: true,
+  rule: true,
+  examples: true,
+  'violation-message': true,
 };
 const FILE_FIELDS: Record<string, true> = { included: true, excluded: true };
 const EXAMPLE_FIELDS: Record<string, true> = { good: true, bad: true };
 const DECISION_FIELDS: Record<string, true> = { group_by: true };
 const DECISION_FOLDER_FIELDS: Record<string, true> = { group_by: true, level: true };
+const SETTINGS_FIELDS: Record<string, true> = { model: true, threshold: true, backend: true };
+
+const RULE_EXTENSION = /\.ya?ml$/i;
 
 export interface CompiledSelection {
   readonly included: readonly string[];
@@ -30,10 +40,20 @@ export interface CompiledScopeDefinition {
   readonly options: Record<string, unknown>;
 }
 
+interface CompiledCheck {
+  readonly kind: RuleKind;
+  readonly rule: string;
+  readonly examples: RuleExamples;
+  readonly violationMessage?: string;
+}
+
 export interface CompiledDescriptor {
   readonly name: string;
+  readonly kind: RuleKind;
   readonly rule: string;
-  readonly title?: string;
+  readonly violationMessage?: string;
+  readonly enabled: boolean;
+  readonly settings: RuleSettings;
   readonly examples: RuleExamples;
   readonly filter: CompiledFilter;
   readonly decision: DecisionGrouping;
@@ -76,20 +96,95 @@ function exampleList(value: unknown, path: string): string[] {
 
 function compileExamples(value: unknown, warnUnknownField: WarnUnknownField): RuleExamples {
   if (value === undefined) return { good: [], bad: [] };
-  if (!isMapping(value)) throw new Error('rule.examples must be a mapping');
-  warnUnknownKeys(value, EXAMPLE_FIELDS, 'rule.examples', warnUnknownField);
+  if (!isMapping(value)) throw new Error('rule.check.examples must be a mapping');
+  warnUnknownKeys(value, EXAMPLE_FIELDS, 'rule.check.examples', warnUnknownField);
   return {
-    good: value.good === undefined ? [] : exampleList(value.good, 'rule.examples.good'),
-    bad: value.bad === undefined ? [] : exampleList(value.bad, 'rule.examples.bad'),
+    good: value.good === undefined ? [] : exampleList(value.good, 'rule.check.examples.good'),
+    bad: value.bad === undefined ? [] : exampleList(value.bad, 'rule.check.examples.bad'),
   };
 }
 
-function optionalTitle(value: unknown): string | undefined {
+function optionalViolationMessage(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'string' || value.trim() === '') {
-    throw new Error('rule.title must be a non-empty string');
+    throw new Error('rule.check.violation-message must be a non-empty string');
   }
   return value;
+}
+
+function optionalKind(value: unknown): RuleKind {
+  if (value === undefined) return 'AI';
+  if (value !== 'AI' && value !== 'regex') throw new Error('rule.check.kind must be "AI" or "regex"');
+  return value;
+}
+
+function validateRegex(source: string): void {
+  try {
+    new RegExp(source);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`rule.check.rule must be a valid JavaScript regular expression: ${detail}`, { cause: error });
+  }
+}
+
+function compileCheck(value: unknown, warnUnknownField: WarnUnknownField): CompiledCheck {
+  if (!isMapping(value)) throw new Error('rule.check must be a mapping');
+  warnUnknownKeys(value, CHECK_FIELDS, 'rule.check', warnUnknownField);
+
+  const kind = optionalKind(value.kind);
+  const { rule: instruction } = value;
+  if (typeof instruction !== 'string' || instruction.trim() === '') {
+    throw new Error('rule.check.rule must be a non-empty string');
+  }
+  if (kind === 'regex') validateRegex(instruction);
+
+  const violationMessage = optionalViolationMessage(value['violation-message']);
+  const examples = compileExamples(value.examples, warnUnknownField);
+  return {
+    kind,
+    rule: instruction,
+    examples,
+    ...(violationMessage === undefined ? {} : { violationMessage }),
+  };
+}
+
+function deriveName(filepath: string): string {
+  if (typeof filepath !== 'string' || filepath.trim() === '') throw new Error('A rule requires its filepath');
+  const stem = basename(filepath).replace(RULE_EXTENSION, '');
+  if (stem === '') throw new Error(`Rule file ${filepath} has no name: its filename has no stem before the extension`);
+  return stem;
+}
+
+function optionalEnabled(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (typeof value !== 'boolean') throw new Error('rule.enabled must be a boolean');
+  return value;
+}
+
+function compileSettings(value: unknown, warnUnknownField: WarnUnknownField): RuleSettings {
+  if (value === undefined) return {};
+  if (!isMapping(value)) throw new Error('rule.settings must be a mapping');
+  warnUnknownKeys(value, SETTINGS_FIELDS, 'rule.settings', warnUnknownField);
+
+  const { model, threshold, backend } = value;
+  const settings: { model?: string; threshold?: number; backend?: 'jev' } = {};
+  if (model !== undefined) {
+    if (typeof model !== 'string' || model.trim() === '') {
+      throw new Error('rule.settings.model must be a non-empty string');
+    }
+    settings.model = model.trim();
+  }
+  if (threshold !== undefined) {
+    if (typeof threshold !== 'number') {
+      throw new Error('rule.settings.threshold must be a number between 0 and 1');
+    }
+    settings.threshold = validateThreshold(threshold, 'rule.settings.threshold');
+  }
+  if (backend !== undefined) {
+    if (backend !== 'jev') throw new Error('rule.settings.backend must be "jev"');
+    settings.backend = backend;
+  }
+  return settings;
 }
 
 function compileSelection(value: unknown, warnUnknownField: WarnUnknownField): CompiledSelection {
@@ -136,21 +231,23 @@ function compileScope(value: unknown): CompiledScopeDefinition {
   return { format, changed: rawChanged === undefined ? true : rawChanged, options };
 }
 
-export function compileDescriptor(definition: unknown, warnUnknownField: WarnUnknownField): CompiledDescriptor {
+export function compileDescriptor(
+  definition: unknown,
+  filepath: string,
+  warnUnknownField: WarnUnknownField,
+): CompiledDescriptor {
   if (!isMapping(definition)) throw new Error('Rule must be a YAML mapping');
   warnUnknownKeys(definition, TOP_LEVEL_FIELDS, 'rule', warnUnknownField);
 
-  const { version, name, rule: instruction, examples: rawExamples } = definition;
+  const { version } = definition;
   if (version !== 'v1') throw new Error('rule.version must be the string "v1"');
-  if (typeof name !== 'string' || name.trim() === '') throw new Error('rule.name must be a non-empty string');
-  if (typeof instruction !== 'string' || instruction.trim() === '') {
-    throw new Error('rule.rule must be a non-empty string');
-  }
-  // The title is validated here, before any source is seen, so a malformed description fails a rule
-  // even when a future match selects no scope at all.
-  const title = optionalTitle(definition.title);
-  const examples = compileExamples(rawExamples, warnUnknownField);
-  // The filter is validated here, before any source is seen, so an invalid or executable filter
+  const name = deriveName(filepath);
+  // Metadata is validated here, before any plugin compiles and before any source is seen, so a
+  // malformed description fails a rule even when it is disabled or would select no scope at all.
+  const check = compileCheck(definition.check, warnUnknownField);
+  const enabled = optionalEnabled(definition.enabled);
+  const settings = compileSettings(definition.settings, warnUnknownField);
+  // The filter is validated here too, before any source is seen, so an invalid or executable filter
   // fails a rule even when a future match selects no scope at all.
   const filter: CompiledFilter = compileFilter(definition.filter);
   // The grouping is validated here too, before any source is seen, so a malformed decision fails a
@@ -162,9 +259,12 @@ export function compileDescriptor(definition: unknown, warnUnknownField: WarnUnk
 
   return {
     name,
-    rule: instruction,
-    ...(title === undefined ? {} : { title }),
-    examples,
+    kind: check.kind,
+    rule: check.rule,
+    ...(check.violationMessage === undefined ? {} : { violationMessage: check.violationMessage }),
+    enabled,
+    settings,
+    examples: check.examples,
     filter,
     decision,
     selection,

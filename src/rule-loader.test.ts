@@ -28,10 +28,9 @@ async function withRoots(run: (roots: Roots) => Promise<void>): Promise<void> {
   }
 }
 
-function ruleYaml(name: string, included = '**/*.ts'): string {
+function ruleYaml(included = '**/*.ts'): string {
   return [
     "version: 'v1'",
-    `name: ${name}`,
     'files:',
     '  included:',
     `    - '${included}'`,
@@ -39,14 +38,15 @@ function ruleYaml(name: string, included = '**/*.ts'): string {
     '  format: yaml',
     "  path: '$'",
     '  changed: false',
-    'rule: Review the named source.',
+    'check:',
+    '  rule: Review the named source.',
   ].join('\n');
 }
 
-function writeRule(root: string, relativePath: string, name: string, included?: string): string {
+function writeRule(root: string, relativePath: string, included?: string): string {
   const path = join(root, relativePath);
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, ruleYaml(name, included), 'utf8');
+  writeFileSync(path, ruleYaml(included), 'utf8');
   return path;
 }
 
@@ -54,12 +54,12 @@ test('discovers nested rules of both roots, local first, each root lexically sor
   await withRoots(async ({ project, home }) => {
     const local = join(project, '.rulekeeper');
     const user = join(home, '.rulekeeper');
-    const localAlpha = writeRule(local, 'alpha.yml', 'Alpha local rule');
-    const localMiddle = writeRule(local, join('more', 'middle.yaml'), 'Middle local rule');
-    const localDeep = writeRule(local, join('nested', 'Deep.YAML'), 'Deep local rule');
+    const localAlpha = writeRule(local, 'alpha.yml');
+    const localMiddle = writeRule(local, join('more', 'middle.yaml'));
+    const localDeep = writeRule(local, join('nested', 'Deep.YAML'));
     writeFileSync(join(local, 'notes.txt'), 'not a rule\n', 'utf8');
-    const userDeep = writeRule(user, join('deep', 'deeper', 'leaf.yml'), 'Leaf home rule');
-    const userRoot = writeRule(user, 'root.yaml', 'Root home rule');
+    const userDeep = writeRule(user, join('deep', 'deeper', 'leaf.yml'));
+    const userRoot = writeRule(user, 'root.yaml');
 
     const files = await discoverRuleFiles({ cwd: project, home });
 
@@ -74,8 +74,8 @@ test('ignores non-rule files, symlinked entries and a symlink cycle inside a roo
   await withRoots(async ({ project, home }) => {
     const local = join(project, '.rulekeeper');
     const outside = join(project, 'outside.yaml');
-    writeFileSync(outside, ruleYaml('Outside rule'), 'utf8');
-    const kept = writeRule(local, join('sub', 'kept.yaml'), 'Kept rule');
+    writeFileSync(outside, ruleYaml(), 'utf8');
+    const kept = writeRule(local, join('sub', 'kept.yaml'));
     writeFileSync(join(local, 'readme'), 'no extension\n', 'utf8');
     writeFileSync(join(local, 'image.png'), 'binary-ish\n', 'utf8');
     mkdirSync(join(local, 'empty-dir'), { recursive: true });
@@ -92,7 +92,7 @@ test('ignores non-rule files, symlinked entries and a symlink cycle inside a roo
 test('ignores a root that is itself a symlink', async () => {
   await withRoots(async ({ project, home }) => {
     const real = join(project, 'real-rules');
-    writeRule(real, 'rule.yaml', 'Linked root rule');
+    writeRule(real, 'rule.yaml');
     symlinkSync(real, join(project, '.rulekeeper'), 'dir');
 
     assert.deepEqual(await discoverRuleFiles({ cwd: project, home }), []);
@@ -101,7 +101,7 @@ test('ignores a root that is itself a symlink', async () => {
 
 test('an absent local root still yields the home root rules, and both absent yields none', async () => {
   await withRoots(async ({ project, home }) => {
-    const homeRule = writeRule(join(home, '.rulekeeper'), 'only.yaml', 'Home rule');
+    const homeRule = writeRule(join(home, '.rulekeeper'), 'only.yaml');
 
     assert.deepEqual(await discoverRuleFiles({ cwd: project, home }), [homeRule]);
     assert.deepEqual(
@@ -113,8 +113,8 @@ test('an absent local root still yields the home root rules, and both absent yie
 
 test('never walks above a root: an ancestor .rulekeeper is not searched', async () => {
   await withRoots(async ({ project, home }) => {
-    writeRule(join(dirname(project), '.rulekeeper'), 'ancestor.yaml', 'Ancestor rule');
-    const own = writeRule(join(project, '.rulekeeper'), 'own.yaml', 'Own rule');
+    writeRule(join(dirname(project), '.rulekeeper'), 'ancestor.yaml');
+    const own = writeRule(join(project, '.rulekeeper'), 'own.yaml');
 
     assert.deepEqual(await discoverRuleFiles({ cwd: project, home }), [own]);
   });
@@ -133,7 +133,7 @@ test('a root that is a file fails instead of being skipped', async () => {
 
 test('a root reached through both roots is walked exactly once', async () => {
   await withRoots(async ({ project }) => {
-    const rule = writeRule(join(project, '.rulekeeper'), join('nested', 'shared.yaml'), 'Shared rule');
+    const rule = writeRule(join(project, '.rulekeeper'), join('nested', 'shared.yaml'));
 
     assert.deepEqual(await discoverRuleFiles({ cwd: project, home: project }), [rule]);
   });
@@ -141,7 +141,7 @@ test('a root reached through both roots is walked exactly once', async () => {
 
 test('roots that are one physical directory through a parent link load once, in the first spelling', async () => {
   await withRoots(async ({ project }) => {
-    const rule = writeRule(join(project, '.rulekeeper'), join('nested', 'shared.yaml'), 'Shared rule');
+    const rule = writeRule(join(project, '.rulekeeper'), join('nested', 'shared.yaml'));
     const alias = join(dirname(project), 'project-link');
     // Neither root is a link itself; both reach one physical `.rulekeeper`, so only the directory
     // identity — not the spelling — can tell the two roots apart.
@@ -155,8 +155,8 @@ test('roots that are one physical directory through a parent link load once, in 
 
 test('loadRules rejects a malformed and a missing rule with the filepath and the cause', async () => {
   await withRoots(async ({ home }) => {
-    const broken = writeRule(home, 'rules/broken.yaml', 'Broken rule');
-    writeFileSync(broken, 'version: v2\nname: Broken rule\n', 'utf8');
+    const broken = writeRule(home, 'rules/broken.yaml');
+    writeFileSync(broken, 'version: v2\ncheck:\n  rule: p\n', 'utf8');
 
     await assert.rejects(loadRules(broken), (error: unknown) => {
       const failure = error as Error;
@@ -179,10 +179,10 @@ test('loadRules rejects a malformed and a missing rule with the filepath and the
 test('loadRules compiles the .yaml and .yml rules under an explicit directory, nested and sorted', async () => {
   await withRoots(async ({ home }) => {
     const root = join(home, 'rules');
-    const topRule = writeRule(root, 'b.yaml', 'Top rule', '**/*.ts');
-    const nestedRule = writeRule(root, join('nested', 'a.yml'), 'Nested rule', '**/*.md');
-    const upperRule = writeRule(root, join('nested', 'c.YML'), 'Upper rule', '**/*.json');
-    writeFileSync(join(root, 'notes.txt'), ruleYaml('Not a rule'), 'utf8');
+    const topRule = writeRule(root, 'b.yaml', '**/*.ts');
+    const nestedRule = writeRule(root, join('nested', 'a.yml'), '**/*.md');
+    const upperRule = writeRule(root, join('nested', 'c.YML'), '**/*.json');
+    writeFileSync(join(root, 'notes.txt'), ruleYaml(), 'utf8');
     writeFileSync(join(root, 'nested', 'image.png'), 'not yaml\n', 'utf8');
     // A link to a real rule in the same directory is skipped, exactly as discovery skips links.
     symlinkSync(topRule, join(root, 'linked.yaml'));
@@ -194,7 +194,10 @@ test('loadRules compiles the .yaml and .yml rules under an explicit directory, n
     // the real `yaml` plugin agrees with it, both accepting Markdown only through the nested rule.
     assert.deepEqual(loaded.map(entry => entry.rule.matchesFile('src/a.md')), [false, true, false]);
     const selecting = loaded.filter(entry => entry.rule.match({ filepath: 'src/a.md', source: 'a: 1\n' }).length === 1);
-    assert.deepEqual(selecting.map(entry => entry.rule.name), ['Nested rule']);
+    // Each compiled rule is named after the stem of the file it was read from, not after anything
+    // the file declares.
+    assert.deepEqual(selecting.map(entry => entry.rule.name), ['a']);
+    assert.deepEqual(loaded.map(entry => entry.rule.name), ['b', 'a', 'c']);
   });
 });
 
@@ -202,7 +205,7 @@ test('an explicit directory with no rule files fails naming that directory, not 
   await withRoots(async ({ home }) => {
     const root = join(home, 'not-rules');
     mkdirSync(join(root, 'sub'), { recursive: true });
-    writeFileSync(join(root, 'notes.txt'), ruleYaml('Not a rule'), 'utf8');
+    writeFileSync(join(root, 'notes.txt'), ruleYaml(), 'utf8');
     writeFileSync(join(root, 'sub', 'rule.json'), '{}\n', 'utf8');
 
     const reported: [string, DiagnosticFields | undefined][] = [];
@@ -227,14 +230,15 @@ test('loadRules rejects an invalid rule in an explicit directory before returnin
     const root = join(home, 'rules');
     // The valid rule sorts first, so a load that returned its valid prefix could resolve; the whole
     // load must reject instead, naming the broken file that a prefix-only load would never reach.
-    writeRule(root, 'a-valid.yaml', 'Valid rule');
-    const broken = writeRule(root, join('nested', 'b-broken.yaml'), 'Broken rule');
-    writeFileSync(broken, "version: 'v1'\nname: Broken rule\nscope:\n  format: yaml\n  path: '$'\n", 'utf8');
+    writeRule(root, 'a-valid.yaml');
+    const broken = writeRule(root, join('nested', 'b-broken.yaml'));
+    writeFileSync(broken, "version: 'v1'\nfiles: { included: ['src/**'] }\nscope: { format: yaml, path: '$' }\n", 'utf8');
 
     await assert.rejects(loadRules(root), (error: unknown) => {
       const failure = error as Error;
       assert.match(failure.message, /b-broken\.yaml/);
       assert.ok(failure.cause instanceof Error);
+      assert.match((failure.cause as Error).message, /rule\.check must be a mapping/);
       return true;
     });
   });
@@ -243,54 +247,55 @@ test('loadRules rejects an invalid rule in an explicit directory before returnin
 test('an explicit rule file loads that file only, never the rules beside it', async () => {
   await withRoots(async ({ home }) => {
     const root = join(home, 'rules');
-    const one = writeRule(root, 'one.yaml', 'One rule', '**/*.md');
-    writeRule(root, 'two.yaml', 'Two rule', '**/*.md');
+    const one = writeRule(root, 'one.yaml', '**/*.md');
+    writeRule(root, 'two.yaml', '**/*.md');
 
     const loaded = await loadRules(one);
 
     assert.deepEqual(loaded.map(entry => entry.filepath), [one]);
+    assert.equal(loaded[0]!.rule.name, 'one');
     assert.equal(loaded[0]!.rule.match({ filepath: 'src/a.md', source: 'a: 1\n' }).length, 1);
   });
 });
 
-test('an explicit path that is itself a symlink is followed, and loads under the name it was given', async () => {
+test('an explicit path that is itself a symlink is followed, and loads under the stem it was given', async () => {
   await withRoots(async ({ home }) => {
     const root = join(home, 'rules');
-    const rule = writeRule(root, join('nested', 'rule.yaml'), 'Named rule');
+    const rule = writeRule(root, join('nested', 'rule.yaml'));
     symlinkSync(root, join(home, 'rules-link'), 'dir');
     symlinkSync(rule, join(home, 'rule-link.yaml'), 'file');
 
     const directory = await loadRules(join(home, 'rules-link'));
     assert.deepEqual(directory.map(entry => entry.filepath), [join(home, 'rules-link', 'nested', 'rule.yaml')]);
-    assert.equal(directory[0]!.rule.name, 'Named rule');
+    assert.equal(directory[0]!.rule.name, 'rule');
 
     const single = await loadRules(join(home, 'rule-link.yaml'));
     assert.deepEqual(single.map(entry => entry.filepath), [join(home, 'rule-link.yaml')]);
-    assert.equal(single[0]!.rule.name, 'Named rule');
+    assert.equal(single[0]!.rule.name, 'rule-link', 'the name follows the spelling that was loaded, not the target');
   });
 });
 
 test('loadRules compiles under an explicit concurrency with the discovery order and failures intact', async () => {
   await withRoots(async ({ home }) => {
     const root = join(home, 'rules');
-    const first = writeRule(root, 'a.yaml', 'A rule');
-    const second = writeRule(root, join('nested', 'b.yml'), 'B rule');
-    const third = writeRule(root, join('nested', 'deeper', 'c.yaml'), 'C rule');
+    const first = writeRule(root, 'a.yaml');
+    const second = writeRule(root, join('nested', 'b.yml'));
+    const third = writeRule(root, join('nested', 'deeper', 'c.yaml'));
 
     const serial = await loadRules(root, 1);
     const parallel = await loadRules(root, 8);
 
     assert.deepEqual(serial.map(entry => entry.filepath), [first, second, third]);
     assert.deepEqual(parallel.map(entry => entry.filepath), [first, second, third]);
-    assert.deepEqual(parallel.map(entry => entry.rule.name), ['A rule', 'B rule', 'C rule']);
+    assert.deepEqual(parallel.map(entry => entry.rule.name), ['a', 'b', 'c']);
 
     await assert.rejects(loadRules(root, 0), (error: unknown) => {
       assert.match((error as Error).message, /--concurrency/);
       return true;
     });
 
-    const broken = writeRule(root, join('nested', 'z-broken.yaml'), 'Broken rule');
-    writeFileSync(broken, "version: 'v1'\nname: Broken rule\nscope:\n  format: yaml\n  path: '$'\n", 'utf8');
+    const broken = writeRule(root, join('nested', 'z-broken.yaml'));
+    writeFileSync(broken, "version: 'v1'\nfiles: { included: ['src/**'] }\nscope: { format: yaml, path: '$' }\n", 'utf8');
 
     await assert.rejects(loadRules(root, 4), (error: unknown) => {
       const failure = error as Error;

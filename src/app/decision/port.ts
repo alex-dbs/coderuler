@@ -3,7 +3,7 @@ import type { JsonValue } from '../scope/types.ts';
 
 export interface DecisionInstructions {
   readonly rule: string;
-  readonly examples: RuleExamples;
+  readonly examples?: RuleExamples;
   readonly question: string;
 }
 
@@ -19,18 +19,12 @@ export interface DecisionScopeState {
   readonly scope: DecisionScope;
 }
 
-export interface DecisionGroup {
-  readonly type: 'file' | 'folder' | 'project';
-  readonly path: string;
-}
-
 export interface DecisionGroupFile {
   readonly filepath: string;
   readonly scopes: readonly DecisionScope[];
 }
 
 export interface DecisionGroupState {
-  readonly group: DecisionGroup;
   readonly files: readonly DecisionGroupFile[];
 }
 
@@ -46,6 +40,12 @@ export interface BackendDecision {
   readonly model: string;
 }
 
+export type DecisionExchange =
+  | { readonly type: 'request'; readonly body: string }
+  | { readonly type: 'response'; readonly status: number; readonly body: string };
+
+export type DecisionObserver = (exchange: DecisionExchange) => void;
+
 export interface DecisionBackend {
-  decide(request: DecisionRequest): Promise<BackendDecision>;
+  decide(request: DecisionRequest, observer?: DecisionObserver): Promise<BackendDecision>;
 }

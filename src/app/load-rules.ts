@@ -4,7 +4,7 @@ import type { CompiledRule } from './rule/types.ts';
 
 export function createRuleLoader(
   files: RuleFiles,
-  compile: (source: string) => CompiledRule,
+  compile: (source: string, filepath: string) => CompiledRule,
 ): RuleLoader {
   return async (rulePath, concurrency = DEFAULT_CONCURRENCY, diagnostics) => {
     const started = diagnostics === undefined ? 0 : performance.now();
@@ -29,7 +29,7 @@ export function createRuleLoader(
       }
       let rule: CompiledRule;
       try {
-        rule = compile(text);
+        rule = compile(text, filepath);
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         throw new Error(`Rule file ${filepath} is invalid: ${detail}`, { cause: error });

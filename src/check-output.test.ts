@@ -5,12 +5,15 @@ import { after, before, test } from 'node:test';
 import {
   assertFailed,
   createSandbox,
+  groupedDecisionKey,
+  isMapping,
   runCli,
   soleEntry,
   startDecisionFixture,
   startSchedulingFixture,
   writeFile,
   yamlRule,
+  type CheckEntry,
   type CliPresentationOptions,
   type CliResult,
   type DecisionFixture,
@@ -82,11 +85,11 @@ test('a plain human summary reports the rule and scope counts without terminal c
   const project = sandbox.isolated('human-summary');
   writeFile(
     join(project.rules, 'matched.yaml'),
-    yamlRule('Matched review', 'Review every source.', { included: ['**/*.yaml'] }),
+    yamlRule('Review every source.', { included: ['**/*.yaml'] }),
   );
   writeFile(
     join(project.rules, 'unmatched.yaml'),
-    yamlRule('Unmatched review', 'Review nothing.', { included: ['nothing/**/*.yaml'] }),
+    yamlRule('Review nothing.', { included: ['nothing/**/*.yaml'] }),
   );
   writeSources(project, {
     'src/a.yaml': '{service: {name: alpha}}',
@@ -111,7 +114,7 @@ test('the human summary prints the violating source and withholds the passing sc
   const project = held.isolated('human-mixed');
   const rulePath = writeFile(
     join(project.rules, 'mixed.yaml'),
-    yamlRule('Mixed review', 'Review every source.', { included: ['**/*.yaml'] }),
+    yamlRule('Review every source.', { included: ['**/*.yaml'] }),
   );
   writeSources(project, {
     'src/a.yaml': '{service: {name: alpha}}',
@@ -128,7 +131,7 @@ test('the human summary prints the violating source and withholds the passing sc
 
   assert.strictEqual(result.status, 0, `mixed summary: violations must not change the exit code (stderr: ${result.stderr})`);
   assertNoAnsi(result, 'mixed summary');
-  const namesRule = ['Mixed review', rulePath, 'mixed.yaml'].some(name => result.stdout.includes(name));
+  const namesRule = ['mixed', rulePath, 'mixed.yaml'].some(name => result.stdout.includes(name));
   assert.ok(namesRule, 'the summary must name the rule that was violated');
   assert.match(result.stdout, /violat/i, 'the summary must report the violation count');
   assert.match(result.stdout, /src[/\\]b\.yaml:1-1/, 'the summary must locate the violating scope in its file');
@@ -150,7 +153,6 @@ test('the human summary names a violating group by its type and path', async () 
     join(project.rules, 'groups.yaml'),
     [
       "version: 'v1'",
-      "name: 'Grouped review'",
       'files:',
       '  included:',
       "    - '**/*.yaml'",
@@ -160,7 +162,8 @@ test('the human summary names a violating group by its type and path', async () 
       "  key: '$.id'",
       'decision:',
       '  group_by: file',
-      'rule: Review the selected items as one group.',
+      'check:',
+      '  rule: Review the selected items as one group.',
       '',
     ].join('\n'),
   );
@@ -168,7 +171,10 @@ test('the human summary names a violating group by its type and path', async () 
     'src/a.yaml': 'items:\n  - id: a\n  - id: b\n',
     'src/b.yaml': 'items:\n  - id: c\n  - id: d\n',
   });
-  const probabilities: Record<string, number> = { 'group:file:src/a.yaml': 0.9, 'group:file:src/b.yaml': 0.1 };
+  const probabilities: Record<string, number> = {
+    [groupedDecisionKey(['src/a.yaml'])]: 0.9,
+    [groupedDecisionKey(['src/b.yaml'])]: 0.1,
+  };
   scheduler.answer = (request) => {
     const probability = probabilities[request.key];
     if (probability === undefined) throw new Error(`${request.key} was not expected to be decided`);
@@ -190,22 +196,22 @@ test('the human summary names a violating group by its type and path', async () 
   scheduler.reset();
 });
 
-test('a rule-provided title is attached to the violating scope, not to the model', async () => {
+test('a rule-provided violation message is sanitized and attached only to the violating scope', async () => {
   scheduler.reset();
-  const project = held.isolated('human-rule-title');
+  const project = held.isolated('human-rule-message');
   const rulePath = writeFile(
-    join(project.rules, 'titled.yaml'),
+    join(project.rules, 'message.yaml'),
     [
       "version: 'v1'",
-      "name: 'Resource review'",
       'files:',
       '  included:',
       "    - '**/*.yaml'",
       'scope:',
       '  format: yaml',
       "  path: '$'",
-      "title: 'Every service must pin its memory request and limit.'",
-      "rule: 'Review every source.'",
+      'check:',
+      "  rule: 'Review every source.'",
+      '  violation-message: "Every service must pin its memory\\t request and limit.\\u009f"',
       '',
     ].join('\n'),
   );
@@ -222,14 +228,18 @@ test('a rule-provided title is attached to the violating scope, not to the model
 
   const result = await runHeld(scheduler, project, ['check', '.', '--rules', rulePath], 2);
 
-  assert.strictEqual(result.status, 0, `titled summary: expected success (stderr: ${result.stderr})`);
-  assertNoAnsi(result, 'titled summary');
+  assert.strictEqual(result.status, 0, `message summary: expected success (stderr: ${result.stderr})`);
+  assertNoAnsi(result, 'message summary');
   assert.match(
     result.stdout,
-    /Resource review[^\n]*Every service must pin its memory request and limit\./,
-    'the rule-provided title must follow the rule identity of the violation it explains',
+    /message[^\n]*Every service must pin its memory request and limit\./,
+    'the static violation message must follow the identity of the violating rule',
   );
-  assert.doesNotMatch(result.stdout, /testmodel/, 'the title must not be attributed to the deciding model');
+  assert.doesNotMatch(result.stdout, /testmodel/, 'the message must not be attributed to the deciding model');
+  assert.doesNotMatch(result.stdout, /[\u007f-\u009f]/);
+  for (const request of scheduler.requests) {
+    assert.doesNotMatch(JSON.stringify(request.body), /Every service must pin|violationMessage|violation-message/);
+  }
   assert.doesNotMatch(result.stdout, /alpha/, 'the passing scope must not be printed');
   assert.strictEqual(scheduler.requests.length, 2, 'each selected scope must be decided once');
   scheduler.reset();
@@ -242,14 +252,14 @@ test('identical scopes are located by their own line instead of by their text', 
     join(project.rules, 'duplicates.yaml'),
     [
       "version: 'v1'",
-      "name: 'Duplicate review'",
       'files:',
       '  included:',
       "    - '**/*.yaml'",
       'scope:',
       '  format: yaml',
       "  path: '$.items[*]'",
-      "rule: 'Review every item.'",
+      'check:',
+      "  rule: 'Review every item.'",
       '',
     ].join('\n'),
   );
@@ -276,7 +286,7 @@ test('the printed source keeps line numbers, indentation and tabs while strippin
   const project = held.isolated('human-source-control');
   const rulePath = writeFile(
     join(project.rules, 'control.yaml'),
-    yamlRule('Control review', 'Review every source.', { included: ['**/*.yaml'] }),
+    yamlRule('Review every source.', { included: ['**/*.yaml'] }),
   );
   writeSources(project, { 'src/control.yaml': 'service:\n  name: "a\tb"\n  note: "\u001b[31mhazard\u001b[0m"\n' });
   scheduler.answer = () => ({ probability: 0.1 });
@@ -292,12 +302,349 @@ test('the printed source keeps line numbers, indentation and tabs while strippin
   scheduler.reset();
 });
 
+function serviceRule(): string {
+  return [
+    "version: 'v1'",
+    'files:',
+    '  included:',
+    "    - '**/*.yaml'",
+    'scope:',
+    '  format: yaml',
+    "  path: '$.service'",
+    'check:',
+    "  rule: 'Review every service block.'",
+    '',
+  ].join('\n');
+}
+
+function scopeOf(entry: CheckEntry, filepath: string, where: string): Record<string, unknown> {
+  for (const context of entry.contexts) {
+    if (!isMapping(context)) throw new Error(`${where}: every context must be a JSON mapping`);
+    if (context.filepath !== filepath) continue;
+    if (!isMapping(context.scope)) throw new Error(`${where}: the context of ${filepath} must carry a scope mapping`);
+    return context.scope;
+  }
+  throw new Error(`${where}: expected a JSON context for ${filepath}`);
+}
+
+function renderedSourceLines(stdout: string): string[] {
+  return [...stdout.matchAll(/^ {4}(?:\d+ \| .*|\u2026)$/gm)].map(match => match[0]!);
+}
+
+function renderedLine(line: number, text: string): string {
+  return `    ${line} | ${text}`;
+}
+
+const ELLIPSIS_LINE = '    \u2026';
+
+const FIVE_LINE_FILE = [
+  'version: 1',
+  'service:',
+  '  name: alpha',
+  '  tier: gold',
+  '  owner: platform',
+  '  region: eu',
+  '  note: boundary-five',
+  '',
+].join('\n');
+
+const FIVE_LINE_SOURCE = 'name: alpha\n  tier: gold\n  owner: platform\n  region: eu\n  note: boundary-five\n';
+
+const SIX_LINE_FILE = [
+  'version: 1',
+  'service:',
+  '  name: alpha',
+  '  tier: gold',
+  '  owner: platform',
+  '  region: eu',
+  '  note: boundary-six',
+  '  tail: hidden-tail-six',
+  '',
+].join('\n');
+
+const SIX_LINE_SOURCE = 'name: alpha\n  tier: gold\n  owner: platform\n  region: eu\n  note: boundary-six\n  tail: hidden-tail-six\n';
+
+const BLANK_TAIL_FILE = [
+  'version: 1',
+  'service:',
+  '  name: alpha',
+  '  tier: gold',
+  '  owner: platform',
+  '  region: eu',
+  '  note: boundary-blank',
+  '',
+  '  tail: hidden-tail-blank',
+  '',
+].join('\n');
+
+const BLANK_TAIL_SOURCE = 'name: alpha\n  tier: gold\n  owner: platform\n  region: eu\n  note: boundary-blank\n\n  tail: hidden-tail-blank\n';
+
+const ALPHA_FILE = [
+  'version: 1',
+  'service:',
+  '  name: alpha',
+  '  tier: gold',
+  '  owner: platform',
+  '  region: eu',
+  '  note: alpha-note',
+  '  tail: hidden-tail-alpha',
+  '',
+].join('\n');
+
+const ALPHA_SOURCE = 'name: alpha\n  tier: gold\n  owner: platform\n  region: eu\n  note: alpha-note\n  tail: hidden-tail-alpha\n';
+
+const BETA_FILE = [
+  'version: 1',
+  'service:',
+  '  name: beta',
+  '  tier: gold',
+  '  owner: platform',
+  '  region: eu',
+  '  note: beta-note',
+  '  tail: hidden-tail-beta',
+  '  extra: hidden-extra-beta',
+  '',
+].join('\n');
+
+const BETA_SOURCE = 'name: beta\n  tier: gold\n  owner: platform\n  region: eu\n  note: beta-note\n  tail: hidden-tail-beta\n  extra: hidden-extra-beta\n';
+
+test('an excerpt of exactly five lines prints every line and no ellipsis', async () => {
+  backend.reset();
+  backend.probability = 0.1;
+  const label = 'five-line excerpt';
+  const project = sandbox.isolated('excerpt-five');
+  const rulePath = writeFile(join(project.rules, 'excerpt-five.yaml'), serviceRule());
+  writeSources(project, { 'src/five-lines.yaml': FIVE_LINE_FILE });
+
+  const human = await runCli(['check', '.', '--rules', rulePath], project, {}, HUMAN);
+
+  assert.strictEqual(human.status, 0, `${label}: expected success (stderr: ${human.stderr})`);
+  assertNoAnsi(human, label);
+  assert.deepStrictEqual(
+    renderedSourceLines(human.stdout),
+    [
+      renderedLine(3, 'name: alpha'),
+      renderedLine(4, '  tier: gold'),
+      renderedLine(5, '  owner: platform'),
+      renderedLine(6, '  region: eu'),
+      renderedLine(7, '  note: boundary-five'),
+    ],
+    `${label}: a five-line excerpt must print all five lines and no ellipsis (stdout: ${JSON.stringify(human.stdout)})`,
+  );
+  assert.match(
+    human.stdout,
+    /src[/\\]five-lines\.yaml:3-7/,
+    'the five-line excerpt must keep the full scope range',
+  );
+  assert.strictEqual(backend.requests.length, 1, 'the selected scope must be decided once');
+
+  const json = await runCli(['check', '.', '--rules', rulePath], project);
+  const entry = soleEntry(json, `${label} (json)`);
+  const scope = scopeOf(entry, 'src/five-lines.yaml', `${label} (json)`);
+  assert.deepStrictEqual(scope.lines, { start: 3, end: 7 }, `${label}: JSON must keep the full scope range`);
+  assert.strictEqual(scope.source, FIVE_LINE_SOURCE, `${label}: JSON must keep the untruncated source`);
+  assert.strictEqual(backend.requests.length, 2, 'the JSON run must decide the same scope once');
+  assert.ok(
+    JSON.stringify(backend.requests.at(-1)!.body).includes('boundary-five'),
+    'the decision must send the source it was given',
+  );
+  backend.reset();
+});
+
+test('an excerpt of six lines prints the first five lines, then a separate ellipsis, and keeps the full range', async () => {
+  backend.reset();
+  backend.probability = 0.1;
+  const label = 'six-line excerpt';
+  const project = sandbox.isolated('excerpt-six');
+  const rulePath = writeFile(join(project.rules, 'excerpt-six.yaml'), serviceRule());
+  writeSources(project, { 'src/six-lines.yaml': SIX_LINE_FILE });
+
+  const human = await runCli(['check', '.', '--rules', rulePath], project, {}, HUMAN);
+
+  assert.strictEqual(human.status, 0, `${label}: expected success (stderr: ${human.stderr})`);
+  assertNoAnsi(human, label);
+  assert.deepStrictEqual(
+    renderedSourceLines(human.stdout),
+    [
+      renderedLine(3, 'name: alpha'),
+      renderedLine(4, '  tier: gold'),
+      renderedLine(5, '  owner: platform'),
+      renderedLine(6, '  region: eu'),
+      renderedLine(7, '  note: boundary-six'),
+      ELLIPSIS_LINE,
+    ],
+    `${label}: a six-line excerpt must print its first five lines then one separate ellipsis (stdout: ${JSON.stringify(human.stdout)})`,
+  );
+  assert.ok(
+    human.stdout.indexOf('note: boundary-six') < human.stdout.indexOf('\u2026'),
+    'the ellipsis must follow the fifth printed line',
+  );
+  assert.match(
+    human.stdout,
+    /src[/\\]six-lines\.yaml:3-8/,
+    'the truncated excerpt must keep the full scope range, not the printed one',
+  );
+  assert.doesNotMatch(human.stdout, /hidden-tail-six/, 'the sixth source line must not be printed');
+  assert.strictEqual(backend.requests.length, 1, 'the selected scope must be decided once');
+
+  const json = await runCli(['check', '.', '--rules', rulePath], project);
+  const entry = soleEntry(json, `${label} (json)`);
+  const scope = scopeOf(entry, 'src/six-lines.yaml', `${label} (json)`);
+  assert.deepStrictEqual(scope.lines, { start: 3, end: 8 }, `${label}: JSON must keep the full scope range`);
+  assert.strictEqual(
+    scope.source,
+    SIX_LINE_SOURCE,
+    `${label}: JSON must keep the untruncated source, hidden tail included`,
+  );
+  assert.strictEqual(backend.requests.length, 2, 'the JSON run must decide the same scope once');
+  assert.ok(
+    JSON.stringify(backend.requests.at(-1)!.body).includes('hidden-tail-six'),
+    'the decision must send the hidden tail it was given',
+  );
+  backend.reset();
+});
+
+test('an excerpt marks truncation even when the first hidden line is blank', async () => {
+  backend.reset();
+  backend.probability = 0.1;
+  const label = 'blank-tail excerpt';
+  const project = sandbox.isolated('excerpt-blank-tail');
+  const rulePath = writeFile(join(project.rules, 'excerpt-blank-tail.yaml'), serviceRule());
+  writeSources(project, { 'src/blank-tail.yaml': BLANK_TAIL_FILE });
+
+  const human = await runCli(['check', '.', '--rules', rulePath], project, {}, HUMAN);
+
+  assert.strictEqual(human.status, 0, `${label}: expected success (stderr: ${human.stderr})`);
+  assertNoAnsi(human, label);
+  assert.deepStrictEqual(
+    renderedSourceLines(human.stdout),
+    [
+      renderedLine(3, 'name: alpha'),
+      renderedLine(4, '  tier: gold'),
+      renderedLine(5, '  owner: platform'),
+      renderedLine(6, '  region: eu'),
+      renderedLine(7, '  note: boundary-blank'),
+      ELLIPSIS_LINE,
+    ],
+    `${label}: a blank hidden line must not hide the truncation (stdout: ${JSON.stringify(human.stdout)})`,
+  );
+  assert.match(
+    human.stdout,
+    /src[/\\]blank-tail\.yaml:3-9/,
+    'the truncated excerpt must keep the full scope range, not the printed one',
+  );
+  assert.doesNotMatch(human.stdout, /hidden-tail-blank/, 'the hidden tail after the blank line must not be printed');
+  assert.strictEqual(backend.requests.length, 1, 'the selected scope must be decided once');
+
+  const json = await runCli(['check', '.', '--rules', rulePath], project);
+  const entry = soleEntry(json, `${label} (json)`);
+  const scope = scopeOf(entry, 'src/blank-tail.yaml', `${label} (json)`);
+  assert.deepStrictEqual(scope.lines, { start: 3, end: 9 }, `${label}: JSON must keep the full scope range`);
+  assert.strictEqual(
+    scope.source,
+    BLANK_TAIL_SOURCE,
+    `${label}: JSON must keep the untruncated source, blank line included`,
+  );
+  assert.strictEqual(backend.requests.length, 2, 'the JSON run must decide the same scope once');
+  assert.ok(
+    JSON.stringify(backend.requests.at(-1)!.body).includes('hidden-tail-blank'),
+    'the decision must send the hidden tail it was given',
+  );
+  backend.reset();
+});
+
+test('a folder group excerpt caps every file at five lines and still prints each file and label', async () => {
+  backend.reset();
+  backend.probability = 0.1;
+  const label = 'folder group excerpt';
+  const project = sandbox.isolated('excerpt-group');
+  const rulePath = writeFile(
+    join(project.rules, 'excerpt-group.yaml'),
+    [
+      "version: 'v1'",
+      'files:',
+      '  included:',
+      "    - '**/*.yaml'",
+      'scope:',
+      '  format: yaml',
+      "  path: '$.service'",
+      'decision:',
+      '  group_by: folder',
+      'check:',
+      "  rule: 'Review the folder as one group.'",
+      '',
+    ].join('\n'),
+  );
+  writeSources(project, {
+    'src/generated/values-alpha.yaml': ALPHA_FILE,
+    'src/generated/values-beta.yaml': BETA_FILE,
+  });
+
+  const human = await runCli(['check', '.', '--rules', rulePath], project, {}, HUMAN);
+
+  assert.strictEqual(human.status, 0, `${label}: expected success (stderr: ${human.stderr})`);
+  assertNoAnsi(human, label);
+  assert.deepStrictEqual(
+    renderedSourceLines(human.stdout),
+    [
+      renderedLine(3, 'name: alpha'),
+      renderedLine(4, '  tier: gold'),
+      renderedLine(5, '  owner: platform'),
+      renderedLine(6, '  region: eu'),
+      renderedLine(7, '  note: alpha-note'),
+      ELLIPSIS_LINE,
+      renderedLine(3, 'name: beta'),
+      renderedLine(4, '  tier: gold'),
+      renderedLine(5, '  owner: platform'),
+      renderedLine(6, '  region: eu'),
+      renderedLine(7, '  note: beta-note'),
+      ELLIPSIS_LINE,
+    ],
+    `${label}: every file must stay printed, each capped at five lines with its own ellipsis (stdout: ${JSON.stringify(human.stdout)})`,
+  );
+  assert.match(
+    human.stdout,
+    /src[/\\]generated[/\\]values-alpha\.yaml:3-8/,
+    `${label}: the first file must be labelled with its full scope range`,
+  );
+  assert.match(
+    human.stdout,
+    /src[/\\]generated[/\\]values-beta\.yaml:3-9/,
+    `${label}: the second file must be labelled with its full scope range`,
+  );
+  assert.doesNotMatch(human.stdout, /hidden-tail-alpha/, `${label}: the hidden tail of the first file must not be printed`);
+  assert.doesNotMatch(human.stdout, /hidden-tail-beta/, `${label}: the hidden tail of the second file must not be printed`);
+  assert.doesNotMatch(human.stdout, /hidden-extra-beta/, `${label}: the deepest hidden line must not be printed`);
+  assert.strictEqual(backend.requests.length, 1, `${label}: the folder must be decided once, never once per file`);
+
+  const json = await runCli(['check', '.', '--rules', rulePath], project);
+  const entry = soleEntry(json, `${label} (json)`);
+  assert.strictEqual(entry.contexts.length, 2, `${label}: both files must stay in the JSON contexts`);
+  const alpha = scopeOf(entry, 'src/generated/values-alpha.yaml', `${label} (json)`);
+  assert.deepStrictEqual(alpha.lines, { start: 3, end: 8 }, `${label}: the first file must keep its full range`);
+  assert.strictEqual(alpha.source, ALPHA_SOURCE, `${label}: the first file must keep its untruncated source`);
+  const beta = scopeOf(entry, 'src/generated/values-beta.yaml', `${label} (json)`);
+  assert.deepStrictEqual(beta.lines, { start: 3, end: 9 }, `${label}: the second file must keep its full range`);
+  assert.strictEqual(beta.source, BETA_SOURCE, `${label}: the second file must keep its untruncated source`);
+  assert.strictEqual(backend.requests.length, 2, `${label}: the JSON run must decide the folder once`);
+  const sent = JSON.stringify(backend.requests.at(-1)!.body);
+  for (const content of [
+    'hidden-tail-alpha',
+    'hidden-extra-beta',
+    'src/generated/values-alpha.yaml',
+    'src/generated/values-beta.yaml',
+  ]) {
+    assert.ok(sent.includes(content), `${label}: the grouped decision must send ${content}`);
+  }
+  backend.reset();
+});
+
 test('the human summary colors violations and passes only when the stream supports color', async () => {
   scheduler.reset();
   const project = held.isolated('human-color');
   const rulePath = writeFile(
     join(project.rules, 'color.yaml'),
-    yamlRule('Colored review', 'Review every source.', { included: ['**/*.yaml'] }),
+    yamlRule('Review every source.', { included: ['**/*.yaml'] }),
   );
   writeSources(project, {
     'src/a.yaml': '{service: {name: alpha}}',
@@ -343,7 +690,7 @@ test('a run that matches no scope asks for no decision and says so without claim
   const project = sandbox.isolated('human-no-match');
   const rulePath = writeFile(
     join(project.rules, 'unmatched.yaml'),
-    yamlRule('Unmatched review', 'Review nothing.', { included: ['nothing/**/*.yaml'] }),
+    yamlRule('Review nothing.', { included: ['nothing/**/*.yaml'] }),
   );
   writeSources(project, { 'src/a.yaml': '{service: {name: alpha}}' });
 
@@ -362,7 +709,7 @@ test('check --json keeps the result array on stdout and writes nothing to stderr
   const project = sandbox.isolated('json-output');
   const rulePath = writeFile(
     join(project.rules, 'decided.yaml'),
-    yamlRule('Decided review', 'Review every source.', { included: ['**/*.yaml'] }),
+    `${yamlRule('Review every source.', { included: ['**/*.yaml'] })}  violation-message: 'Pin service resources.'\n`,
   );
   writeSources(project, {
     'src/a.yaml': '{service: {name: alpha}}',
@@ -374,6 +721,13 @@ test('check --json keeps the result array on stdout and writes nothing to stderr
   const entry = soleEntry(result, 'json output');
   assert.strictEqual(result.stderr, '', 'JSON output must leave stderr quiet');
   assertNoAnsi(result, 'json output');
+  const [reported]: unknown[] = JSON.parse(result.stdout);
+  assert.ok(isMapping(reported));
+  assert.strictEqual(reported.violationMessage, 'Pin service resources.');
+  assert.ok(!('title' in reported), 'the deprecated metadata key must not leak into JSON reports');
+  for (const request of backend.requests) {
+    assert.doesNotMatch(JSON.stringify(request.body), /Pin service resources|violationMessage|violation-message/);
+  }
   assert.deepStrictEqual(entry.decisions, [
     { filepath: 'src/a.yaml', scopeId: '0:', follows: true, probability: 0.9, model: 'testmodel' },
     { filepath: 'src/b.yaml', scopeId: '0:', follows: true, probability: 0.9, model: 'testmodel' },
@@ -386,7 +740,7 @@ test('a failing check writes nothing to stdout in either presentation', async ()
   const project = sandbox.isolated('human-failure');
   const rulePath = writeFile(
     join(project.rules, 'keyed.yaml'),
-    yamlRule('Keyed review', 'Review every source.', { included: ['**/*.yaml'] }),
+    yamlRule('Review every source.', { included: ['**/*.yaml'] }),
   );
   writeSources(project, { 'src/a.yaml': '{service: {name: alpha}}' });
 
@@ -527,8 +881,8 @@ test('a narrow terminal still shows the full rule identity and the violation cou
     scheduler.reset();
     const project = held.isolated(`narrow-scope-${columns}`);
     const rulePath = writeFile(
-      join(project.rules, 'narrow.yaml'),
-      yamlRule(ruleName, 'Review every source.', { included: ['**/*.yaml'] }),
+      join(project.rules, `${ruleName}.yaml`),
+      yamlRule('Review every source.', { included: ['**/*.yaml'] }),
     );
     const probabilities: Record<string, number> = {};
     const sources: Record<string, string> = {};
@@ -571,10 +925,9 @@ test('a narrow terminal still shows the full group identity and the violation co
     scheduler.reset();
     const project = held.isolated(`narrow-group-${columns}`);
     const rulePath = writeFile(
-      join(project.rules, 'narrow-groups.yaml'),
+      join(project.rules, `${ruleName}.yaml`),
       [
         "version: 'v1'",
-        `name: '${ruleName}'`,
         'files:',
         '  included:',
         "    - '**/*.yaml'",
@@ -584,7 +937,8 @@ test('a narrow terminal still shows the full group identity and the violation co
         "  key: '$.id'",
         'decision:',
         '  group_by: file',
-        'rule: Review the selected items as one group.',
+        'check:',
+        '  rule: Review the selected items as one group.',
         '',
       ].join('\n'),
     );
@@ -592,7 +946,10 @@ test('a narrow terminal still shows the full group identity and the violation co
       'src/données/a.yaml': 'items:\n  - id: a\n  - id: b\n',
       [violating]: 'items:\n  - id: c\n  - id: d\n',
     });
-    const probabilities: Record<string, number> = { 'group:file:src/données/a.yaml': 0.9, [`group:file:${violating}`]: 0.1 };
+    const probabilities: Record<string, number> = {
+      [groupedDecisionKey(['src/données/a.yaml'])]: 0.9,
+      [groupedDecisionKey([violating])]: 0.1,
+    };
     scheduler.answer = (request) => {
       const probability = probabilities[request.key];
       if (probability === undefined) throw new Error(`${request.key} was not expected to be decided`);

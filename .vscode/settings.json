@@ -1,0 +1,10 @@
+{
+  "yaml.schemas": {
+    "./rule.schema.json": [
+      ".rulekeeper/**/*.yaml",
+      ".rulekeeper/**/*.yml",
+      "docs/rules/**/*.yaml",
+      "docs/rules/**/*.yml"
+    ]
+  }
+}

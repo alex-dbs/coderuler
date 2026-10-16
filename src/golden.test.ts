@@ -167,10 +167,10 @@ function parseCase(source: string, where: string): GoldenCase {
   };
 }
 
-function runPipeline(ruleSource: string, inputs: readonly FixtureInput[]): PipelineOutcome {
+function runPipeline(ruleSource: string, rulePath: string, inputs: readonly FixtureInput[]): PipelineOutcome {
   let rule: CompiledRule;
   try {
-    rule = parseRule(ruleSource);
+    rule = parseRule(ruleSource, rulePath);
   } catch (error) {
     if (!(error instanceof Error)) throw error;
     return { ok: false, stage: 'compile' };
@@ -189,7 +189,7 @@ function runPipeline(ruleSource: string, inputs: readonly FixtureInput[]): Pipel
 function checkCase(target: GoldenTarget): void {
   const { label } = target;
   const golden = parseCase(readFileSync(target.casePath, 'utf8'), label);
-  const outcome = runPipeline(readFileSync(target.rulePath, 'utf8'), golden.inputs);
+  const outcome = runPipeline(readFileSync(target.rulePath, 'utf8'), target.rulePath, golden.inputs);
   const expected = golden.expected;
 
   if (expected.kind === 'error') {

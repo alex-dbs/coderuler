@@ -21,3 +21,12 @@ export interface RuleFiles {
   find(rulePath?: string): Promise<RuleDiscovery>;
   read(filepath: string): Promise<string>;
 }
+
+export interface RuleSource {
+  readonly filepath: string;
+  readonly source: string;
+}
+
+export interface RuleSelector {
+  select(selector: string): Promise<RuleSource>;
+}

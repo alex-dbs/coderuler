@@ -1,0 +1,22 @@
+inputs:
+  - filepath: proto/billing/v1/invoice.proto
+    source: |
+      syntax = "proto3";
+
+      package acme.billing.v1;
+
+      service BillingService {
+        rpc GetInvoice(GetInvoiceRequest) returns (GetInvoiceResponse) {
+          option (google.api.http) = {
+            get: ""
+          };
+        }
+      }
+expected:
+  contexts:
+    - filepath: proto/billing/v1/invoice.proto
+      scope:
+        lines: {start: 8, end: 8}
+        id: 'acme.billing.v1.BillingService.GetInvoice:/http/bindings/0/url'
+        source: '""'
+        data: ''

@@ -9,11 +9,11 @@ export type { CompiledRule };
 
 let builtinRegistry: PluginRegistry | undefined;
 
-export function compileRule(definition: unknown, registry?: PluginRegistry): CompiledRule {
+export function compileRule(definition: unknown, filepath: string, registry?: PluginRegistry): CompiledRule {
   const scopes = registry ?? (builtinRegistry ??= createPluginRegistry());
-  return compileDefinition(definition, { registry: scopes, warnUnknownField });
+  return compileDefinition(definition, filepath, { registry: scopes, warnUnknownField });
 }
 
-export function parseRule(source: string, registry?: PluginRegistry): CompiledRule {
-  return compileRule(decodeRule(source), registry);
+export function parseRule(source: string, filepath: string, registry?: PluginRegistry): CompiledRule {
+  return compileRule(decodeRule(source), filepath, registry);
 }

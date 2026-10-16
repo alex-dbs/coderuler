@@ -26,7 +26,7 @@ export interface CheckedRule {
   readonly examples: RuleExamples;
   readonly contexts: readonly Context[];
   readonly decisions: readonly CheckedDecision[];
-  readonly title?: string;
+  readonly violationMessage?: string;
 }
 
 export interface DecisionProgress {

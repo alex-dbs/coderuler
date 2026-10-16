@@ -17,14 +17,14 @@ import {
 
 const INVALID_RULE = [
   "version: 'v2'",
-  'name: Unsupported rule version',
   'files:',
   '  included:',
   "    - '**/*.ts'",
   'scope:',
   '  format: yaml',
   "  path: '$'",
-  'rule: Review the change.',
+  'check:',
+  "  rule: 'Review the change.'",
   '',
 ].join('\n');
 
@@ -41,10 +41,9 @@ after(async () => {
   await backend.close();
 });
 
-function wholeFileRule(name: string, rule: string, changed = false): string {
+function wholeFileRule(rule: string, changed = false): string {
   const lines = [
     "version: 'v1'",
-    `name: '${name}'`,
     'files:',
     '  included:',
     "    - 'config/**/*.yaml'",
@@ -53,7 +52,7 @@ function wholeFileRule(name: string, rule: string, changed = false): string {
     "  path: '$'",
   ];
   if (changed) lines.push('  changed: true');
-  lines.push(`rule: '${rule}'`, '');
+  lines.push('check:', `  rule: '${rule}'`, '');
   return lines.join('\n');
 }
 
@@ -61,11 +60,11 @@ test('default check applies a nested local rule and the home rule together', asy
   const project = sandbox.isolated('both-roots');
   const localRule = writeFile(
     join(project.cwd, '.rulekeeper', 'scopes', 'deep', 'local.yaml'),
-    wholeFileRule('Local review', 'Review from the project root.'),
+    wholeFileRule('Review from the project root.'),
   );
   const homeRule = writeFile(
     join(project.home, '.rulekeeper', 'home.yaml'),
-    wholeFileRule('Home review', 'Review from the user root.'),
+    wholeFileRule('Review from the user root.'),
   );
   const source = '{service: {name: api}}';
   writeFile(join(project.cwd, 'config', 'a.yaml'), source);
@@ -74,7 +73,7 @@ test('default check applies a nested local rule and the home rule together', asy
 
   // Local root first, then home; the recursive local rule at depth is still discovered.
   assert.deepStrictEqual(list.map(entry => entry.ruleFile), [localRule, homeRule]);
-  assert.deepStrictEqual(list.map(entry => entry.name), ['Local review', 'Home review']);
+  assert.deepStrictEqual(list.map(entry => entry.name), ['local', 'home']);
   assert.deepStrictEqual(list.map(entry => entry.rule), [
     'Review from the project root.',
     'Review from the user root.',
@@ -84,7 +83,7 @@ test('default check applies a nested local rule and the home rule together', asy
 
 test('default check keeps same-name rules from both roots instead of overriding one', async () => {
   const project = sandbox.isolated('same-name');
-  const shared = wholeFileRule('Shared review', 'Review shared.');
+  const shared = wholeFileRule('Review shared.');
   const localRule = writeFile(join(project.cwd, '.rulekeeper', 'rules', 'shared.yaml'), shared);
   const homeRule = writeFile(join(project.home, '.rulekeeper', 'rules', 'shared.yaml'), shared);
   writeFile(join(project.cwd, 'config', 'a.yaml'), '{a: 1}');
@@ -92,14 +91,14 @@ test('default check keeps same-name rules from both roots instead of overriding 
   const list = entries(await runCli(['check'], project), 'same name and relative path');
 
   assert.deepStrictEqual(list.map(entry => entry.ruleFile), [localRule, homeRule]);
-  assert.deepStrictEqual(list.map(entry => entry.name), ['Shared review', 'Shared review']);
+  assert.deepStrictEqual(list.map(entry => entry.name), ['shared', 'shared']);
 });
 
 test('default check ignores scope.changed because it reviews one source text', async () => {
   const project = sandbox.isolated('changed');
   writeFile(
     join(project.cwd, '.rulekeeper', 'changed.yaml'),
-    wholeFileRule('Changed review', 'Review changed scopes.', true),
+    wholeFileRule('Review changed scopes.', true),
   );
   const source = '{replicas: 2}';
   writeFile(join(project.cwd, 'config', 'a.yaml'), source);
@@ -113,7 +112,7 @@ test('default check still discovers rules from the working directory when the ta
   const project = sandbox.isolated('target-subdirectory');
   const localRule = writeFile(
     join(project.cwd, '.rulekeeper', 'local.yaml'),
-    wholeFileRule('Local only', 'Review local only.'),
+    wholeFileRule('Review local only.'),
   );
   const source = '{a: 1}';
   writeFile(join(project.cwd, 'config', 'a.yaml'), source);
@@ -135,8 +134,8 @@ test('default check falls back to the discovery root that exists', async () => {
     const project = sandbox.isolated('single-root');
     const ruleFile =
       root === 'local'
-        ? writeFile(join(project.cwd, '.rulekeeper', 'local.yaml'), wholeFileRule('Local only', 'Review local only.'))
-        : writeFile(join(project.home, '.rulekeeper', 'home.yaml'), wholeFileRule('Home only', 'Review home only.'));
+        ? writeFile(join(project.cwd, '.rulekeeper', 'local.yaml'), wholeFileRule('Review local only.'))
+        : writeFile(join(project.home, '.rulekeeper', 'home.yaml'), wholeFileRule('Review home only.'));
     writeFile(join(project.cwd, 'config', 'a.yaml'), '{a: 1}');
 
     const entry = soleEntry(await runCli(['check'], project), label);
@@ -148,7 +147,7 @@ test('default check falls back to the discovery root that exists', async () => {
 test('check and validate fail without stdout when a discovered rule is invalid', async () => {
   for (const command of ['check', 'validate'] as const) {
     const project = sandbox.isolated('invalid-discovered');
-    writeFile(join(project.cwd, '.rulekeeper', 'good.yaml'), wholeFileRule('Good', 'Review good.'));
+    writeFile(join(project.cwd, '.rulekeeper', 'good.yaml'), wholeFileRule('Review good.'));
     writeFile(join(project.home, '.rulekeeper', 'bad.yaml'), INVALID_RULE);
     writeFile(join(project.cwd, 'config', 'a.yaml'), '{a: 1}');
 
@@ -159,13 +158,13 @@ test('check and validate fail without stdout when a discovered rule is invalid',
 test('an explicit rules path bypasses discovery even when a discovered rule is broken', async () => {
   const project = sandbox.isolated('explicit-rules');
   writeFile(join(project.cwd, '.rulekeeper', 'broken.yaml'), INVALID_RULE);
-  const rulePath = writeFile(join(project.cwd, 'explicit.yaml'), wholeFileRule('Explicit', 'Review explicit.'));
+  const rulePath = writeFile(join(project.cwd, 'explicit.yaml'), wholeFileRule('Review explicit.'));
   const source = '{a: 1}';
   writeFile(join(project.cwd, 'config', 'a.yaml'), source);
 
   const entry = soleEntry(await runCli(['check', 'config', '--rules', rulePath], project), 'explicit rules path');
 
   assert.strictEqual(entry.ruleFile, rulePath);
-  assert.strictEqual(entry.name, 'Explicit');
+  assert.strictEqual(entry.name, 'explicit');
   assert.deepStrictEqual(entry.contexts, [fileContext('config/a.yaml', source)]);
 });

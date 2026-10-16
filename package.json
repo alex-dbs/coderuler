@@ -10,6 +10,7 @@
     "start": "node index.ts",
     "test": "node --test src/*.test.ts",
     "test:golden": "node --test src/golden.test.ts",
+    "benchmark": "node scripts/benchmark.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -41,13 +42,16 @@
     "@ast-grep/lang-yaml": "0.0.6",
     "@ast-grep/napi": "0.50.0",
     "axios": "1.20.0",
+    "better-sqlite3": "13.0.3",
     "commander": "15.0.0",
     "jsonpath-plus": "11.2.1",
     "ora": "9.4.1",
     "yaml": "^2.9.1"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "9.6.0",
     "@types/node": "^24.19.2",
+    "ajv": "8.20.0",
     "typescript": "^7.0.2"
   }
 }

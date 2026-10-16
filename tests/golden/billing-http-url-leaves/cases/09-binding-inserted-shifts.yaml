@@ -1,0 +1,70 @@
+inputs:
+  - filepath: proto/billing/v1/invoice.proto
+    diff: |
+      --- a/proto/billing/v1/invoice.proto
+      +++ b/proto/billing/v1/invoice.proto
+      @@ -9,0 +10,3 @@ service BillingService {
+      +      additional_bindings {
+      +        get: "/v1/billing/invoices/{invoice_id}/lineItems"
+      +      }
+    base: |
+      syntax = "proto3";
+
+      package acme.billing.v1;
+
+      service BillingService {
+        rpc CreateInvoice(CreateInvoiceRequest) returns (CreateInvoiceResponse) {
+          option (google.api.http) = {
+            post: "/v1/billing/invoices"
+            additional_bindings {
+              get: "/v1/billing/invoices/{invoice_id}/items"
+            }
+          };
+        }
+      }
+    head: |
+      syntax = "proto3";
+
+      package acme.billing.v1;
+
+      service BillingService {
+        rpc CreateInvoice(CreateInvoiceRequest) returns (CreateInvoiceResponse) {
+          option (google.api.http) = {
+            post: "/v1/billing/invoices"
+            additional_bindings {
+              get: "/v1/billing/invoices/{invoice_id}/lineItems"
+            }
+            additional_bindings {
+              get: "/v1/billing/invoices/{invoice_id}/items"
+            }
+          };
+        }
+      }
+expected:
+  contexts:
+    - filepath: proto/billing/v1/invoice.proto
+      diff: |
+        --- a/proto/billing/v1/invoice.proto
+        +++ b/proto/billing/v1/invoice.proto
+        @@ -9,0 +10,3 @@ service BillingService {
+        +      additional_bindings {
+        +        get: "/v1/billing/invoices/{invoice_id}/lineItems"
+        +      }
+      scope:
+        lines: {start: 10, end: 10}
+        id: 'acme.billing.v1.BillingService.CreateInvoice:/http/bindings/1/url'
+        source: '"/v1/billing/invoices/{invoice_id}/lineItems"'
+        data: /v1/billing/invoices/{invoice_id}/lineItems
+    - filepath: proto/billing/v1/invoice.proto
+      diff: |
+        --- a/proto/billing/v1/invoice.proto
+        +++ b/proto/billing/v1/invoice.proto
+        @@ -9,0 +10,3 @@ service BillingService {
+        +      additional_bindings {
+        +        get: "/v1/billing/invoices/{invoice_id}/lineItems"
+        +      }
+      scope:
+        lines: {start: 13, end: 13}
+        id: 'acme.billing.v1.BillingService.CreateInvoice:/http/bindings/2/url'
+        source: '"/v1/billing/invoices/{invoice_id}/items"'
+        data: /v1/billing/invoices/{invoice_id}/items

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync, symlinkSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
 import { parse } from 'yaml';
 
@@ -50,6 +50,8 @@ function goldenFileCase(group: string, name: string): GoldenFileCase {
   const rulePath = join(GOLDEN_ROOT, group, 'rule.yaml');
   const ruleDocument: unknown = parse(readFileSync(rulePath, 'utf8'));
   if (!isMapping(ruleDocument)) throw new Error(`${group}/rule.yaml must be a mapping`);
+  const check = ruleDocument.check;
+  if (!isMapping(check)) throw new Error(`${group}/rule.yaml.check must be a mapping`);
 
   const fixture: unknown = parse(readFileSync(join(GOLDEN_ROOT, group, 'cases', `${name}.yaml`), 'utf8'));
   if (!isMapping(fixture)) throw new Error(`${group}/${name} must be a mapping`);
@@ -71,9 +73,9 @@ function goldenFileCase(group: string, name: string): GoldenFileCase {
 
   return {
     rulePath,
-    name: requireString(ruleDocument.name, `${group}/rule.yaml.name`),
-    rule: requireString(ruleDocument.rule, `${group}/rule.yaml.rule`),
-    examples: ruleDocument.examples,
+    name: basename(rulePath).replace(/\.ya?ml$/i, ''),
+    rule: requireString(check.rule, `${group}/rule.yaml.check.rule`),
+    examples: check.examples,
     contexts,
     sources,
   };
@@ -101,12 +103,12 @@ test('validate reports every unusable rule as a failure', async () => {
       (project) =>
         writeFile(
           join(project.rules, 'legacy.yaml'),
-          "name: legacy\nfiles:\n  included: ['**/*.ts']\nscope:\n  format: yaml\n  path: '$'\nrule: Review the change.\n",
+          "files:\n  included: ['**/*.ts']\nscope:\n  format: yaml\n  path: '$'\ncheck:\n  rule: Review the change.\n",
         ),
     ],
     [
       'a rule file that is not valid YAML',
-      (project) => writeFile(join(project.rules, 'malformed.yaml'), "version: 'v1'\nname: [unclosed\n"),
+      (project) => writeFile(join(project.rules, 'malformed.yaml'), "version: 'v1'\ncheck: [unclosed\n"),
     ],
     ['a rule file that cannot be read', (project) => join(project.rules, 'absent.yaml')],
   ];
@@ -121,7 +123,7 @@ test('check scans the current directory recursively and prints one entry with re
   const project = sandbox.isolated('check-default-scan');
   const rulePath = writeFile(
     join(project.rules, 'recursive.yaml'),
-    yamlRule('Recursive review', 'Review every YAML file.', { included: ['**/*.yaml'] }),
+    yamlRule('Review every YAML file.', { included: ['**/*.yaml'] }),
   );
   const source = '{service: {name: api}}';
   writeFile(join(project.cwd, 'a', 'b', 'deep.yaml'), source);
@@ -136,7 +138,7 @@ test('check prints a JSON array even for a single explicit rule that selects not
   const project = sandbox.isolated('check-empty-contexts');
   const rulePath = writeFile(
     join(project.rules, 'unmatched.yaml'),
-    yamlRule('Unmatched review', 'Review nothing.', { included: ['nothing/**/*.yaml'] }),
+    yamlRule('Review nothing.', { included: ['nothing/**/*.yaml'] }),
   );
   writeFile(join(project.cwd, 'src', 'a.yaml'), '{a: 1}');
 
@@ -149,7 +151,7 @@ test('check narrows the scan to a positional target without rebasing the rule gl
   const project = sandbox.isolated('check-target');
   const rulePath = writeFile(
     join(project.rules, 'scoped.yaml'),
-    yamlRule('Scoped review', 'Review selected sources.', { included: ['src/**/*.yaml'] }),
+    yamlRule('Review selected sources.', { included: ['src/**/*.yaml'] }),
   );
   const inside = '{service: {name: inside}}';
   const single = '{service: {name: single}}';
@@ -175,7 +177,7 @@ test('check aggregates the contexts of every selected file in lexical filepath o
   const project = sandbox.isolated('check-aggregate');
   const rulePath = writeFile(
     join(project.rules, 'aggregate.yaml'),
-    yamlRule('Aggregate review', 'Review all sources.', { included: ['**/*.yaml'] }),
+    yamlRule('Review all sources.', { included: ['**/*.yaml'] }),
   );
   const alpha = '{service: {name: alpha}}';
   const mid = '{service: {name: mid}}';
@@ -198,7 +200,6 @@ test('check applies the rule filter so an irrelevant selected file contributes n
   const rulePath = writeFile(
     join(project.rules, 'filtered.yaml'),
     yamlRule(
-      'Filtered review',
       'Review configured services.',
       { included: ['**/*.yaml'] },
       ["  non_empty: '$.data.service'"],
@@ -217,11 +218,11 @@ test('check loads a rules directory recursively and keeps one entry per rule in 
   const project = sandbox.isolated('check-rules-directory');
   const alpha = writeFile(
     join(project.rules, 'alpha.yaml'),
-    yamlRule('Alpha review', 'Review alpha.', { included: ['**/*.yaml'] }),
+    yamlRule('Review alpha.', { included: ['**/*.yaml'] }),
   );
   const beta = writeFile(
     join(project.rules, 'nested', 'beta.yaml'),
-    yamlRule('Beta review', 'Review beta.', { included: ['**/*.yaml'] }),
+    yamlRule('Review beta.', { included: ['**/*.yaml'] }),
   );
   const source = '{service: {name: api}}';
   writeFile(join(project.cwd, 'src', 'a.yaml'), source);
@@ -229,7 +230,7 @@ test('check loads a rules directory recursively and keeps one entry per rule in 
   const list = entries(await runCli(['check', '.', '--rules', project.rules], project), 'rules directory');
 
   assert.deepStrictEqual(list.map(entry => entry.ruleFile), [alpha, beta]);
-  assert.deepStrictEqual(list.map(entry => entry.name), ['Alpha review', 'Beta review']);
+  assert.deepStrictEqual(list.map(entry => entry.name), ['alpha', 'beta']);
   for (const entry of list) assert.deepStrictEqual(entry.contexts, [fileContext('src/a.yaml', source)]);
 });
 
@@ -237,7 +238,7 @@ test('check skips the rule files of the rules directory it is scanning', async (
   const project = sandbox.isolated('check-skip-rule-file');
   const rulePath = writeFile(
     join(project.cwd, 'rules', 'rule.yaml'),
-    yamlRule('Self review', 'Review sources but not itself.', { included: ['**/*.yaml'] }),
+    yamlRule('Review sources but not itself.', { included: ['**/*.yaml'] }),
   );
   const source = '{service: {name: api}}';
   writeFile(join(project.cwd, 'src', 'a.yaml'), source);
@@ -252,7 +253,7 @@ test('check never reviews the rule file an explicit --rules link resolves to', a
   const project = sandbox.isolated('check-rule-alias');
   const rulePath = writeFile(
     join(project.cwd, 'rules', 'policy.yaml'),
-    yamlRule('Aliased review', 'Review sources but not the rule file.', { included: ['**/*.yaml'] }),
+    yamlRule('Review sources but not the rule file.', { included: ['**/*.yaml'] }),
   );
   const source = '{value: 42}';
   writeFile(join(project.cwd, 'data.yaml'), source);
@@ -277,7 +278,7 @@ test('check never descends into .git, node_modules or .rulekeeper', async () => 
   const project = sandbox.isolated('check-skip-directories');
   const rulePath = writeFile(
     join(project.rules, 'skip.yaml'),
-    yamlRule('Skip review', 'Review real sources.', { included: ['**/*.yaml'] }),
+    yamlRule('Review real sources.', { included: ['**/*.yaml'] }),
   );
   const source = '{service: {name: api}}';
   writeFile(join(project.cwd, 'src', 'a.yaml'), source);
@@ -294,7 +295,7 @@ test('check skips symlink entries instead of following them', async () => {
   const project = sandbox.isolated('check-skip-symlinks');
   const rulePath = writeFile(
     join(project.rules, 'skip-links.yaml'),
-    yamlRule('Skip link review', 'Review real sources.', { included: ['**/*.yaml'] }),
+    yamlRule('Review real sources.', { included: ['**/*.yaml'] }),
   );
   const source = '{service: {name: api}}';
   writeFile(join(project.cwd, 'src', 'a.yaml'), source);
@@ -312,7 +313,7 @@ test('check fails on an explicitly named source symlink instead of reporting suc
   const project = sandbox.isolated('check-explicit-symlink');
   const rulePath = writeFile(
     join(project.rules, 'explicit-link.yaml'),
-    yamlRule('Explicit link review', 'Review sources.', { included: ['**/*.yaml'] }),
+    yamlRule('Review sources.', { included: ['**/*.yaml'] }),
   );
   writeFile(join(project.home, 'away', 'real.yaml'), '{service: {name: api}}');
   symlinkSync(join(project.home, 'away', 'real.yaml'), join(project.cwd, 'linked.yaml'));
@@ -325,7 +326,7 @@ test('check never parses a source no rule selects', async () => {
   const cases: readonly (readonly [string, string, readonly (readonly [string, string])[]])[] = [
     [
       'an excluded source',
-      yamlRule('Excluded review', 'Review non-vendor sources.', {
+      yamlRule('Review non-vendor sources.', {
         included: ['config/**/*.yaml'],
         excluded: ['config/vendor/**'],
       }),
@@ -336,7 +337,7 @@ test('check never parses a source no rule selects', async () => {
     ],
     [
       'an unselected source',
-      yamlRule('Selected review', 'Review selected sources.', { included: ['config/**/*.yaml'] }),
+      yamlRule('Review selected sources.', { included: ['config/**/*.yaml'] }),
       [
         ['config/app.yaml', selected],
         ['other/bad.yaml', MALFORMED_YAML],
@@ -368,7 +369,7 @@ test('check fails without stdout for every unusable input', async () => {
       setup: (project) => {
         const rulePath = writeFile(
           join(project.rules, 'atomic.yaml'),
-          yamlRule('Atomic review', 'Review every source.', { included: ['**/*.yaml'] }),
+          yamlRule('Review every source.', { included: ['**/*.yaml'] }),
         );
         writeFile(join(project.cwd, 'src', 'a.yaml'), '{service: {name: api}}');
         writeFile(join(project.cwd, 'src', 'b.yaml'), MALFORMED_YAML);
@@ -382,11 +383,11 @@ test('check fails without stdout for every unusable input', async () => {
       setup: (project) => {
         writeFile(
           join(project.rules, 'good.yaml'),
-          yamlRule('Good review', 'Review sources.', { included: ['**/*.yaml'] }),
+          yamlRule('Review sources.', { included: ['**/*.yaml'] }),
         );
         writeFile(
           join(project.rules, 'bad.yaml'),
-          "version: 'v2'\nname: Bad\nfiles:\n  included: ['**/*.yaml']\nscope:\n  format: yaml\n  path: '$'\nrule: Review.\n",
+          "version: 'v2'\nfiles:\n  included: ['**/*.yaml']\nscope:\n  format: yaml\n  path: '$'\ncheck:\n  rule: Review.\n",
         );
         writeFile(join(project.cwd, 'src', 'a.yaml'), '{a: 1}');
         return ['check', '.', '--rules', project.rules];
@@ -404,7 +405,7 @@ test('check fails without stdout for every unusable input', async () => {
       setup: (project) => {
         const rulePath = writeFile(
           join(project.rules, 'missing-target.yaml'),
-          yamlRule('Missing target review', 'Review sources.', { included: ['**/*.yaml'] }),
+          yamlRule('Review sources.', { included: ['**/*.yaml'] }),
         );
         return ['check', 'absent', '--rules', rulePath];
       },
@@ -436,7 +437,7 @@ test('check decides every context and reports each scope under its own filepath 
   const project = sandbox.isolated('check-decisions');
   const rulePath = writeFile(
     join(project.rules, 'decided.yaml'),
-    yamlRule('Decided review', 'Review every source.', { included: ['**/*.yaml'] }),
+    yamlRule('Review every source.', { included: ['**/*.yaml'] }),
   );
   writeFile(join(project.cwd, 'src', 'a.yaml'), '{service: {name: alpha}}');
   writeFile(join(project.cwd, 'src', 'b.yaml'), '{service: {name: beta}}');
@@ -459,24 +460,24 @@ test('check decides every context and reports each scope under its own filepath 
   backend.reset();
 });
 
-test('check asks the backend for a decision on the whole scope under the documented instruction', async () => {
+test('check asks the backend for a decision on the whole scope beside the rule, its examples and the question', async () => {
   backend.reset();
   const project = sandbox.isolated('check-decision-request');
   const rulePath = writeFile(
     join(project.rules, 'request.yaml'),
     [
       "version: 'v1'",
-      "name: 'Request review'",
       'files:',
       '  included:',
       "    - '**/*.yaml'",
       'scope:',
       '  format: yaml',
       "  path: '$'",
-      'examples:',
-      "  good: ['name: api']",
-      "  bad: ['name: legacy']",
-      "rule: 'Review the service name.'",
+      'check:',
+      "  rule: 'Review the service name.'",
+      '  examples:',
+      "    good: ['name: api']",
+      "    bad: ['name: legacy']",
       '',
     ].join('\n'),
   );
@@ -494,21 +495,10 @@ test('check asks the backend for a decision on the whole scope under the documen
 
   const body = request.body;
   if (!isMapping(body)) throw new Error('the decision request must be a JSON mapping');
-  const questions = body.questions;
-  if (!isMapping(questions)) throw new Error('the decision request must carry its questions');
-  const asked = questions.follows_instructions;
-  if (!isMapping(asked)) throw new Error('the decision request must ask follows_instructions');
-  const instructions = asked.instructions;
-  if (!isMapping(instructions)) throw new Error('the decision request must carry the instructions');
-  // The question is prose the service owns, so this pins that one was asked, not how it is worded.
-  assert.notStrictEqual(
-    requireString(instructions.question, 'instructions.question').trim(),
-    '',
-    'the instruction must carry a review question',
-  );
-  // The review state carries where the scope lives and the data selected for it, beside the rule
-  // and examples it is judged against, and nothing else. The parsed data already carries the whole
-  // scope, so the raw source text is not repeated on the wire.
+  // The review state carries where the scope lives and the data selected for it, beside the one
+  // question it is judged against: the rule, the examples that illustrate it and the question itself,
+  // and nothing else. The parsed data already carries the whole scope, so the raw source text is not
+  // repeated on the wire.
   assert.deepStrictEqual(body, {
     model: backend.model,
     state: { filepath: 'config/app.yaml', scope: { id: '0:', data: { name: 'api' } } },
@@ -518,7 +508,7 @@ test('check asks the backend for a decision on the whole scope under the documen
         instructions: {
           rule: 'Review the service name.',
           examples: { good: ['name: api'], bad: ['name: legacy'] },
-          question: instructions.question,
+          question: 'Is the rule respected?',
         },
       },
     },
@@ -533,7 +523,7 @@ test('check prints nothing when the backend fails after answering an earlier con
   const project = sandbox.isolated('check-backend-failure');
   const rulePath = writeFile(
     join(project.rules, 'partial.yaml'),
-    yamlRule('Partial review', 'Review every source.', { included: ['**/*.yaml'] }),
+    yamlRule('Review every source.', { included: ['**/*.yaml'] }),
   );
   writeFile(join(project.cwd, 'src', 'a.yaml'), '{service: {name: api}}');
   writeFile(join(project.cwd, 'src', 'b.yaml'), '{service: {name: legacy}}');
@@ -552,7 +542,7 @@ test('check and validate never call the backend when there is nothing to decide'
   const project = sandbox.isolated('check-no-decision');
   const rulePath = writeFile(
     join(project.rules, 'unmatched.yaml'),
-    yamlRule('Unmatched review', 'Review nothing.', { included: ['nothing/**/*.yaml'] }),
+    yamlRule('Review nothing.', { included: ['nothing/**/*.yaml'] }),
   );
   writeFile(join(project.cwd, 'src', 'a.yaml'), '{a: 1}');
 
@@ -581,7 +571,6 @@ test('a rule with unknown fields still runs, warning on stderr and keeping stdou
     join(project.rules, 'typo.yaml'),
     [
       "version: 'v1'",
-      "name: 'Typo review'",
       'files:',
       '  included:',
       "    - '**/*.yaml'",
@@ -590,12 +579,13 @@ test('a rule with unknown fields still runs, warning on stderr and keeping stdou
       'scope:',
       '  format: yaml',
       "  path: '$'",
-      'examples: { good: [g], typo: [] }',
+      'check:',
+      "  rule: 'Review every source.'",
+      '  examples: { good: [g], typo: [] }',
       'decision:',
       '  group_by: project',
       '  depth: 2',
       'prompt: a legacy instruction',
-      "rule: 'Review every source.'",
       '',
     ].join('\n'),
   );
@@ -603,7 +593,7 @@ test('a rule with unknown fields still runs, warning on stderr and keeping stdou
   const warnings = [
     'WARN Unknown field: rule.prompt (ignored)',
     'WARN Unknown field: rule.files.ignored (ignored)',
-    'WARN Unknown field: rule.examples.typo (ignored)',
+    'WARN Unknown field: rule.check.examples.typo (ignored)',
     'WARN Unknown field: rule.decision.depth (ignored)',
   ];
 
@@ -613,7 +603,7 @@ test('a rule with unknown fields still runs, warning on stderr and keeping stdou
   assert.deepStrictEqual(validated.stderr.split('\n').slice(0, -1).sort(), [...warnings].sort());
 
   const entry = soleEntry(await runCli(['check', '.', '--rules', rulePath], project), 'unknown fields');
-  assert.strictEqual(entry.name, 'Typo review', 'the rule must still be reviewed under its known name');
+  assert.strictEqual(entry.name, 'typo', 'the rule must still be reviewed under its derived name');
   assert.strictEqual(entry.rule, 'Review every source.', 'the known instruction must survive verbatim');
   assert.strictEqual(entry.decisions.length, 1, 'the ignored fields must not stop the decision');
   assert.strictEqual(backend.requests.length, 1, 'the ignored fields must not drop the source');
@@ -625,7 +615,7 @@ test('check fails without a backend key instead of reaching a backend', async ()
   const project = sandbox.isolated('check-missing-key');
   const rulePath = writeFile(
     join(project.rules, 'keyed.yaml'),
-    yamlRule('Keyed review', 'Review every source.', { included: ['**/*.yaml'] }),
+    yamlRule('Review every source.', { included: ['**/*.yaml'] }),
   );
   writeFile(join(project.cwd, 'src', 'a.yaml'), '{service: {name: api}}');
 
@@ -641,7 +631,7 @@ test('the CLI loads decision settings from .env without overriding shell setting
   const project = sandbox.isolated('check-dotenv');
   const rulePath = writeFile(
     join(project.rules, 'dotenv.yaml'),
-    yamlRule('Environment review', 'Review the source.', { included: ['**/*.yaml'] }),
+    yamlRule('Review the source.', { included: ['**/*.yaml'] }),
   );
   writeFile(join(project.cwd, 'app.yaml'), '{name: api}');
   writeFile(join(project.cwd, '.env'), [

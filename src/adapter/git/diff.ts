@@ -167,8 +167,8 @@ async function rawFiles(repoRoot: string, mergeBase: string, head: string): Prom
   return parseRaw(outcome.stdout);
 }
 
-export async function branchDiff(base?: string): Promise<BranchDiff> {
-  const repoRoot = await findRepoRoot(process.cwd());
+export async function branchDiff(base?: string, cwd?: string): Promise<BranchDiff> {
+  const repoRoot = await findRepoRoot(cwd ?? process.cwd());
 
   const head = await resolveCommit(repoRoot, 'HEAD');
   if (head === undefined) {

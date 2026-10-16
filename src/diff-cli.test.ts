@@ -90,12 +90,12 @@ function containerData(name: string, limit: string, request = '512Mi'): unknown 
   };
 }
 
-function containersRule(name: string, included: readonly string[], changed?: boolean): string {
-  const lines = ["version: 'v1'", `name: '${name}'`, 'files:', '  included:'];
+function containersRule(included: readonly string[], changed?: boolean): string {
+  const lines = ["version: 'v1'", 'files:', '  included:'];
   for (const glob of included) lines.push(`    - '${glob}'`);
   lines.push('scope:', '  format: yaml', "  path: '$.containers[*]'", "  key: '$.name'");
   if (changed === false) lines.push('  changed: false');
-  lines.push('rule: Review the container memory settings.');
+  lines.push('check:', "  rule: 'Review the container memory settings.'");
   return `${lines.join('\n')}\n`;
 }
 
@@ -161,7 +161,7 @@ test('check --diff-only compares against the inferred default base or the one na
   runGit(repo.cwd, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'], repo.env);
   publish(repo, 'my-branch', fork);
 
-  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule('containers', ['charts/**/*.yaml']));
+  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule(['charts/**/*.yaml']));
   const cases: readonly (readonly [string, readonly string[], readonly string[]])[] = [
     ['inferred default base', [], ['charts/app/values.yaml', 'charts/lib/values.yaml']],
     ['explicit --base origin/my-branch', ['--base', 'origin/my-branch'], ['charts/lib/values.yaml']],
@@ -194,7 +194,7 @@ test('check --diff-only compares from the merge base so a base-only change is ex
   commit(repo, 'base only');
   runGit(repo.cwd, ['checkout', '-q', 'feature'], repo.env);
 
-  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule('containers', ['charts/**/*.yaml']));
+  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule(['charts/**/*.yaml']));
   const contexts = contextsOf(
     soleEntry(await runCli(['check', '.', '--rules', rulePath, '--diff-only', '--base', 'main'], repo), 'merge-base'),
     'merge-base',
@@ -217,7 +217,7 @@ test('check --diff-only reviews frozen HEAD snapshots and ignores the dirty work
   runGit(repo.cwd, ['add', 'charts/staged/values.yaml'], repo.env);
   writeFile(join(repo.cwd, 'charts/untracked/values.yaml'), values(container('untracked', '5Gi')));
 
-  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule('containers', ['charts/**/*.yaml']));
+  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule(['charts/**/*.yaml']));
   const contexts = contextsOf(
     soleEntry(
       await runCli(['check', '.', '--rules', rulePath, '--diff-only', '--base', 'main'], repo),
@@ -286,7 +286,7 @@ test('check --diff-only still restricts a scope.changed false rule to changed sc
 
   const rulePath = writeFile(
     join(repo.rules, 'unchanged-scope.yaml'),
-    containersRule('unchanged-scope', ['charts/**/*.yaml'], false),
+    containersRule(['charts/**/*.yaml'], false),
   );
   const diff = contextsOf(
     soleEntry(await runCli(['check', '.', '--rules', rulePath, '--diff-only', '--base', 'main'], repo), 'changed-false diff'),
@@ -312,7 +312,7 @@ test('check --diff-only narrows the changed scopes to the positional target', as
   writeFile(join(repo.cwd, 'charts/b/values.yaml'), values(container('b', '2Gi')));
   commit(repo, 'bump both');
 
-  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule('containers', ['charts/**/*.yaml']));
+  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule(['charts/**/*.yaml']));
   const cases: readonly (readonly [readonly string[], readonly string[]])[] = [
     [['charts'], ['charts/a/values.yaml', 'charts/b/values.yaml']],
     [['charts/a'], ['charts/a/values.yaml']],
@@ -336,7 +336,7 @@ test('check --diff-only reports the scopes of an added file', async () => {
   writeFile(join(repo.cwd, 'charts/new/values.yaml'), values(container('new', '2Gi')));
   commit(repo, 'add new');
 
-  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule('containers', ['charts/**/*.yaml']));
+  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule(['charts/**/*.yaml']));
   const contexts = diffContexts(
     await runCli(['check', '.', '--rules', rulePath, '--diff-only', '--base', 'main'], repo),
     'added-file',
@@ -357,7 +357,7 @@ test('check --diff-only emits nothing for a deleted file and accepts an absent t
   writeFile(join(repo.cwd, 'charts/app/values.yaml'), values(container('app', '2Gi')));
   commit(repo, 'delete gone, bump app');
 
-  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule('containers', ['charts/**/*.yaml']));
+  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule(['charts/**/*.yaml']));
   const contexts = contextsOf(
     soleEntry(
       await runCli(['check', '.', '--rules', rulePath, '--diff-only', '--base', 'main'], repo),
@@ -382,7 +382,7 @@ test('check --diff-only emits nothing for a pure rename of an unchanged scope', 
   move(repo, 'charts/app/values.yaml', 'charts/moved/values.yaml');
   commit(repo, 'move');
 
-  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule('containers', ['charts/**/*.yaml']));
+  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule(['charts/**/*.yaml']));
   const entry = soleEntry(
     await runCli(['check', '.', '--rules', rulePath, '--diff-only', '--base', 'main'], repo),
     'pure-rename',
@@ -399,7 +399,7 @@ test('check --diff-only treats a rename into a newly matched path as an addition
   move(repo, 'other/values.yaml', 'charts/moved/values.yaml');
   commit(repo, 'move into scope');
 
-  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule('containers', ['charts/**/*.yaml']));
+  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule(['charts/**/*.yaml']));
   const contexts = diffContexts(
     await runCli(['check', '.', '--rules', rulePath, '--diff-only', '--base', 'main'], repo),
     'rename-new-path',
@@ -418,7 +418,7 @@ test('check --diff-only reports the changed scope of a rename that also edits co
   writeFile(join(repo.cwd, 'charts/moved/values.yaml'), values(container('app', '2Gi')));
   commit(repo, 'move and bump');
 
-  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule('containers', ['charts/**/*.yaml']));
+  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule(['charts/**/*.yaml']));
   const contexts = diffContexts(
     await runCli(['check', '.', '--rules', rulePath, '--diff-only', '--base', 'main'], repo),
     'rename-edited',
@@ -444,7 +444,7 @@ test('check --diff-only handles filepaths with spaces, globs and tabs', async ()
   writeFile(join(repo.cwd, tabbed), values(container('tab', '2Gi')));
   commit(repo, 'bump three');
 
-  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule('containers', ['charts/**/*.yaml']));
+  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule(['charts/**/*.yaml']));
   const contexts = diffContexts(
     await runCli(['check', '.', '--rules', rulePath, '--diff-only', '--base', 'main'], repo),
     'path-safety',
@@ -466,7 +466,7 @@ test('check --diff-only decides each changed scope and sends the context it revi
   writeFile(join(repo.cwd, 'charts/app/values.yaml'), source);
   commit(repo, 'app change');
 
-  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule('containers', ['charts/**/*.yaml']));
+  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule(['charts/**/*.yaml']));
   const entry = soleEntry(
     await runCli(['check', '.', '--rules', rulePath, '--diff-only', '--base', 'main'], repo),
     'diff decisions',
@@ -504,7 +504,7 @@ test('check --diff-only skips vcs, dependency and rule directories', async () =>
   writeFile(join(repo.cwd, '.rulekeeper/values.yaml'), values(container('rules', '1Gi')));
   commit(repo, 'bump app, add dependency and rule files');
 
-  const rulePath = writeFile(join(repo.rules, 'any.yaml'), containersRule('any', ['**/*.yaml']));
+  const rulePath = writeFile(join(repo.rules, 'any.yaml'), containersRule(['**/*.yaml']));
   const contexts = contextsOf(
     soleEntry(await runCli(['check', '.', '--rules', rulePath, '--diff-only', '--base', 'main'], repo), 'skipped-dirs'),
     'skipped-dirs',
@@ -533,7 +533,7 @@ test('check --diff-only skips symlink and submodule entries', async () => {
   runGit(repo.cwd, ['update-index', '--add', '--cacheinfo', `160000,${pinned},charts/sub`], repo.env);
   runGit(repo.cwd, ['commit', '-q', '-m', 'change link, bump real'], repo.env);
 
-  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule('containers', ['charts/**/*.yaml']));
+  const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule(['charts/**/*.yaml']));
   const contexts = diffContexts(
     await runCli(['check', '.', '--rules', rulePath, '--diff-only', '--base', 'main'], repo),
     'skipped-modes',
@@ -582,7 +582,7 @@ test('check --diff-only fails before reading any source', async () => {
     writeFile(join(repo.cwd, 'charts/app/values.yaml'), values(container('app', '1Gi')));
     commit(repo, 'base');
     prepare?.(repo);
-    const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule('containers', ['charts/**/*.yaml']));
+    const rulePath = writeFile(join(repo.rules, 'containers.yaml'), containersRule(['charts/**/*.yaml']));
 
     assertFailed(await runCli(args(rulePath), repo), label);
   }
@@ -590,8 +590,8 @@ test('check --diff-only fails before reading any source', async () => {
 
 test('check --diff-only still discovers rules from both roots', async () => {
   const repo = createRepo('discovery');
-  writeFile(join(repo.cwd, '.rulekeeper/containers.yaml'), containersRule('local-rule', ['charts/**/*.yaml']));
-  writeFile(join(repo.home, '.rulekeeper', 'containers.yaml'), containersRule('home-rule', ['charts/**/*.yaml']));
+  writeFile(join(repo.cwd, '.rulekeeper/containers.yaml'), containersRule(['charts/**/*.yaml']));
+  writeFile(join(repo.home, '.rulekeeper', 'containers.yaml'), containersRule(['charts/**/*.yaml']));
   writeFile(join(repo.cwd, 'charts/app/values.yaml'), values(container('app', '1Gi')));
   commit(repo, 'base');
   checkoutNew(repo, 'feature');
@@ -600,7 +600,7 @@ test('check --diff-only still discovers rules from both roots', async () => {
 
   const list = entries(await runCli(['check', '.', '--diff-only', '--base', 'main'], repo), 'discovery');
 
-  assert.deepStrictEqual(list.map(entry => entry.name), ['local-rule', 'home-rule']);
+  assert.deepStrictEqual(list.map(entry => entry.name), ['containers', 'containers']);
   for (const entry of list) {
     const contexts = contextsOf(entry, `discovery ${entry.name}`);
     assert.deepStrictEqual(filepaths(contexts), ['charts/app/values.yaml']);
@@ -615,15 +615,15 @@ test('check --diff-only applies every rule of an explicit rules directory', asyn
   checkoutNew(repo, 'feature');
   writeFile(join(repo.cwd, 'charts/app/values.yaml'), values(container('app', '2Gi')));
   commit(repo, 'feature change');
-  writeFile(join(repo.rules, 'a.yaml'), containersRule('rule-a', ['charts/**/*.yaml']));
-  writeFile(join(repo.rules, 'b.yaml'), containersRule('rule-b', ['charts/**/*.yaml']));
+  writeFile(join(repo.rules, 'a.yaml'), containersRule(['charts/**/*.yaml']));
+  writeFile(join(repo.rules, 'b.yaml'), containersRule(['charts/**/*.yaml']));
 
   const list = entries(
     await runCli(['check', '.', '--rules', repo.rules, '--diff-only', '--base', 'main'], repo),
     'rules-dir',
   );
 
-  assert.deepStrictEqual(list.map(entry => entry.name), ['rule-a', 'rule-b']);
+  assert.deepStrictEqual(list.map(entry => entry.name), ['a', 'b']);
   for (const entry of list) {
     const contexts = contextsOf(entry, `rules-dir ${entry.name}`);
     assert.deepStrictEqual(filepaths(contexts), ['charts/app/values.yaml']);
@@ -635,24 +635,24 @@ test('check --diff-only never reviews a descriptor an explicit --rules link reso
   const repo = createRepo('rule-alias');
   // A whole-document rule that selects every YAML source, its own descriptor file included. The two
   // committed versions differ inside the document, so a leaked descriptor is a visible context.
-  const rule = (name: string): string =>
+  const rule = (instruction: string): string =>
     [
       "version: 'v1'",
-      `name: '${name}'`,
       'files:',
       '  included:',
       "    - '**/*.yaml'",
       'scope:',
       '  format: yaml',
       "  path: '$'",
-      'rule: Review every source.',
+      'check:',
+      `  rule: '${instruction}'`,
       '',
     ].join('\n');
-  writeFile(join(repo.cwd, 'rules/policy.yaml'), rule('base copy'));
+  writeFile(join(repo.cwd, 'rules/policy.yaml'), rule('Review every source from the base copy.'));
   writeFile(join(repo.cwd, 'data.yaml'), 'value: 42\n');
   commit(repo, 'base');
   checkoutNew(repo, 'feature');
-  writeFile(join(repo.cwd, 'rules/policy.yaml'), rule('aliased'));
+  writeFile(join(repo.cwd, 'rules/policy.yaml'), rule('Review every source once aliased.'));
   writeFile(join(repo.cwd, 'data.yaml'), 'value: 43\n');
   commit(repo, 'change rule and data');
   // Untracked links to that descriptor: the rule is loaded through them and no committed path

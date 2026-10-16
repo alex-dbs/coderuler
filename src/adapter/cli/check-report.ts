@@ -43,6 +43,7 @@ const MINIMUM_BAR_WIDTH = 6;
 const MAXIMUM_BAR_WIDTH = 28;
 const MAXIMUM_ACTIVITY_LINES = 4;
 const MAXIMUM_REPORTED_VIOLATIONS = 10;
+const MAXIMUM_SOURCE_LINES = 5;
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/g;
 const SOURCE_CONTROL_CHARACTERS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
 const COLOR_STREAM = { stream: process.stdout } as const;
@@ -97,7 +98,7 @@ function contextIndex(contexts: readonly Context[]): Map<string, Context> {
 }
 
 function sourceLines(source: string): string[] {
-  const lines = source.split('\n');
+  const lines = source.split('\n', MAXIMUM_SOURCE_LINES + 2);
   if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
   return lines;
 }
@@ -106,11 +107,15 @@ function sourceBlock(context: Context | undefined): readonly string[] {
   if (context === undefined) return [];
   const start = context.scope.lines?.start;
   const lines = sourceLines(context.scope.source);
+  const truncated = lines.length > MAXIMUM_SOURCE_LINES;
+  if (truncated) lines.length = MAXIMUM_SOURCE_LINES;
   const width = start === undefined ? 0 : String(start + lines.length - 1).length;
-  return lines.map((line, position) => {
+  const rendered = lines.map((line, position) => {
     const text = sanitizeSourceLine(line);
     return start === undefined ? `    ${text}` : `    ${String(start + position).padStart(width)} | ${text}`;
   });
+  if (truncated) rendered.push('    …');
+  return rendered;
 }
 
 function scopeLabel(filepath: string, context: Context | undefined): string {
@@ -121,8 +126,8 @@ function scopeLabel(filepath: string, context: Context | undefined): string {
 
 function violationHeader(rule: CheckedRule): string {
   const base = sanitizeText(rule.name);
-  if (rule.title === undefined) return base;
-  const message = sanitizeText(rule.title);
+  if (rule.violationMessage === undefined) return base;
+  const message = sanitizeText(rule.violationMessage);
   return message === '' ? base : `${base} — ${message}`;
 }
 

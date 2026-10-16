@@ -20,12 +20,29 @@ type ProtoRpcData = {
   readonly http: { readonly bindings: readonly ProtoHttpBinding[] };
 };
 
-interface ProtoRpcRecord {
+export type ProtoSpan = {
+  readonly start: number;
+  readonly end: number;
+};
+
+export type ProtoBindingSpans = {
+  readonly span: ProtoSpan;
+  readonly method: ProtoSpan;
+  readonly url: ProtoSpan;
+};
+
+export type ProtoRpcSpans = {
+  readonly http: ProtoSpan;
+  readonly bindings: readonly ProtoBindingSpans[];
+};
+
+export interface ProtoRpcRecord {
   readonly id: string;
   readonly source: string;
   readonly start: number;
   readonly end: number;
   readonly data: ProtoRpcData;
+  readonly spans: ProtoRpcSpans;
 }
 
 const STANDARD_VERBS: Record<string, string> = {
@@ -308,11 +325,44 @@ function skipStatement(tokens: readonly ProtoToken[], index: number): number {
 interface CustomDraft {
   kind?: string;
   path?: string;
+  span?: ProtoSpan;
+  kindSpan?: ProtoSpan;
+  pathSpan?: ProtoSpan;
 }
 
+type OptionField = {
+  readonly name: string;
+  readonly start: number;
+  readonly end: number;
+};
+
+type StringValue = {
+  readonly value: string;
+  readonly next: number;
+  readonly span: ProtoSpan;
+};
+
 type RuleEntry =
-  | { readonly kind: 'binding'; readonly method: string; readonly url: string }
+  | {
+      readonly kind: 'binding';
+      readonly method: string;
+      readonly url: string;
+      readonly span: ProtoSpan;
+      readonly methodSpan: ProtoSpan;
+      readonly urlSpan: ProtoSpan;
+    }
   | { readonly kind: 'custom'; readonly draft: CustomDraft };
+
+function extendSpan(current: ProtoSpan | undefined, next: ProtoSpan): ProtoSpan {
+  if (current === undefined) return next;
+  return { start: Math.min(current.start, next.start), end: Math.max(current.end, next.end) };
+}
+
+function mergeSpans(spans: readonly ProtoSpan[]): ProtoSpan | undefined {
+  let merged: ProtoSpan | undefined;
+  for (const span of spans) merged = extendSpan(merged, span);
+  return merged;
+}
 
 interface RuleDraft {
   readonly entries: RuleEntry[];
@@ -341,10 +391,16 @@ function customDraft(rule: RuleDraft, field: 'kind' | 'path'): CustomDraft {
   return draft;
 }
 
-function flattenRule(rule: RuleDraft, out: ProtoHttpBinding[]): void {
+function flattenRule(rule: RuleDraft, out: ProtoHttpBinding[], spans: ProtoBindingSpans[]): void {
   for (const entry of rule.entries) {
-    if (entry.kind === 'binding') out.push({ method: entry.method, url: entry.url });
-    else out.push({ method: entry.draft.kind ?? '', url: entry.draft.path ?? '' });
+    if (entry.kind === 'binding') {
+      out.push({ method: entry.method, url: entry.url });
+      spans.push({ span: entry.span, method: entry.methodSpan, url: entry.urlSpan });
+      continue;
+    }
+    out.push({ method: entry.draft.kind ?? '', url: entry.draft.path ?? '' });
+    const span = entry.draft.span!;
+    spans.push({ span, method: entry.draft.kindSpan ?? span, url: entry.draft.pathSpan ?? span });
   }
 }
 
@@ -355,6 +411,7 @@ interface PendingRecord {
   readonly source: string;
   readonly start: number;
   readonly end: number;
+  readonly spans: ProtoRpcSpans;
 }
 
 class ProtoReader {
@@ -362,6 +419,7 @@ class ProtoReader {
   private readonly source: string;
   private index = 0;
   private packageName = '';
+  private httpSpans: ProtoSpan[] = [];
   private readonly records: PendingRecord[] = [];
 
   constructor(source: string) {
@@ -387,7 +445,7 @@ class ProtoReader {
         name: record.name,
         http: { bindings: record.bindings },
       };
-      return { id, source: record.source, start: record.start, end: record.end, data };
+      return { id, source: record.source, start: record.start, end: record.end, data, spans: record.spans };
     });
   }
 
@@ -442,6 +500,7 @@ class ProtoReader {
 
   private readRpc(start: number, serviceName: string): number {
     const startOffset = this.tokens[start]!.start;
+    this.httpSpans = [];
     let cursor = start + 1;
     const nameToken = this.tokens[cursor];
     if (nameToken === undefined || nameToken.kind !== 'ident') throw new Error('Malformed rpc declaration in protobuf source');
@@ -455,6 +514,7 @@ class ProtoReader {
     cursor = skipBalanced(this.tokens, cursor);
 
     let bindings: readonly ProtoHttpBinding[] = [];
+    let bindingSpans: readonly ProtoBindingSpans[] = [];
     let endOffset: number;
     const bodyToken = this.tokens[cursor];
     if (bodyToken?.text === ';') {
@@ -463,6 +523,7 @@ class ProtoReader {
     } else if (bodyToken?.text === '{') {
       const body = this.readRpcBody(cursor);
       bindings = body.bindings;
+      bindingSpans = body.spans;
       cursor = body.next;
       const terminator = this.tokens[cursor];
       if (terminator?.text === ';') {
@@ -482,19 +543,29 @@ class ProtoReader {
       source: this.source.slice(startOffset, endOffset),
       start: startOffset,
       end: endOffset,
+      spans: {
+        http: mergeSpans(this.httpSpans) ?? { start: startOffset, end: endOffset },
+        bindings: bindingSpans,
+      },
     });
     return cursor;
   }
 
-  private readRpcBody(start: number): { bindings: readonly ProtoHttpBinding[]; next: number; closeEnd: number } {
+  private readRpcBody(start: number): {
+    bindings: readonly ProtoHttpBinding[];
+    spans: readonly ProtoBindingSpans[];
+    next: number;
+    closeEnd: number;
+  } {
     const rule: RuleDraft = { entries: [], customs: [] };
     let cursor = start + 1;
     while (cursor < this.tokens.length) {
       const token = this.tokens[cursor]!;
       if (token.text === '}') {
         const bindings: ProtoHttpBinding[] = [];
-        flattenRule(rule, bindings);
-        return { bindings, next: cursor + 1, closeEnd: token.end };
+        const spans: ProtoBindingSpans[] = [];
+        flattenRule(rule, bindings, spans);
+        return { bindings, spans, next: cursor + 1, closeEnd: token.end };
       }
       if (token.kind === 'ident' && token.text === 'option') cursor = this.readOption(cursor, rule);
       else {
@@ -511,10 +582,18 @@ class ProtoReader {
     if (name.name !== 'google.api.http') return skipStatement(this.tokens, start);
     let cursor = name.next;
     if (this.tokens[cursor]?.text === '=') cursor++;
-    return this.assignHttpPath(name.fields, cursor, rule);
+    const next = this.assignHttpPath(name.fields, cursor, rule);
+    this.httpSpans.push({ start: this.tokens[start]!.start, end: this.statementEnd(next) });
+    return next;
   }
 
-  private readOptionName(start: number): { name: string; fields: readonly string[]; next: number } {
+  private statementEnd(cursor: number): number {
+    const terminator = this.tokens[cursor];
+    if (terminator?.text === ';') return terminator.end;
+    return this.tokens[cursor - 1]!.end;
+  }
+
+  private readOptionName(start: number): { name: string; fields: readonly OptionField[]; next: number } {
     let cursor = start + 1;
     let name = '';
     while (cursor < this.tokens.length && this.tokens[cursor]!.text !== ')') {
@@ -524,18 +603,19 @@ class ProtoReader {
     }
     if (this.tokens[cursor]?.text !== ')') throw new Error('Unterminated option name in protobuf source');
     cursor++;
-    const fields: string[] = [];
+    const fields: OptionField[] = [];
     while (this.tokens[cursor]?.text === '.' && this.tokens[cursor + 1]?.kind === 'ident') {
-      fields.push(this.tokens[cursor + 1]!.text);
+      const token = this.tokens[cursor + 1]!;
+      fields.push({ name: token.text, start: token.start, end: token.end });
       cursor += 2;
     }
     return { name: name.replace(/^\.+/, ''), fields, next: cursor };
   }
 
-  private assignHttpPath(fields: readonly string[], cursor: number, rule: RuleDraft): number {
+  private assignHttpPath(fields: readonly OptionField[], cursor: number, rule: RuleDraft): number {
     let target = rule;
     let index = 0;
-    while (fields[index] === 'additional_bindings') {
+    while (fields[index]?.name === 'additional_bindings') {
       const terminal = index + 1 === fields.length;
       if (terminal && this.tokens[cursor]?.text === '[') return this.readBindingList(cursor, target);
       target = terminal ? newAdditionDraft(target) : additionDraft(target);
@@ -549,25 +629,42 @@ class ProtoReader {
       if (form === '[') return this.readBindingList(cursor, target);
       return skipStatement(this.tokens, cursor);
     }
-    if (head === 'custom') {
-      if (index + 1 === fields.length) return this.readCustom(cursor, target);
-      const field = fields[index + 1];
-      if (index + 2 === fields.length && (field === 'kind' || field === 'path')) {
+    if (head.name === 'custom') {
+      if (index + 1 === fields.length) return this.readCustom(cursor, target, head.start);
+      const field = fields[index + 1]!;
+      const name = index + 2 === fields.length ? field.name : undefined;
+      if (name === 'kind' || name === 'path') {
         const value = this.readStringValue(cursor);
-        const draft = customDraft(target, field);
-        if (field === 'kind') draft.kind = value.value;
-        else draft.path = value.value;
+        this.assignCustomField(customDraft(target, name), name, { start: field.start, end: value.span.end }, value);
         return value.next;
       }
       return skipStatement(this.tokens, cursor);
     }
-    const verb = STANDARD_VERBS[head];
+    const verb = STANDARD_VERBS[head.name];
     if (verb !== undefined && index + 1 === fields.length) {
       const value = this.readStringValue(cursor);
-      target.entries.push({ kind: 'binding', method: verb, url: value.value });
+      target.entries.push({
+        kind: 'binding',
+        method: verb,
+        url: value.value,
+        span: { start: head.start, end: value.span.end },
+        methodSpan: { start: head.start, end: head.end },
+        urlSpan: value.span,
+      });
       return value.next;
     }
     return skipStatement(this.tokens, cursor);
+  }
+
+  private assignCustomField(draft: CustomDraft, field: 'kind' | 'path', span: ProtoSpan, value: StringValue): void {
+    if (field === 'kind') {
+      draft.kind = value.value;
+      draft.kindSpan = value.span;
+    } else {
+      draft.path = value.value;
+      draft.pathSpan = value.span;
+    }
+    draft.span = extendSpan(draft.span, span);
   }
 
   private readHttpRule(start: number, rule: RuleDraft, close = '}'): number {
@@ -585,12 +682,19 @@ class ProtoReader {
       const verb = STANDARD_VERBS[field];
       if (verb !== undefined) {
         const value = this.readStringValue(valueStart);
-        rule.entries.push({ kind: 'binding', method: verb, url: value.value });
+        rule.entries.push({
+          kind: 'binding',
+          method: verb,
+          url: value.value,
+          span: { start: token.start, end: value.span.end },
+          methodSpan: { start: token.start, end: token.end },
+          urlSpan: value.span,
+        });
         cursor = value.next;
         continue;
       }
       if (field === 'custom') {
-        cursor = this.readCustom(valueStart, rule);
+        cursor = this.readCustom(valueStart, rule, token.start);
         continue;
       }
       if (field === 'additional_bindings') {
@@ -631,7 +735,7 @@ class ProtoReader {
     throw new Error('Unterminated additional_bindings list in protobuf source');
   }
 
-  private readCustom(start: number, rule: RuleDraft): number {
+  private readCustom(start: number, rule: RuleDraft, keywordStart: number): number {
     const open = this.tokens[start]?.text;
     if (open !== '{' && open !== '<') return this.skipValue(start);
     const close = open === '{' ? '}' : '>';
@@ -641,7 +745,10 @@ class ProtoReader {
     let cursor = start + 1;
     while (cursor < this.tokens.length) {
       const token = this.tokens[cursor]!;
-      if (token.text === close) return cursor + 1;
+      if (token.text === close) {
+        draft.span = extendSpan(draft.span, { start: keywordStart, end: token.end });
+        return cursor + 1;
+      }
       if (token.kind !== 'ident') {
         cursor++;
         continue;
@@ -651,8 +758,7 @@ class ProtoReader {
       if (this.tokens[valueStart]?.text === ':') valueStart++;
       if (field === 'kind' || field === 'path') {
         const value = this.readStringValue(valueStart);
-        if (field === 'kind') draft.kind = value.value;
-        else draft.path = value.value;
+        this.assignCustomField(draft, field, { start: token.start, end: value.span.end }, value);
         cursor = value.next;
         continue;
       }
@@ -661,7 +767,7 @@ class ProtoReader {
     throw new Error('Unterminated custom http binding in protobuf source');
   }
 
-  private readStringValue(start: number): { value: string; next: number } {
+  private readStringValue(start: number): StringValue {
     const first = this.tokens[start];
     if (first === undefined || first.kind !== 'string') {
       throw new Error('Expected a string literal in google.api.http option');
@@ -674,7 +780,8 @@ class ProtoReader {
       cursor++;
     }
     flushByteRun(bytes, out);
-    return { value: out.join(''), next: cursor };
+    const last = this.tokens[cursor - 1]!;
+    return { value: out.join(''), next: cursor, span: { start: first.start, end: last.end } };
   }
 
   private skipValue(start: number): number {

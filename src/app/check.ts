@@ -52,6 +52,22 @@ export function createCheck(dependencies: CheckDependencies): Check {
         stageAt = now;
       }
 
+      const active = loaded.filter(({ rule }) => rule.enabled);
+      if (active.length === 0) {
+        progress?.sources(0);
+        progress?.decisions({ matchingRules: 0, scopes: 0, total: 0 });
+        diagnostics?.important('decisions.planned', { rules: 0, scopes: 0, units: 0 });
+        diagnostics?.important('decisions.complete', { units: 0, passed: 0, violations: 0, ms: 0 });
+        diagnostics?.important('run.complete', {
+          rules: 0,
+          scopes: 0,
+          files: 0,
+          units: 0,
+          ms: Math.round(performance.now() - startedAt),
+        });
+        return [];
+      }
+
       phase = 'identities';
       const rulePaths = await dependencies.contexts.identities(loaded, concurrency, diagnostics);
       if (diagnostics !== undefined) {
@@ -61,7 +77,7 @@ export function createCheck(dependencies: CheckDependencies): Check {
       }
 
       phase = 'sources';
-      const grouped = loaded.map(({ rule }) => rule.decision.group_by !== 'scope');
+      const grouped = active.map(({ rule }) => rule.decision.group_by !== 'scope');
       const sourceProgress: SourceProgress = {
         start: (total) => progress?.sources(total),
         complete: () => progress?.sourceComplete(),
@@ -69,7 +85,7 @@ export function createCheck(dependencies: CheckDependencies): Check {
       const contextsByRule = await dependencies.contexts.collect(
         target,
         { diffOnly: options.diffOnly === true, base: options.base },
-        loaded,
+        active,
         grouped,
         rulePaths,
         concurrency,
@@ -81,7 +97,7 @@ export function createCheck(dependencies: CheckDependencies): Check {
       if (diagnostics !== undefined) {
         const now = performance.now();
         diagnostics.important('sources.collected', {
-          rules: loaded.length,
+          rules: active.length,
           matched: matchingRules,
           contexts: sourceContexts,
           ms: Math.round(now - stageAt),
@@ -89,7 +105,7 @@ export function createCheck(dependencies: CheckDependencies): Check {
         stageAt = now;
       }
 
-      const decisionContextsByRule = loaded.map(({ rule }, index) =>
+      const decisionContextsByRule = active.map(({ rule }, index) =>
         rule.decision.group_by === 'scope'
           ? contextsByRule[index]!
           : groupContexts(contextsByRule[index]!, rule.decision, dependencies.cwd),
@@ -100,7 +116,7 @@ export function createCheck(dependencies: CheckDependencies): Check {
 
       phase = 'decisions';
       const decisionsByRule = await decideContexts({
-        loaded,
+        loaded: active,
         contexts: decisionContextsByRule,
         concurrency,
         threshold: options.threshold,
@@ -108,7 +124,7 @@ export function createCheck(dependencies: CheckDependencies): Check {
         onDecision: () => progress?.decisionComplete(),
         diagnostics,
       });
-      const results = buildCheckedRules(loaded, contextsByRule, decisionsByRule);
+      const results = buildCheckedRules(active, contextsByRule, decisionsByRule);
 
       if (diagnostics !== undefined) {
         const now = performance.now();

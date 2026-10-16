@@ -2,6 +2,7 @@ import { JevAdapter } from '../adapter/decision/jev.ts';
 import { DecisionService } from '../app/decision/service.ts';
 import { DEFAULT_THRESHOLD, parseThreshold, validateThreshold } from '../app/decision/threshold.ts';
 import type { Diagnostics } from '../app/ports/diagnostics.ts';
+import type { RuleSettings } from '../app/rule/types.ts';
 
 const DEFAULT_BACKEND = 'jev';
 
@@ -19,11 +20,18 @@ function setting(env: NodeJS.ProcessEnv, name: string): string | undefined {
 
 interface ResolvedThreshold {
   readonly threshold: number;
-  readonly source: 'flag' | 'env' | 'default';
+  readonly source: 'flag' | 'rule' | 'env' | 'default';
 }
 
-function resolveThreshold(env: NodeJS.ProcessEnv, override: number | undefined): ResolvedThreshold {
+function resolveThreshold(
+  env: NodeJS.ProcessEnv,
+  override: number | undefined,
+  settings: RuleSettings,
+): ResolvedThreshold {
   if (override !== undefined) return { threshold: validateThreshold(override), source: 'flag' };
+  if (settings.threshold !== undefined) {
+    return { threshold: validateThreshold(settings.threshold, 'rule.settings.threshold'), source: 'rule' };
+  }
   const raw = setting(env, 'RK_THRESHOLD');
   if (raw === undefined) return { threshold: DEFAULT_THRESHOLD, source: 'default' };
   return { threshold: parseThreshold(raw, 'RK_THRESHOLD'), source: 'env' };
@@ -33,20 +41,21 @@ export function createDecisionService(
   env: NodeJS.ProcessEnv = process.env,
   diagnostics?: Diagnostics,
   thresholdOverride?: number,
+  settings: RuleSettings = {},
 ): DecisionService {
-  const backend = setting(env, 'RK_BACKEND') ?? DEFAULT_BACKEND;
+  const backend = settings.backend ?? setting(env, 'RK_BACKEND') ?? DEFAULT_BACKEND;
   if (backend !== 'jev') {
     throw new Error(`Unknown decision backend '${backend}'; supported backends: ${DEFAULT_BACKEND}`);
   }
 
-  const model = setting(env, 'TYPESAFE_DEFAULT_MODEL') ?? DEFAULT_MODEL;
+  const model = settings.model ?? setting(env, 'TYPESAFE_DEFAULT_MODEL') ?? DEFAULT_MODEL;
   const baseUrl = setting(env, 'TYPESAFE_BASE_URL') ?? DEFAULT_BASE_URL;
   const apiKey = setting(env, 'TYPESAFE_API_KEY');
   if (apiKey === undefined) {
     throw new Error('No decision API key: set TYPESAFE_API_KEY');
   }
 
-  const { threshold, source } = resolveThreshold(env, thresholdOverride);
+  const { threshold, source } = resolveThreshold(env, thresholdOverride, settings);
   diagnostics?.important('decision.threshold', { threshold, source });
 
   return new DecisionService(new JevAdapter({ model, baseUrl, apiKey }, diagnostics), threshold);

@@ -276,8 +276,8 @@ export interface RuleFiles {
   readonly excluded?: readonly string[];
 }
 
-export function yamlRule(name: string, rule: string, files: RuleFiles, filter?: readonly string[]): string {
-  const lines = ["version: 'v1'", `name: '${name}'`, 'files:', '  included:'];
+export function yamlRule(rule: string, files: RuleFiles, filter?: readonly string[]): string {
+  const lines = ["version: 'v1'", 'files:', '  included:'];
   for (const glob of files.included) lines.push(`    - '${glob}'`);
   if (files.excluded !== undefined) {
     lines.push('  excluded:');
@@ -285,7 +285,7 @@ export function yamlRule(name: string, rule: string, files: RuleFiles, filter?: 
   }
   lines.push('scope:', '  format: yaml', "  path: '$'");
   if (filter !== undefined) lines.push('filter:', ...filter);
-  lines.push(`rule: '${rule}'`, '');
+  lines.push('check:', `  rule: '${rule}'`, '');
   return lines.join('\n');
 }
 
@@ -446,14 +446,22 @@ interface HeldRequest {
   readonly response: ServerResponse;
 }
 
+export function groupedDecisionKey(filepaths: readonly string[]): string {
+  return `files:${JSON.stringify(filepaths)}`;
+}
+
 function decisionKey(body: unknown): string {
   if (!isMapping(body)) return 'unidentified';
   const state = body.state;
   if (!isMapping(state)) return 'unidentified';
-  const group = state.group;
-  if (isMapping(group)) {
-    const { type, path } = group;
-    return typeof type === 'string' && typeof path === 'string' ? `group:${type}:${path}` : 'unidentified';
+  const files = state.files;
+  if (Array.isArray(files)) {
+    const filepaths: string[] = [];
+    for (const file of files) {
+      if (!isMapping(file) || typeof file.filepath !== 'string') return 'unidentified';
+      filepaths.push(file.filepath);
+    }
+    return groupedDecisionKey(filepaths);
   }
   return typeof state.filepath === 'string' ? state.filepath : 'unidentified';
 }

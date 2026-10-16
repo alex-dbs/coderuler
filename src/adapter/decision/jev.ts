@@ -1,6 +1,6 @@
 import axios, { type AxiosInstance } from 'axios';
 
-import type { BackendDecision, DecisionBackend, DecisionRequest } from '../../app/decision/port.ts';
+import type { BackendDecision, DecisionBackend, DecisionObserver, DecisionRequest } from '../../app/decision/port.ts';
 import type { Diagnostics } from '../../app/ports/diagnostics.ts';
 
 export interface JevOptions {
@@ -109,11 +109,13 @@ export class JevAdapter implements DecisionBackend {
   readonly #model: string;
   readonly #diagnostics: Diagnostics | undefined;
   readonly #endpoint: EndpointFacts | undefined;
+  readonly #serializedApiKey: string | undefined;
   #requests = 0;
 
   constructor({ model, baseUrl, apiKey }: JevOptions, diagnostics?: Diagnostics) {
     this.#model = model;
     this.#diagnostics = diagnostics;
+    this.#serializedApiKey = apiKey === '' ? undefined : JSON.stringify(apiKey).slice(1, -1);
     this.#client = axios.create({
       baseURL: baseUrlOf(baseUrl),
       timeout: TIMEOUT_MS,
@@ -134,11 +136,18 @@ export class JevAdapter implements DecisionBackend {
     }
   }
 
-  async decide(request: DecisionRequest): Promise<BackendDecision> {
+  #redacted(serialized: string | undefined): string | undefined {
+    if (serialized === undefined || this.#serializedApiKey === undefined) return serialized;
+    return serialized.replaceAll(this.#serializedApiKey, '[REDACTED]');
+  }
+
+  async decide(request: DecisionRequest, observer?: DecisionObserver): Promise<BackendDecision> {
     const diagnostics = this.#diagnostics;
+    const verbose = diagnostics?.verbose;
     const endpoint = this.#endpoint;
     const id = diagnostics === undefined ? undefined : (this.#requests += 1);
     const startedAt = diagnostics === undefined ? 0 : performance.now();
+    const reported = observer !== undefined || verbose !== undefined;
 
     const body = {
       model: this.#model,
@@ -150,18 +159,22 @@ export class JevAdapter implements DecisionBackend {
       },
     };
 
-    diagnostics?.verbose?.('http.request', {
+    const wire = JSON.stringify(body);
+    const requestBody = reported ? this.#redacted(wire) : undefined;
+    verbose?.('http.request', {
       id,
       method: METHOD,
       host: endpoint?.host,
       path: endpoint?.path,
       model: this.#model,
       timeout_ms: TIMEOUT_MS,
+      body: requestBody,
     });
+    observer?.({ type: 'request', body: requestBody ?? '' });
 
     let data: unknown;
     try {
-      const response = await this.#client.post<unknown>(ENDPOINT, body);
+      const response = await this.#client.post<unknown>(ENDPOINT, wire, { headers: { 'Content-Type': 'application/json' } });
       data = response.data;
       diagnostics?.important('http.response', {
         id,
@@ -171,6 +184,13 @@ export class JevAdapter implements DecisionBackend {
         path: endpoint?.path,
         model: this.#model,
       });
+      const responseBody = reported ? this.#redacted(JSON.stringify(data)) : undefined;
+      verbose?.('http.response.body', {
+        id,
+        status: response.status,
+        body: responseBody,
+      });
+      observer?.({ type: 'response', status: response.status, body: responseBody ?? '' });
     } catch (error) {
       const failure = requestFailure(error);
       diagnostics?.important('http.failure', {
@@ -183,6 +203,16 @@ export class JevAdapter implements DecisionBackend {
         path: endpoint?.path,
         model: this.#model,
       });
+      if (axios.isAxiosError(error) && error.response !== undefined) {
+        const status = error.response.status;
+        const failureBody = reported ? this.#redacted(JSON.stringify(error.response.data)) : undefined;
+        verbose?.('http.response.body', {
+          id,
+          status,
+          body: failureBody,
+        });
+        observer?.({ type: 'response', status, body: failureBody ?? '' });
+      }
       throw failure.error;
     }
 

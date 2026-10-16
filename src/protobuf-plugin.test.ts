@@ -453,6 +453,318 @@ test('selects records through non-default JSONPath selectors and returns nothing
   assert.deepStrictEqual(select(''), []);
 });
 
+test('selects HTTP URLs independently with exact source locations', () => {
+  const source = inService(rpc(
+    'rpc Publish(P) returns (Q) {',
+    '    option (google.api.http) = {',
+    '      post: "/v1/invoices"',
+    '      additional_bindings {',
+    '        get: "/public/v1/invoices/{invoice_id}/items"',
+    '      }',
+    '    };',
+    '  }',
+  ));
+  const urls = protobufPlugin.compile({ path: '$.rpcs[*].http.bindings[*].url' });
+  assert.deepStrictEqual(urls.select({ filepath: FILE, source }), [
+    {
+      id: 'acme.billing.v1.S.Publish:/http/bindings/0/url',
+      source: '"/v1/invoices"',
+      data: '/v1/invoices',
+      lines: expectedLines(source, '"/v1/invoices"'),
+    },
+    {
+      id: 'acme.billing.v1.S.Publish:/http/bindings/1/url',
+      source: '"/public/v1/invoices/{invoice_id}/items"',
+      data: '/public/v1/invoices/{invoice_id}/items',
+      lines: expectedLines(source, '"/public/v1/invoices/{invoice_id}/items"'),
+    },
+  ]);
+});
+
+function selectPath(path: string, source: string) {
+  return protobufPlugin.compile({ path }).select({ filepath: FILE, source });
+}
+
+const HTTP_OPTION = rpc(
+  'option (google.api.http) = {',
+  '      post: "/v1/invoices"',
+  '      additional_bindings {',
+  '        get: "/v1/invoices"',
+  '      }',
+  '    };',
+);
+const HTTP_SOURCE = inService(rpc('rpc Publish(P) returns (Q) {', `    ${HTTP_OPTION}`, '  }'));
+
+test('selects HTTP URL leaves with RPC-relative ids and keeps repeated identities distinct', () => {
+  const spans = statementLines(HTTP_SOURCE, '"/v1/invoices"');
+  assert.equal(spans.length, 2);
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http.bindings[*].url', HTTP_SOURCE), [
+    {
+      id: 'acme.billing.v1.S.Publish:/http/bindings/0/url',
+      source: '"/v1/invoices"',
+      data: '/v1/invoices',
+      lines: spans[0]!,
+    },
+    {
+      id: 'acme.billing.v1.S.Publish:/http/bindings/1/url',
+      source: '"/v1/invoices"',
+      data: '/v1/invoices',
+      lines: spans[1]!,
+    },
+  ]);
+  assert.deepStrictEqual(
+    selectPath('$.rpcs[*].http.bindings[0,0].url', HTTP_SOURCE).map((context) => context.id),
+    [
+      'acme.billing.v1.S.Publish:/http/bindings/0/url',
+      'acme.billing.v1.S.Publish:/http/bindings/0/url',
+    ],
+  );
+});
+
+test('selects nested HTTP nodes with the annotation, binding, method and URL spans', () => {
+  const optionLines = expectedLines(HTTP_SOURCE, HTTP_OPTION);
+  const bindings: readonly Binding[] = [
+    { method: 'POST', url: '/v1/invoices' },
+    { method: 'GET', url: '/v1/invoices' },
+  ];
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http', HTTP_SOURCE), [
+    { id: 'acme.billing.v1.S.Publish:/http', source: HTTP_OPTION, data: { bindings }, lines: optionLines },
+  ]);
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http.bindings', HTTP_SOURCE), [
+    { id: 'acme.billing.v1.S.Publish:/http/bindings', source: HTTP_OPTION, data: bindings, lines: optionLines },
+  ]);
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http.bindings[1]', HTTP_SOURCE), [
+    {
+      id: 'acme.billing.v1.S.Publish:/http/bindings/1',
+      source: 'get: "/v1/invoices"',
+      data: { method: 'GET', url: '/v1/invoices' },
+      lines: expectedLines(HTTP_SOURCE, 'get: "/v1/invoices"'),
+    },
+  ]);
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http.bindings[1].method', HTTP_SOURCE), [
+    {
+      id: 'acme.billing.v1.S.Publish:/http/bindings/1/method',
+      source: 'get',
+      data: 'GET',
+      lines: expectedLines(HTTP_SOURCE, 'get: "/v1/invoices"'),
+    },
+  ]);
+  assert.deepStrictEqual(
+    selectPath('$..url', HTTP_SOURCE).map((context) => context.id),
+    [
+      'acme.billing.v1.S.Publish:/http/bindings/0/url',
+      'acme.billing.v1.S.Publish:/http/bindings/1/url',
+    ],
+  );
+});
+
+test('keeps concatenated and escaped URL literals as their exact source span', () => {
+  const literal = '"/v1/caf\\303" /* bytes */ "\\251/items"';
+  const option = rpc('option (google.api.http) = {', `      get: ${literal}`, '    };');
+  const source = inService(rpc('rpc Concat(P) returns (Q) {', `    ${option}`, '  }'));
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http.bindings[0]', source), [
+    {
+      id: 'acme.billing.v1.S.Concat:/http/bindings/0',
+      source: `get: ${literal}`,
+      data: { method: 'GET', url: '/v1/café/items' },
+      lines: expectedLines(source, `get: ${literal}`),
+    },
+  ]);
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http.bindings[0].url', source), [
+    {
+      id: 'acme.billing.v1.S.Concat:/http/bindings/0/url',
+      source: literal,
+      data: '/v1/café/items',
+      lines: expectedLines(source, literal),
+    },
+  ]);
+
+  const escaped = String.raw`"/v1\u002fitems/\U0001F600"`;
+  const escapedSource = inService(rpc(`rpc Escaped(P) returns (Q) { option (google.api.http) = { get: ${escaped} }; }`));
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http.bindings[0].url', escapedSource), [
+    {
+      id: 'acme.billing.v1.S.Escaped:/http/bindings/0/url',
+      source: escaped,
+      data: '/v1/items/😀',
+      lines: expectedLines(escapedSource, escaped),
+    },
+  ]);
+});
+
+test('selects dotted HTTP options with statement, field and literal spans', () => {
+  const option = 'option (google.api.http).get = "/v1/items/{id}";';
+  const source = inService(rpc('rpc Dotted(P) returns (Q) {', `    ${option}`, '  }'));
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http', source), [
+    {
+      id: 'acme.billing.v1.S.Dotted:/http',
+      source: option,
+      data: { bindings: [{ method: 'GET', url: '/v1/items/{id}' }] },
+      lines: expectedLines(source, option),
+    },
+  ]);
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http.bindings[0]', source), [
+    {
+      id: 'acme.billing.v1.S.Dotted:/http/bindings/0',
+      source: 'get = "/v1/items/{id}"',
+      data: { method: 'GET', url: '/v1/items/{id}' },
+      lines: expectedLines(source, 'get = "/v1/items/{id}"'),
+    },
+  ]);
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http.bindings[0].method', source), [
+    {
+      id: 'acme.billing.v1.S.Dotted:/http/bindings/0/method',
+      source: 'get',
+      data: 'GET',
+      lines: expectedLines(source, 'get = "/v1/items/{id}"'),
+    },
+  ]);
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http.bindings[0].url', source), [
+    {
+      id: 'acme.billing.v1.S.Dotted:/http/bindings/0/url',
+      source: '"/v1/items/{id}"',
+      data: '/v1/items/{id}',
+      lines: expectedLines(source, 'get = "/v1/items/{id}"'),
+    },
+  ]);
+});
+
+test('selects custom HTTP bindings and falls back to the custom block for empty fields', () => {
+  const option = rpc(
+    'option (google.api.http) = {',
+    '      custom {',
+    '        kind: "BATCH"',
+    '        path: "/v1/items:batchGet"',
+    '      }',
+    '      additional_bindings { custom { kind: "LOOKUP" } }',
+    '    };',
+  );
+  const source = inService(rpc('rpc Batch(P) returns (Q) {', `    ${option}`, '  }'));
+  const block = rpc('custom {', '        kind: "BATCH"', '        path: "/v1/items:batchGet"', '      }');
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http.bindings[0]', source), [
+    {
+      id: 'acme.billing.v1.S.Batch:/http/bindings/0',
+      source: block,
+      data: { method: 'BATCH', url: '/v1/items:batchGet' },
+      lines: expectedLines(source, block),
+    },
+  ]);
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http.bindings[0].method', source), [
+    {
+      id: 'acme.billing.v1.S.Batch:/http/bindings/0/method',
+      source: '"BATCH"',
+      data: 'BATCH',
+      lines: expectedLines(source, '"BATCH"'),
+    },
+  ]);
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http.bindings[0].url', source), [
+    {
+      id: 'acme.billing.v1.S.Batch:/http/bindings/0/url',
+      source: '"/v1/items:batchGet"',
+      data: '/v1/items:batchGet',
+      lines: expectedLines(source, '"/v1/items:batchGet"'),
+    },
+  ]);
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http.bindings[1]', source), [
+    {
+      id: 'acme.billing.v1.S.Batch:/http/bindings/1',
+      source: 'custom { kind: "LOOKUP" }',
+      data: { method: 'LOOKUP', url: '' },
+      lines: expectedLines(source, 'custom { kind: "LOOKUP" }'),
+    },
+  ]);
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http.bindings[1].url', source), [
+    {
+      id: 'acme.billing.v1.S.Batch:/http/bindings/1/url',
+      source: 'custom { kind: "LOOKUP" }',
+      data: '',
+      lines: expectedLines(source, 'custom { kind: "LOOKUP" }'),
+    },
+  ]);
+});
+
+test('falls back to the RPC span for HTTP nodes without an annotation', () => {
+  const statement = 'rpc Bare(BareRequest) returns (BareResponse) { }';
+  const source = inService(statement);
+  const lines = expectedLines(source, statement);
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http', source), [
+    { id: 'acme.billing.v1.S.Bare:/http', source: statement, data: { bindings: [] }, lines },
+  ]);
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http.bindings', source), [
+    { id: 'acme.billing.v1.S.Bare:/http/bindings', source: statement, data: [], lines },
+  ]);
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http.bindings[*].url', source), []);
+
+  const deprecated = rpc(
+    'rpc Legacy(LegacyRequest) returns (LegacyResponse) {',
+    '    option deprecated = true;',
+    '  }',
+  );
+  const deprecatedSource = inService(deprecated);
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http', deprecatedSource), [
+    {
+      id: 'acme.billing.v1.S.Legacy:/http',
+      source: deprecated,
+      data: { bindings: [] },
+      lines: expectedLines(deprecatedSource, deprecated),
+    },
+  ]);
+
+  const empty = inService(rpc('rpc Empty(P) returns (Q) { option (google.api.http) = { get: "" }; }'));
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http.bindings[0].url', empty), [
+    {
+      id: 'acme.billing.v1.S.Empty:/http/bindings/0/url',
+      source: '""',
+      data: '',
+      lines: expectedLines(empty, '""'),
+    },
+  ]);
+});
+
+test('rejects selections outside an RPC record or its http annotation', () => {
+  for (const path of ['$', '$.rpcs', '$.rpcs[*].id', '$.rpcs[*].package', '$.rpcs[*].service']) {
+    assert.throws(() => selectPath(path, BASIC_SOURCE), path);
+  }
+});
+
+test('keeps URL leaves whose value equals the property name', () => {
+  const source = inService(rpc('rpc Literal(P) returns (Q) { option (google.api.http) = { get: "url" }; }'));
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http.bindings[0].url', source), [
+    {
+      id: 'acme.billing.v1.S.Literal:/http/bindings/0/url',
+      source: '"url"',
+      data: 'url',
+      lines: expectedLines(source, '"url"'),
+    },
+  ]);
+});
+
+test('rejects property-name projections and still resolves parent selections', () => {
+  const source = inService(rpc('rpc Literal(P) returns (Q) { option (google.api.http) = { get: "url" }; }'));
+  for (const path of [
+    '$.rpcs[*].http.bindings[*].url~',
+    '$.rpcs[*].http.bindings[*]~',
+    '$.rpcs[*].http~',
+    '$.rpcs[*]~',
+    '$..url~',
+  ]) {
+    assert.throws(() => selectPath(path, source), path);
+  }
+  assert.deepStrictEqual(selectPath('$.rpcs[*].http.bindings[*].url^', HTTP_SOURCE), [
+    {
+      id: 'acme.billing.v1.S.Publish:/http/bindings/0',
+      source: 'post: "/v1/invoices"',
+      data: { method: 'POST', url: '/v1/invoices' },
+      lines: expectedLines(HTTP_SOURCE, 'post: "/v1/invoices"'),
+    },
+    {
+      id: 'acme.billing.v1.S.Publish:/http/bindings/1',
+      source: 'get: "/v1/invoices"',
+      data: { method: 'GET', url: '/v1/invoices' },
+      lines: expectedLines(HTTP_SOURCE, 'get: "/v1/invoices"'),
+    },
+  ]);
+});
+
 test('rejects executable and malformed compile options', () => {
   assert.throws(() => protobufPlugin.compile({}));
   assert.throws(() => protobufPlugin.compile({ path: '' }));

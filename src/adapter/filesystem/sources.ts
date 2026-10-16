@@ -38,8 +38,8 @@ type SkipReason =
 
 type SkipReporter = (file: string, reason: SkipReason) => void;
 
-function logicalPath(path: string): string {
-  return relative(process.cwd(), path).split(sep).join('/');
+function logicalPath(root: string, path: string): string {
+  return relative(root, path).split(sep).join('/');
 }
 
 function skipReporter(counts: Map<string, number>, diagnostics: Diagnostics | undefined): SkipReporter | undefined {
@@ -69,27 +69,27 @@ function reportDiscovered(
   diagnostics.important('sources.discovered', Object.fromEntries(fields));
 }
 
-async function collectSources(directory: string, files: string[], onSkip: SkipReporter | undefined): Promise<void> {
+async function collectSources(directory: string, files: string[], onSkip: SkipReporter | undefined, root: string): Promise<void> {
   const entries = await readdir(directory, { withFileTypes: true });
   for (const entry of entries) {
     if (entry.isSymbolicLink()) {
-      onSkip?.(logicalPath(join(directory, entry.name)), 'symlink');
+      onSkip?.(logicalPath(root, join(directory, entry.name)), 'symlink');
       continue;
     }
     const path = join(directory, entry.name);
     if (entry.isDirectory()) {
-      if (SKIPPED_DIRECTORIES[entry.name] === true) onSkip?.(logicalPath(path), 'excluded_directory');
-      else await collectSources(path, files, onSkip);
+      if (SKIPPED_DIRECTORIES[entry.name] === true) onSkip?.(logicalPath(root, path), 'excluded_directory');
+      else await collectSources(path, files, onSkip, root);
     } else if (entry.isFile()) {
       files.push(path);
     } else {
-      onSkip?.(logicalPath(path), 'not_a_file');
+      onSkip?.(logicalPath(root, path), 'not_a_file');
     }
   }
 }
 
-async function resolveSources(target: string, onSkip: SkipReporter | undefined): Promise<SourceCandidate[]> {
-  const absolute = resolve(target);
+async function resolveSources(target: string, onSkip: SkipReporter | undefined, root: string): Promise<SourceCandidate[]> {
+  const absolute = resolve(root, target);
   let stats: Stats;
   try {
     stats = await lstat(absolute);
@@ -104,7 +104,7 @@ async function resolveSources(target: string, onSkip: SkipReporter | undefined):
   }
 
   const files: string[] = [];
-  if (stats.isDirectory()) await collectSources(absolute, files, onSkip);
+  if (stats.isDirectory()) await collectSources(absolute, files, onSkip, root);
   else if (stats.isFile()) files.push(absolute);
   else throw new Error(`Source path ${absolute} is neither a file nor a directory`);
 
@@ -112,7 +112,7 @@ async function resolveSources(target: string, onSkip: SkipReporter | undefined):
   return files
     .map((path) => ({
       absolute: realRoot === absolute ? path : join(realRoot, relative(absolute, path)),
-      logical: logicalPath(path),
+      logical: logicalPath(root, path),
     }))
     .sort((a, b) => (a.logical < b.logical ? -1 : a.logical > b.logical ? 1 : 0));
 }
@@ -120,11 +120,13 @@ async function resolveSources(target: string, onSkip: SkipReporter | undefined):
 async function treeJobs(
   request: TreeSourceRequest,
   diagnostics: Diagnostics | undefined,
+  cwd: string | undefined,
 ): Promise<readonly TreeSourceJob[]> {
   const counts = new Map<string, number>();
   const onSkip = skipReporter(counts, diagnostics);
   const verbose = diagnostics?.verbose;
-  const sources = await resolveSources(request.target, onSkip);
+  const root = cwd ?? process.cwd();
+  const sources = await resolveSources(request.target, onSkip, root);
   const jobs: TreeSourceJob[] = [];
   for (const source of sources) {
     if (request.rulePaths.has(source.absolute)) {
@@ -155,8 +157,10 @@ async function treeJobs(
 async function diffJobs(
   request: DiffSourceRequest,
   diagnostics: Diagnostics | undefined,
+  cwd: string | undefined,
 ): Promise<readonly DiffSourceJob[]> {
-  const branch = await branchDiff(request.base);
+  const root = cwd ?? process.cwd();
+  const branch = await branchDiff(request.base, root);
   diagnostics?.important('diff.branch', {
     repo: branch.repoRoot,
     head: branch.head,
@@ -164,7 +168,7 @@ async function diffJobs(
     changed_files: branch.files.length,
     requested_base: request.base ?? 'default',
   });
-  const targetAbsolute = resolve(request.target);
+  const targetAbsolute = resolve(root, request.target);
   const targetWithinRepo = relative(branch.repoRoot, targetAbsolute);
   if (targetWithinRepo !== '' && (targetWithinRepo === '..' || targetWithinRepo.startsWith(`..${sep}`) || isAbsolute(targetWithinRepo))) {
     throw new Error(`Source path ${targetAbsolute} is outside the repository ${branch.repoRoot}`);
@@ -192,7 +196,7 @@ async function diffJobs(
       onSkip?.(file.filepath, 'outside_target');
       continue;
     }
-    const logical = logicalPath(absolute);
+    const logical = logicalPath(root, absolute);
 
     const rules = request.select(logical);
     if (rules.length === 0) {
@@ -200,7 +204,7 @@ async function diffJobs(
       continue;
     }
 
-    const previous = logicalPath(join(branch.repoRoot, file.previousPath));
+    const previous = logicalPath(root, join(branch.repoRoot, file.previousPath));
     if (verbose !== undefined) verbose('source.selected', { file: logical, mode: 'diff', rules: rules.length });
     jobs.push({
       kind: 'diff',
@@ -217,7 +221,8 @@ async function diffJobs(
   return jobs;
 }
 
-export function createSourceRepository(): SourceRepository {
+export function createSourceRepository(options: { readonly cwd?: string } = {}): SourceRepository {
+  const { cwd } = options;
   return {
     async identities(paths, concurrency, diagnostics): Promise<readonly string[]> {
       const verbose = diagnostics?.verbose;
@@ -230,8 +235,8 @@ export function createSourceRepository(): SourceRepository {
       });
     },
 
-    treeJobs: (request, diagnostics) => treeJobs(request, diagnostics),
+    treeJobs: (request, diagnostics) => treeJobs(request, diagnostics, cwd),
 
-    diffJobs: (request, diagnostics) => diffJobs(request, diagnostics),
+    diffJobs: (request, diagnostics) => diffJobs(request, diagnostics, cwd),
   };
 }

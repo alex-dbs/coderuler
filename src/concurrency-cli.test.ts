@@ -6,6 +6,7 @@ import {
   assertFailed,
   createSandbox,
   entries,
+  groupedDecisionKey,
   runCli,
   soleEntry,
   startDecisionFixture,
@@ -64,17 +65,22 @@ function expectedScopeDecisions(keys: readonly string[], probabilities: Readonly
 }
 
 function groupedRule(options: {
-  readonly name: string;
   readonly groupBy: 'file' | 'folder' | 'project';
   readonly included: readonly string[];
   readonly scopePath: string;
   readonly key?: string;
 }): string {
-  const lines = ["version: 'v1'", `name: '${options.name}'`, 'files:', '  included:'];
+  const lines = ["version: 'v1'", 'files:', '  included:'];
   for (const glob of options.included) lines.push(`    - '${glob}'`);
   lines.push('scope:', '  format: yaml', `  path: '${options.scopePath}'`);
   if (options.key !== undefined) lines.push(`  key: '${options.key}'`);
-  lines.push('decision:', `  group_by: ${options.groupBy}`, 'rule: Review the selected sources as one group.', '');
+  lines.push(
+    'decision:',
+    `  group_by: ${options.groupBy}`,
+    'check:',
+    "  rule: 'Review the selected sources as one group.'",
+    '',
+  );
   return lines.join('\n');
 }
 
@@ -96,7 +102,7 @@ test('check runs eight decisions at once by default', async () => {
   const project = held.isolated('default-limit');
   const rulePath = writeFile(
     join(project.rules, 'every.yaml'),
-    yamlRule('Every review', 'Review every source.', { included: ['**/*.yaml'] }),
+    yamlRule('Review every source.', { included: ['**/*.yaml'] }),
   );
   const keys = Array.from({ length: 10 }, (_, index) => `src/f${String(index).padStart(2, '0')}.yaml`);
   writeSources(project, keys);
@@ -135,7 +141,7 @@ test('check keeps one decision limit across every rule', async () => {
   for (const [index, directory] of directories.entries()) {
     writeFile(
       join(project.rules, `${directory}.yaml`),
-      yamlRule(`${directory} review`, `Review the ${directory} sources.`, { included: [`${directory}/**/*.yaml`] }),
+      yamlRule(`Review the ${directory} sources.`, { included: [`${directory}/**/*.yaml`] }),
     );
     writeSources(project, keysByRule[index]!);
   }
@@ -153,7 +159,7 @@ test('check keeps one decision limit across every rule', async () => {
     assert.strictEqual(scheduler.violations, 0, 'the limit is global, so it must hold for every wave, not only the first');
 
     const list = entries(result, 'shared limit');
-    assert.deepStrictEqual(list.map(entry => entry.name), ['a review', 'b review', 'c review']);
+    assert.deepStrictEqual(list.map(entry => entry.name), ['a', 'b', 'c']);
     for (const [index, entry] of list.entries()) {
       assert.deepStrictEqual(entry.decisions, expectedScopeDecisions(keysByRule[index]!, probabilities), `${entry.name}: wrong decisions`);
     }
@@ -169,7 +175,7 @@ test('check runs one decision at a time with --concurrency 1', async () => {
   const project = held.isolated('serial-limit');
   const rulePath = writeFile(
     join(project.rules, 'serial.yaml'),
-    yamlRule('Serial review', 'Review every source.', { included: ['**/*.yaml'] }),
+    yamlRule('Review every source.', { included: ['**/*.yaml'] }),
   );
   const keys = ['src/a.yaml', 'src/b.yaml', 'src/c.yaml', 'src/d.yaml'];
   writeSources(project, keys);
@@ -199,12 +205,11 @@ test('check decides scope and grouped rules from one shared pool', async () => {
   const project = held.isolated('grouped-limit');
   writeFile(
     join(project.rules, 'a-scope.yaml'),
-    yamlRule('Scope review', 'Review every scope.', { included: ['scoped/**/*.yaml'] }),
+    yamlRule('Review every scope.', { included: ['scoped/**/*.yaml'] }),
   );
   writeFile(
     join(project.rules, 'b-grouped.yaml'),
     groupedRule({
-      name: 'Grouped review',
       groupBy: 'file',
       included: ['grouped/**/*.yaml'],
       scopePath: '$.items[*]',
@@ -221,7 +226,7 @@ test('check decides scope and grouped rules from one shared pool', async () => {
   for (const file of groupedFiles) writeFile(join(project.cwd, file.path), items(file.ids));
   const groupedInFilepathOrder = [...groupedFiles].sort((left, right) => (left.path < right.path ? -1 : 1));
 
-  const keys = [...scopeKeys, ...groupedInFilepathOrder.map(file => `group:file:${file.path}`)];
+  const keys = [...scopeKeys, ...groupedInFilepathOrder.map(file => groupedDecisionKey([file.path]))];
   const probabilities = answerPerKey(keys);
   setAnswers(scheduler, probabilities);
 
@@ -241,12 +246,12 @@ test('check decides scope and grouped rules from one shared pool', async () => {
     );
 
     const list = entries(result, 'grouped limit');
-    assert.deepStrictEqual(list.map(entry => entry.name), ['Scope review', 'Grouped review']);
+    assert.deepStrictEqual(list.map(entry => entry.name), ['a-scope', 'b-grouped']);
     assert.deepStrictEqual(list[0]!.decisions, expectedScopeDecisions(scopeKeys, probabilities));
     assert.deepStrictEqual(
       list[1]!.decisions,
       groupedInFilepathOrder.map((file) => {
-        const probability = probabilities.get(`group:file:${file.path}`)!;
+        const probability = probabilities.get(groupedDecisionKey([file.path]))!;
         return {
           group: { type: 'file', path: file.path },
           members: file.ids.map(id => ({ filepath: file.path, scopeId: `0:${id}` })),
@@ -266,17 +271,17 @@ test('check maps decisions that complete out of order back to their own review',
   const project = held.isolated('out-of-order');
   writeFile(
     join(project.rules, 'a-scope.yaml'),
-    yamlRule('Scope review', 'Review every scope.', { included: ['scoped/**/*.yaml'] }),
+    yamlRule('Review every scope.', { included: ['scoped/**/*.yaml'] }),
   );
   writeFile(
     join(project.rules, 'b-grouped.yaml'),
-    groupedRule({ name: 'Grouped review', groupBy: 'project', included: ['grouped/**/*.yaml'], scopePath: '$' }),
+    groupedRule({ groupBy: 'project', included: ['grouped/**/*.yaml'], scopePath: '$' }),
   );
   const scopeKeys = ['scoped/a.yaml', 'scoped/b.yaml', 'scoped/c.yaml'];
   writeSources(project, scopeKeys);
   writeFile(join(project.cwd, 'grouped', 'one.yaml'), 'service:\n  name: one\n');
   writeFile(join(project.cwd, 'grouped', 'two.yaml'), 'service:\n  name: two\n');
-  const groupKey = 'group:project:.';
+  const groupKey = groupedDecisionKey(['grouped/one.yaml', 'grouped/two.yaml']);
   const probabilities = answerPerKey([...scopeKeys, groupKey]);
   setAnswers(scheduler, probabilities);
 
@@ -317,7 +322,7 @@ test('check writes nothing when a decision fails while the others are still in f
   const project = held.isolated('inflight-failure');
   const rulePath = writeFile(
     join(project.rules, 'atomic.yaml'),
-    yamlRule('Atomic review', 'Review every source.', { included: ['**/*.yaml'] }),
+    yamlRule('Review every source.', { included: ['**/*.yaml'] }),
   );
   const keys = ['src/a.yaml', 'src/b.yaml', 'src/c.yaml'];
   writeSources(project, keys);
@@ -346,7 +351,7 @@ test('check takes no further decision after a failure with --concurrency 1', asy
   const project = held.isolated('sequential-failure');
   const rulePath = writeFile(
     join(project.rules, 'sequential.yaml'),
-    yamlRule('Sequential review', 'Review every source.', { included: ['**/*.yaml'] }),
+    yamlRule('Review every source.', { included: ['**/*.yaml'] }),
   );
   const keys = ['src/a.yaml', 'src/b.yaml', 'src/c.yaml', 'src/d.yaml'];
   writeSources(project, keys);
@@ -375,7 +380,7 @@ test('check rejects an unusable --concurrency before deciding anything', async (
   const project = plain.isolated('invalid-limit');
   const rulePath = writeFile(
     join(project.rules, 'valid.yaml'),
-    yamlRule('Valid review', 'Review every source.', { included: ['**/*.yaml'] }),
+    yamlRule('Review every source.', { included: ['**/*.yaml'] }),
   );
   writeFile(join(project.cwd, 'src', 'a.yaml'), 'service:\n  name: api\n');
 
@@ -402,7 +407,7 @@ test('check fails before any decision when it cannot prepare every source', asyn
       (project) => {
         const rulePath = writeFile(
           join(project.rules, 'parse.yaml'),
-          yamlRule('Parse review', 'Review every source.', { included: ['**/*.yaml'] }),
+          yamlRule('Review every source.', { included: ['**/*.yaml'] }),
         );
         writeFile(join(project.cwd, 'src', 'a.yaml'), 'service:\n  name: api\n');
         writeFile(join(project.cwd, 'src', 'b.yaml'), 'a: [unclosed\n');
@@ -415,7 +420,7 @@ test('check fails before any decision when it cannot prepare every source', asyn
       (project) => {
         const rulePath = writeFile(
           join(project.rules, 'outside.yaml'),
-          groupedRule({ name: 'Outside review', groupBy: 'folder', included: ['../outside.yaml'], scopePath: '$' }),
+          groupedRule({ groupBy: 'folder', included: ['../outside.yaml'], scopePath: '$' }),
         );
         writeFile(join(project.cwd, '..', 'outside.yaml'), 'service:\n  name: outside\n');
         return ['check', '..', '--rules', rulePath];
@@ -427,7 +432,7 @@ test('check fails before any decision when it cannot prepare every source', asyn
       (project) => {
         const rulePath = writeFile(
           join(project.rules, 'missing.yaml'),
-          yamlRule('Missing review', 'Review every source.', { included: ['**/*.yaml'] }),
+          yamlRule('Review every source.', { included: ['**/*.yaml'] }),
         );
         return ['check', 'absent', '--rules', rulePath];
       },

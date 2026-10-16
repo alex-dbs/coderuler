@@ -6,7 +6,7 @@ global:
 
 app:
   container:
-    env:
+    tenv:
       text:
         LOG_LEVEL: debug
         DB_NAME: my-app

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { stripVTControlCharacters } from 'node:util';
 import { compileRule, parseRule, type CompiledRule } from './infra/rules.ts';
@@ -9,6 +10,7 @@ import type {
   MatchOptions,
   RuleExamples,
   RuleInput,
+  RuleSettings,
 } from './app/rule/types.ts';
 import { PluginRegistry } from './app/scope/registry.ts';
 import type { ScopeMatch, ScopePlugin } from './app/scope/types.ts';
@@ -50,28 +52,33 @@ const kvPlugin: ScopePlugin = {
 
 const registry = new PluginRegistry([kvPlugin]);
 
+const RULE_FILE = join('/', 'rules', 'R.yaml');
+
 const DEFINITION: Record<string, unknown> = {
   version: 'v1',
-  name: 'R',
   files: { included: ['src/**'] },
   scope: { format: 'kv', prefix: '+' },
-  rule: 'p',
+  check: { rule: 'p' },
 };
 
 function definition(fields: Record<string, unknown> = {}): Record<string, unknown> {
   return { ...DEFINITION, ...fields };
 }
 
+function withCheck(fields: Record<string, unknown>): Record<string, unknown> {
+  return definition({ check: { rule: 'p', ...fields } });
+}
+
 function kvRule(scope: Readonly<Record<string, unknown>> = {}): CompiledRule {
-  return compileRule(definition({ scope: { format: 'kv', prefix: '+', ...scope } }), registry);
+  return compileRule(definition({ scope: { format: 'kv', prefix: '+', ...scope } }), RULE_FILE, registry);
 }
 
 function kvFiltered(filter: unknown, scope: Readonly<Record<string, unknown>> = {}): CompiledRule {
-  return compileRule(definition({ scope: { format: 'kv', prefix: '+', ...scope }, filter }), registry);
+  return compileRule(definition({ scope: { format: 'kv', prefix: '+', ...scope }, filter }), RULE_FILE, registry);
 }
 
 function groupedRule(decision: unknown, extra: Record<string, unknown> = {}): CompiledRule {
-  return compileRule(definition({ decision, ...extra }), registry);
+  return compileRule(definition({ decision, ...extra }), RULE_FILE, registry);
 }
 
 function idsOf(rule: CompiledRule, input: RuleInput | FileInput): string[] {
@@ -109,18 +116,18 @@ function assertWarned(t: TestContext, paths: readonly string[], run: () => void)
 
 test('only the exact v1 version string is accepted', () => {
   for (const version of [undefined, '', 1, 'v2', 'V1', null, true, ['v1']]) {
-    assert.throws(() => compileRule(definition({ version }), registry), Error, `version: ${String(version)}`);
+    assert.throws(() => compileRule(definition({ version }), RULE_FILE, registry), Error, `version: ${String(version)}`);
   }
 });
 
-test('obsolete and unknown top-level keys warn and are ignored, with no alias', (t) => {
-  for (const key of ['prompt', 'violation', 'variables', 'when', 'from', 'watch', 'extract', 'where', 'context', 'condition']) {
+test('obsolete, legacy and unknown top-level keys warn and are ignored, with no alias', (t) => {
+  for (const key of ['name', 'rule', 'examples', 'violation-message', 'title', 'prompt', 'violation', 'variables', 'when', 'from', 'watch', 'extract', 'where', 'context', 'condition']) {
     let rule!: CompiledRule;
     assertWarned(t, [`rule.${key}`], () => {
-      rule = compileRule(definition({ [key]: { nested: ['x'] } }), registry);
+      rule = compileRule(definition({ [key]: { nested: ['x'] } }), RULE_FILE, registry);
     });
     assert.strictEqual(rule.rule, 'p', `${key}: an ignored key must not become the instruction`);
-    assert.strictEqual(rule.title, undefined, `${key}: an ignored key must not become the title`);
+    assert.strictEqual(rule.violationMessage, undefined, `${key}: an ignored key must not become the violation message`);
     assert.strictEqual(rule.name, 'R', key);
     assert.deepStrictEqual(idsOf(rule, { filepath: 'src/a.ts', head: '+a=1\n', base: '', diff: '' }), ['a'], key);
   }
@@ -131,12 +138,11 @@ test('an unknown field warns in yellow on stderr and writes nothing to stdout', 
     `import { compileRule } from ${JSON.stringify(new URL('./infra/rules.ts', import.meta.url).href)};`,
     'const rule = compileRule({',
     "  version: 'v1',",
-    "  name: 'R',",
     "  files: { included: ['src/**'] },",
     "  scope: { format: 'yaml', path: '$' },",
-    "  rule: 'p',",
+    "  check: { rule: 'p' },",
     '  extra: true,',
-    '});',
+    "}, 'rules/R.yaml');",
     'process.stdout.write(`${rule.name}\\n`);',
     '',
   ].join('\n');
@@ -150,24 +156,144 @@ test('an unknown field warns in yellow on stderr and writes nothing to stdout', 
 
 test('a blank or missing rule instruction is rejected before any plugin runs', () => {
   for (const rule of ['', '   ', '\n\t ', 42, null, undefined, ['p']]) {
-    assert.throws(() => compileRule(definition({ rule }), registry), Error, `rule: ${String(rule)}`);
+    assert.throws(() => compileRule(withCheck({ rule }), RULE_FILE, registry), Error, `rule: ${String(rule)}`);
   }
 });
 
-test('an optional title is validated before any plugin runs', () => {
-  for (const title of ['', '   ', '\n\t ', 42, null, true, ['t'], {}]) {
-    assert.throws(() => compileRule(definition({ title }), registry), Error, `title: ${String(title)}`);
+test('an optional violation message is validated before any plugin runs', () => {
+  for (const violationMessage of ['', '   ', '\n\t ', 42, null, true, ['t'], {}]) {
+    assert.throws(() => compileRule(withCheck({ 'violation-message': violationMessage }), RULE_FILE, registry), Error, `violation-message: ${String(violationMessage)}`);
   }
   const blankInYaml = [
     'version: v1',
-    'name: V',
     "files: { included: ['src/**'] }",
     "scope: { format: 'kv', prefix: '+' }",
-    'rule: p',
-    'title: "   "',
+    'check:',
+    '  rule: p',
+    '  violation-message: "   "',
     '',
   ].join('\n');
-  assert.throws(() => parseRule(blankInYaml, registry), Error, 'a blank YAML title must be rejected too');
+  assert.throws(() => parseRule(blankInYaml, RULE_FILE, registry), Error, 'a blank YAML violation message must be rejected too');
+});
+
+test('a violation message is kept verbatim and omitted when absent', () => {
+  assert.strictEqual(compileRule(DEFINITION, RULE_FILE, registry).violationMessage, undefined);
+  for (const violationMessage of ['Keep the pin.', '  indented\n  ', 'line one\nline two\n']) {
+    assert.strictEqual(compileRule(withCheck({ 'violation-message': violationMessage }), RULE_FILE, registry).violationMessage, violationMessage);
+  }
+});
+
+test('enabled defaults to true and accepts only a boolean', () => {
+  assert.strictEqual(compileRule(DEFINITION, RULE_FILE, registry).enabled, true);
+  assert.strictEqual(compileRule(definition({ enabled: true }), RULE_FILE, registry).enabled, true);
+  assert.strictEqual(compileRule(definition({ enabled: false }), RULE_FILE, registry).enabled, false);
+  for (const enabled of [null, 'false', 'true', 0, 1, [], {}]) {
+    assert.throws(() => compileRule(definition({ enabled }), RULE_FILE, registry), Error, `enabled: ${JSON.stringify(enabled)}`);
+  }
+});
+
+test('settings default to an empty object and normalize every provided key', () => {
+  assert.deepStrictEqual(compileRule(DEFINITION, RULE_FILE, registry).settings, {});
+  assert.deepStrictEqual(compileRule(definition({ settings: {} }), RULE_FILE, registry).settings, {});
+
+  const valid: readonly [settings: Record<string, unknown>, expected: RuleSettings][] = [
+    [{ model: 'm' }, { model: 'm' }],
+    [{ model: '  m  ' }, { model: 'm' }],
+    [{ threshold: 0 }, { threshold: 0 }],
+    [{ threshold: 1 }, { threshold: 1 }],
+    [{ threshold: 0.4 }, { threshold: 0.4 }],
+    [{ backend: 'jev' }, { backend: 'jev' }],
+    [{ model: ' m ', threshold: 0.25, backend: 'jev' }, { model: 'm', threshold: 0.25, backend: 'jev' }],
+  ];
+  for (const [settings, expected] of valid) {
+    assert.deepStrictEqual(compileRule(definition({ settings }), RULE_FILE, registry).settings, expected, JSON.stringify(settings));
+  }
+});
+
+test('malformed settings are rejected before any plugin runs', () => {
+  const invalid: readonly [label: string, settings: unknown][] = [
+    ['not a mapping', 'jev'],
+    ['sequence', []],
+    ['null', null],
+    ['number', 7],
+    ['blank model', { model: '   ' }],
+    ['empty model', { model: '' }],
+    ['non-string model', { model: 7 }],
+    ['numeric string threshold', { threshold: '0.4' }],
+    ['non-numeric threshold', { threshold: null }],
+    ['boolean threshold', { threshold: true }],
+    ['threshold below range', { threshold: -0.1 }],
+    ['threshold above range', { threshold: 1.1 }],
+    ['NaN threshold', { threshold: Number.NaN }],
+    ['infinite threshold', { threshold: Number.POSITIVE_INFINITY }],
+    ['unsupported backend', { backend: 'kev' }],
+    ['blank backend', { backend: '' }],
+    ['non-string backend', { backend: 7 }],
+    ['null backend', { backend: null }],
+  ];
+  for (const [label, settings] of invalid) {
+    assert.throws(() => compileRule(definition({ settings }), RULE_FILE, registry), Error, label);
+  }
+});
+
+test('an unknown settings key warns with its full path and is ignored', (t) => {
+  let rule!: CompiledRule;
+  assertWarned(t, ['rule.settings.baseUrl', 'rule.settings.key'], () => {
+    rule = compileRule(definition({ settings: { model: 'm', key: 'secret', baseUrl: 'https://example.test' } }), RULE_FILE, registry);
+  });
+  assert.deepStrictEqual(rule.settings, { model: 'm' }, 'credentials and endpoints must not become rule settings');
+});
+
+test('invalid metadata fails before any plugin compiles, disabled rules included', () => {
+  let compiled = false;
+  const probe: ScopePlugin = {
+    format: 'probe',
+    compile() {
+      compiled = true;
+      return { select: () => [] };
+    },
+  };
+  const probeRegistry = new PluginRegistry([probe]);
+  for (const fields of [
+    { enabled: false, check: { rule: 'p', 'violation-message': '   ' } },
+    { enabled: false, settings: { threshold: '0.5' } },
+    { enabled: false, check: { kind: 'regex', rule: '(' } },
+  ] as const) {
+    assert.throws(
+      () => compileRule(definition({ scope: { format: 'probe' }, ...fields }), RULE_FILE, probeRegistry),
+      Error,
+      JSON.stringify(fields),
+    );
+    assert.strictEqual(compiled, false, 'metadata validation must not wait for a plugin');
+  }
+});
+
+test('a disabled rule compiles and matches exactly like an enabled one', () => {
+  const input: RuleInput = { filepath: 'src/a.ts', head: '+a=1\n+b=2\n', base: '+a=1\n', diff: '@@ d @@' };
+  const enabled = compileRule(definition({ enabled: true }), RULE_FILE, registry);
+  const disabled = compileRule(definition({ enabled: false }), RULE_FILE, registry);
+  assert.deepStrictEqual(disabled.match(input), enabled.match(input));
+  assert.strictEqual(disabled.matchesFile('src/a.ts'), true, 'disabling is an execution policy, not a selection rule');
+});
+
+test('a YAML rule carries violation-message, enabled and settings through the loader', () => {
+  const rule = parseRule([
+    'version: v1',
+    "files: { included: ['src/**'] }",
+    "scope: { format: 'kv', prefix: '+' }",
+    'check:',
+    '  rule: p',
+    '  violation-message: |',
+    '    Every entry must be declared.',
+    'enabled: false',
+    'settings: { model: " m ", threshold: 0, backend: jev }',
+    '',
+  ].join('\n'), join('/', 'rules', 'Disabled.yaml'), registry);
+  assert.strictEqual(rule.enabled, false);
+  assert.strictEqual(rule.violationMessage, 'Every entry must be declared.\n');
+  assert.strictEqual(rule.name, 'Disabled', 'the loader names the rule after the file it read');
+  assert.deepStrictEqual(rule.settings, { model: 'm', threshold: 0, backend: 'jev' });
+  assert.deepStrictEqual(idsOf(rule, { filepath: 'src/a.ts', head: '+a=1\n', base: '', diff: '' }), ['a']);
 });
 
 test('malformed examples are rejected before any plugin runs', () => {
@@ -177,7 +303,7 @@ test('malformed examples are rejected before any plugin runs', () => {
     { bad: null }, { bad: {} }, { bad: ['ok', ''] },
   ];
   for (const examples of invalid) {
-    assert.throws(() => compileRule(definition({ examples }), registry), Error, JSON.stringify(examples));
+    assert.throws(() => compileRule(withCheck({ examples }), RULE_FILE, registry), Error, JSON.stringify(examples));
   }
 });
 
@@ -191,18 +317,18 @@ test('examples normalize per category and keep every snippet verbatim', () => {
     ['verbatim snippet text', { good: ['  indented\n  '], bad: ['\nbad\n'] }, { good: ['  indented\n  '], bad: ['\nbad\n'] }],
   ];
   for (const [label, examples, expected] of cases) {
-    assert.deepStrictEqual(compileRule(definition({ examples }), registry).examples, expected, label);
+    assert.deepStrictEqual(compileRule(withCheck({ examples }), RULE_FILE, registry).examples, expected, label);
   }
 });
 
 test('an unknown example key is ignored while every known category stays validated', (t) => {
   let named!: CompiledRule;
   let misspeltOnly!: CompiledRule;
-  assertWarned(t, ['rule.examples.extra', 'rule.examples.extra', 'rule.examples.goood', 'rule.examples.goood'], () => {
-    named = compileRule(definition({ examples: { good: ['g'], bad: ['b'], extra: ['x'], goood: ['typo'] } }), registry);
-    misspeltOnly = compileRule(definition({ examples: { goood: ['typo'] } }), registry);
+  assertWarned(t, ['rule.check.examples.extra', 'rule.check.examples.extra', 'rule.check.examples.goood', 'rule.check.examples.goood'], () => {
+    named = compileRule(withCheck({ examples: { good: ['g'], bad: ['b'], extra: ['x'], goood: ['typo'] } }), RULE_FILE, registry);
+    misspeltOnly = compileRule(withCheck({ examples: { goood: ['typo'] } }), RULE_FILE, registry);
     // A malformed value under a *known* key is still a failure, whatever unknown keys sit beside it.
-    assert.throws(() => compileRule(definition({ examples: { extra: ['x'], good: [7] } }), registry), Error);
+    assert.throws(() => compileRule(withCheck({ examples: { extra: ['x'], good: [7] } }), RULE_FILE, registry), Error);
   });
   assert.deepStrictEqual(named.examples, { good: ['g'], bad: ['b'] });
   assert.deepStrictEqual(misspeltOnly.examples, { good: [], bad: [] }, 'a misspelt category contributes nothing');
@@ -210,11 +336,19 @@ test('an unknown example key is ignored while every known category stays validat
 
 test('malformed rule fields are rejected before any plugin runs', () => {
   for (const notAMapping of ['not a mapping', ['nope'], 7, true]) {
-    assert.throws(() => compileRule(notAMapping, registry), Error, `not a mapping: ${JSON.stringify(notAMapping)}`);
+    assert.throws(() => compileRule(notAMapping, RULE_FILE, registry), Error, `not a mapping: ${JSON.stringify(notAMapping)}`);
   }
   const invalid: readonly [label: string, fields: Record<string, unknown>][] = [
-    ['blank name', { name: '' }],
-    ['non-string name', { name: 42 }],
+    ['check is missing', { check: undefined }],
+    ['check is not a mapping', { check: 'p' }],
+    ['check is a sequence', { check: ['p'] }],
+    ['check without an instruction', { check: {} }],
+    ['check with a blank instruction', { check: { rule: '   ' } }],
+    ['check with a non-string instruction', { check: { rule: 42 } }],
+    ['check with an unsupported kind', { check: { kind: 'ai', rule: 'p' } }],
+    ['check with an invalid regex', { check: { kind: 'regex', rule: '(' } }],
+    ['check with a non-string violation message', { check: { rule: 'p', 'violation-message': 7 } }],
+    ['check with malformed examples', { check: { rule: 'p', examples: [] } }],
     ['files is not a mapping', { files: [] }],
     ['files without "included"', { files: { excluded: ['a'] } }],
     ['included is not a sequence', { files: { included: 'a' } }],
@@ -227,7 +361,7 @@ test('malformed rule fields are rejected before any plugin runs', () => {
     ['non-boolean changed', { scope: { format: 'kv', prefix: '+', changed: 'yes' } }],
   ];
   for (const [label, fields] of invalid) {
-    assert.throws(() => compileRule(definition(fields), registry), Error, label);
+    assert.throws(() => compileRule(definition(fields), RULE_FILE, registry), Error, label);
   }
 });
 
@@ -235,43 +369,42 @@ test('parseRule rejects duplicate YAML keys and non-v1 mappings', () => {
   const duplicate = [
     'version: v1',
     'version: v1',
-    'name: R',
     "files: { included: ['src/**'] }",
     "scope: { format: 'kv', prefix: '+' }",
-    'rule: p',
+    'check: { rule: p }',
     '',
   ].join('\n');
-  assert.throws(() => parseRule(duplicate, registry), Error);
+  assert.throws(() => parseRule(duplicate, RULE_FILE, registry), Error);
 
   const noVersion = [
-    'name: Legacy',
     "files: { included: ['src/**'] }",
     "scope: { format: 'kv', prefix: '+' }",
-    'rule: p',
+    'check: { rule: p }',
     '',
   ].join('\n');
-  assert.throws(() => parseRule(noVersion, registry), Error);
+  assert.throws(() => parseRule(noVersion, RULE_FILE, registry), Error);
 });
 
 test('a YAML rule with unknown keys parses, warns once per key and keeps its known fields', (t) => {
   let rule!: CompiledRule;
   assertWarned(
     t,
-    ['rule.decision.depth', 'rule.examples.typo', 'rule.files.ignored', 'rule.prompt'],
+    ['rule.decision.depth', 'rule.check.examples.typo', 'rule.files.ignored', 'rule.prompt'],
     () => {
       rule = parseRule([
         'version: v1',
-        'name: Unknown keys',
         "files: { included: ['src/**'], ignored: ['**'] }",
         "scope: { format: 'kv', prefix: '+' }",
-        'rule: p',
-        'examples: { good: [g], bad: [b], typo: [] }',
+        'check:',
+        '  rule: p',
+        '  examples: { good: [g], bad: [b], typo: [] }',
         'decision: { group_by: folder, level: -1, depth: 2 }',
         'prompt: a legacy instruction that is not read',
         '',
-      ].join('\n'), registry);
+      ].join('\n'), join('/', 'rules', 'Unknown keys.yaml'), registry);
     },
   );
+  assert.strictEqual(rule.name, 'Unknown keys', 'a stem may carry spaces and is kept verbatim');
   assert.deepStrictEqual(rule.examples, { good: ['g'], bad: ['b'] });
   assert.deepStrictEqual(rule.decision, { group_by: 'folder', level: -1 }, 'the known level must survive');
   assert.deepStrictEqual(idsOf(rule, { filepath: 'src/a.ts', source: '+a=1\n' }), ['a']);
@@ -281,17 +414,17 @@ test('a YAML rule with unknown keys parses, warns once per key and keeps its kno
 test('an ignored files key leaves the known selection contract intact', (t) => {
   let rule!: CompiledRule;
   assertWarned(t, ['rule.files.ignore'], () => {
-    rule = compileRule(definition({ files: { included: ['src/**'], ignore: ['**'], excluded: ['src/skip/**'] } }), registry);
+    rule = compileRule(definition({ files: { included: ['src/**'], ignore: ['**'], excluded: ['src/skip/**'] } }), RULE_FILE, registry);
   });
   assert.strictEqual(rule.matchesFile('src/a.ts'), true);
   assert.strictEqual(rule.matchesFile('src/skip/a.ts'), false, 'the known "excluded" glob still decides');
   assert.strictEqual(rule.matchesFile('lib/a.ts'), false, 'an ignored glob must not widen the selection');
 
   assertWarned(t, ['rule.files.include'], () => {
-    assert.throws(() => compileRule(definition({ files: { include: ['a'] } }), registry), Error);
+    assert.throws(() => compileRule(definition({ files: { include: ['a'] } }), RULE_FILE, registry), Error);
   });
   assertWarned(t, ['rule.files.extra'], () => {
-    assert.throws(() => compileRule(definition({ files: { included: [], extra: 'x' } }), registry), Error);
+    assert.throws(() => compileRule(definition({ files: { included: [], extra: 'x' } }), RULE_FILE, registry), Error);
   });
 });
 
@@ -309,25 +442,24 @@ test('the plugin owns its options; common scope keys are stripped, not forwarded
     ['format is unknown', { format: 'missing', path: '$' }],
   ];
   for (const [label, scope] of invalid) {
-    assert.throws(() => compileRule(definition({ scope }), registry), Error, label);
+    assert.throws(() => compileRule(definition({ scope }), RULE_FILE, registry), Error, label);
   }
 });
 
 test('prototype-like scope keys reach the plugin as own options, not as a prototype', () => {
   const head = [
     'version: v1',
-    'name: Proto',
     "files: { included: ['config/**/*.yaml'] }",
     'scope:',
     '  format: yaml',
   ];
-  const tail = ['rule: Review.', ''];
-  const rule = parseRule([...head, "  path: '$'", ...tail].join('\n'));
+  const tail = ['check: { rule: Review. }', ''];
+  const rule = parseRule([...head, "  path: '$'", ...tail].join('\n'), RULE_FILE);
   // The real yaml plugin selected the document root, so `path` arrived as the option it is.
   assert.strictEqual(rule.match({ filepath: 'config/a.yaml', source: 'k: 1\n' }).length, 1);
   // `path` is a real yaml option, so a `__proto__` key routed into the prototype slot would smuggle
   // it past the plugin's unknown-option check; forwarded as an own key it is rejected instead.
-  assert.throws(() => parseRule([...head, '  __proto__: { path: $ }', ...tail].join('\n')), Error);
+  assert.throws(() => parseRule([...head, '  __proto__: { path: $ }', ...tail].join('\n'), RULE_FILE), Error);
 });
 
 test('a custom plugin plugs in without modifying core and drives real matching', () => {
@@ -366,7 +498,7 @@ test('changed false emits every selected head scope without consulting base', ()
 });
 
 test('excluded and unselected files short-circuit before sources are required', () => {
-  const rule = compileRule(definition({ files: { included: ['src/**'], excluded: ['src/generated/**'] } }), registry);
+  const rule = compileRule(definition({ files: { included: ['src/**'], excluded: ['src/generated/**'] } }), RULE_FILE, registry);
   assert.deepStrictEqual(rule.match({ filepath: 'src/generated/a.ts', diff: '' } as RuleInput), []);
   assert.deepStrictEqual(rule.match({ filepath: 'lib/b.ts', diff: '' } as RuleInput), []);
 });
@@ -449,7 +581,7 @@ test('plugin failures surface instead of collapsing to an empty result', () => {
       return { select() { throw new Error('select exploded'); } };
     },
   };
-  const rule = compileRule(definition({ scope: { format: 'throwing' } }), new PluginRegistry([throwing]));
+  const rule = compileRule(definition({ scope: { format: 'throwing' } }), RULE_FILE, new PluginRegistry([throwing]));
   assert.throws(() => rule.match({ filepath: 'src/a.ts', head: 'x', base: '', diff: '' }), Error);
   assert.throws(() => rule.match({ filepath: 'src/a.ts', head: '', base: 'x', diff: '' }), Error);
 
@@ -458,7 +590,7 @@ test('plugin failures surface instead of collapsing to an empty result', () => {
     compile() { throw new Error('cannot compile'); },
   };
   assert.throws(
-    () => compileRule(definition({ scope: { format: 'uncompilable' } }), new PluginRegistry([uncompilable])),
+    () => compileRule(definition({ scope: { format: 'uncompilable' } }), RULE_FILE, new PluginRegistry([uncompilable])),
     Error,
   );
 });
@@ -523,7 +655,7 @@ test('the filter is a top-level rule field, never a plugin option', () => {
   assert.deepStrictEqual(idsOf(rule, { filepath: 'src/a.ts', head: '+a=1\n+b=\n', base: '', diff: '' }), ['a']);
   // Nested in `scope` it is just an unknown option, which the plugin itself rejects.
   assert.throws(
-    () => compileRule(definition({ scope: { format: 'kv', prefix: '+', filter: { non_empty: '$.data.value' } } }), registry),
+    () => compileRule(definition({ scope: { format: 'kv', prefix: '+', filter: { non_empty: '$.data.value' } } }), RULE_FILE, registry),
     Error,
   );
 });
@@ -532,9 +664,9 @@ test('an invalid filter fails compilation even when no scope could be selected',
   const unmatched = definition({ files: { included: ['never/**'] } });
   // The file selection matches nothing, yet a valid filter is compiled and an unusable one fails
   // now: validation never waits for a source that would never be read.
-  const rule = compileRule({ ...unmatched, filter: { non_empty: '$.data.value' } }, registry);
+  const rule = compileRule({ ...unmatched, filter: { non_empty: '$.data.value' } }, RULE_FILE, registry);
   assert.deepStrictEqual(rule.match({ filepath: 'src/a.ts', head: '+a=1\n', diff: '' }), []);
-  assert.throws(() => compileRule({ ...unmatched, filter: { non_empty: '$[?(@.value)]' } }, registry), Error);
+  assert.throws(() => compileRule({ ...unmatched, filter: { non_empty: '$[?(@.value)]' } }, RULE_FILE, registry), Error);
 });
 
 test('filtering never suppresses plugin or duplicate-id errors', () => {
@@ -551,6 +683,7 @@ test('filtering never suppresses plugin or duplicate-id errors', () => {
   };
   const throwingRule = compileRule(
     definition({ scope: { format: 'throwing' }, filter: { not: { non_empty: '$' } } }),
+    RULE_FILE,
     new PluginRegistry([throwing]),
   );
   assert.throws(() => throwingRule.match({ filepath: 'src/a.ts', head: 'x', base: '', diff: '' }), Error);
@@ -574,7 +707,7 @@ test('one compiled rule filters file and revision inputs alike', () => {
 });
 
 test('file mode still honors file selection and duplicate scope ids', () => {
-  const rule = compileRule(definition({ files: { included: ['src/**'], excluded: ['src/generated/**'] } }), registry);
+  const rule = compileRule(definition({ files: { included: ['src/**'], excluded: ['src/generated/**'] } }), RULE_FILE, registry);
   assert.deepStrictEqual(rule.match({ filepath: 'lib/a.ts', source: '+a=1\n' }), []);
   assert.deepStrictEqual(rule.match({ filepath: 'src/generated/a.ts', source: '+a=1\n' }), []);
   assert.equal(rule.match({ filepath: 'src/a.ts', source: '+a=1\n' })[0]!.scope.id, 'a');
@@ -598,16 +731,15 @@ test('mixing a file source with revision fields is rejected for selected files o
 test('a filter sees YAML plugin data, where 0 is present and an empty value is absent', () => {
   const rule = parseRule([
     "version: 'v1'",
-    'name: Replicas',
     'files: { included: ["config/*.yaml"] }',
     'scope:',
     '  format: yaml',
     "  path: '$'",
     '  changed: false',
     "filter: { non_empty: '$.data.spec.replicas' }",
-    'rule: Review the replicas.',
+    'check: { rule: Review the replicas. }',
     '',
-  ].join('\n'));
+  ].join('\n'), join('/', 'rules', 'Replicas.yaml'));
   const contexts = [
     ['spec: {replicas: 0}', 1], // zero is a present value
     ['spec: {replicas: ""}', 0],
@@ -621,7 +753,7 @@ test('a filter sees YAML plugin data, where 0 is present and an empty value is a
 
 test('decision defaults to scope and normalizes every grouping', () => {
   // Omitted entirely (no `decision` key at all) is the default scope grouping.
-  assert.deepStrictEqual(compileRule(DEFINITION, registry).decision, { group_by: 'scope' });
+  assert.deepStrictEqual(compileRule(DEFINITION, RULE_FILE, registry).decision, { group_by: 'scope' });
 
   const cases: readonly [label: string, decision: unknown, expected: DecisionGrouping][] = [
     ['undefined', undefined, { group_by: 'scope' }],
@@ -673,20 +805,20 @@ test('an unknown decision key is ignored while the known grouping stays enforced
     const ignored = Object.keys(decision).filter(key => key !== 'group_by' && (key !== 'level' || decision.group_by !== 'folder'));
     let rule!: CompiledRule;
     assertWarned(t, ignored.map(key => `rule.decision.${key}`), () => {
-      rule = compileRule(definition({ decision }), registry);
+      rule = compileRule(definition({ decision }), RULE_FILE, registry);
     });
     assert.deepStrictEqual(rule.decision, expected, label);
   }
 
   assertWarned(t, [], () => {
-    assert.throws(() => compileRule(definition({ decision: { level: -1 } }), registry), Error);
+    assert.throws(() => compileRule(definition({ decision: { level: -1 } }), RULE_FILE, registry), Error);
   });
   assertWarned(t, [], () => {
-    assert.throws(() => compileRule(definition({ decision: { groupby: 'folder', depth: 1 } }), registry), Error);
+    assert.throws(() => compileRule(definition({ decision: { groupby: 'folder', depth: 1 } }), RULE_FILE, registry), Error);
   });
   // A malformed `level` beside an ignored key still fails on the known value.
   assertWarned(t, ['rule.decision.depth'], () => {
-    assert.throws(() => compileRule(definition({ decision: { group_by: 'folder', level: 1, depth: 1 } }), registry), Error);
+    assert.throws(() => compileRule(definition({ decision: { group_by: 'folder', level: 1, depth: 1 } }), RULE_FILE, registry), Error);
   });
 });
 

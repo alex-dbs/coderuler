@@ -18,22 +18,36 @@ export interface RuleExamples {
   readonly bad: readonly string[];
 }
 
+export interface RuleSettings {
+  readonly model?: string;
+  readonly threshold?: number;
+  readonly backend?: 'jev';
+}
+
 export type DecisionGrouping =
   | { readonly group_by: 'scope' }
   | { readonly group_by: 'file' }
   | { readonly group_by: 'project' }
   | { readonly group_by: 'folder'; readonly level?: number };
 
-export interface RuleDefinition {
-  readonly version: 'v1';
-  readonly name: string;
-  readonly files: FileSelection;
-  readonly scope: ScopeDefinition;
+export type RuleKind = 'AI' | 'regex';
+
+export interface RuleCheck {
+  readonly kind: RuleKind;
   readonly rule: string;
   readonly examples?: Readonly<Partial<RuleExamples>>;
+  readonly 'violation-message'?: string;
+}
+
+export interface RuleDefinition {
+  readonly version: 'v1';
+  readonly files: FileSelection;
+  readonly scope: ScopeDefinition;
+  readonly check: RuleCheck;
   readonly filter?: FilterDefinition;
   readonly decision?: DecisionGrouping;
-  readonly title?: string;
+  readonly enabled?: boolean;
+  readonly settings?: RuleSettings;
 }
 
 export interface RuleInput {
@@ -50,6 +64,7 @@ export interface FileInput {
 
 export interface MatchOptions {
   readonly changedOnly?: boolean;
+  readonly onScope?: (context: Context, accepted: boolean) => void;
 }
 
 export interface Context {
@@ -61,10 +76,13 @@ export interface Context {
 export interface CompiledRule {
   readonly version: 'v1';
   readonly name: string;
+  readonly kind: RuleKind;
   readonly rule: string;
   readonly examples: RuleExamples;
   readonly decision: DecisionGrouping;
-  readonly title?: string;
+  readonly violationMessage?: string;
+  readonly enabled: boolean;
+  readonly settings: RuleSettings;
   matchesFile(filepath: string): boolean;
   match(input: RuleInput | FileInput, options?: MatchOptions): Context[];
 }

@@ -1,5 +1,4 @@
 version: 'v1'
-name: Billing HTTP URLs
 files:
   included:
     - proto/billing/**/*.proto
@@ -10,31 +9,32 @@ scope:
   path: $.rpcs[*]
 filter:
   non_empty: $.data.http.bindings
-rule: HTTP URL resource segments must use plural nouns, not operation names such as getInvoice or createPayment. Version segments, service prefixes such as billing, and path parameters such as {invoice_id} are allowed.
-examples:
-  good:
-    - |
-      option (google.api.http) = {
-        get: "/v1/billing/invoices/{invoice_id}"
-      };
-    - |
-      option (google.api.http) = {
-        post: "/v1/billing/invoices"
-      };
-    - |
-      option (google.api.http) = {
-        get: "/v1/billing/invoices/{invoice_id}/items"
-      };
-  bad:
-    - |
-      option (google.api.http) = {
-        get: "/v1/billing/getInvoice/{invoice_id}"
-      };
-    - |
-      option (google.api.http) = {
-        post: "/v1/billing/createPayment"
-      };
-    - |
-      option (google.api.http) = {
-        get: "/v1/billing/invoice/{invoice_id}"
-      };
+check:
+  rule: HTTP URL resource segments must use plural nouns, not operation names such as getInvoice or createPayment. Version segments, service prefixes such as billing, and path parameters such as {invoice_id} are allowed.
+  examples:
+    good:
+      - |
+        option (google.api.http) = {
+          get: "/v1/billing/invoices/{invoice_id}"
+        };
+      - |
+        option (google.api.http) = {
+          post: "/v1/billing/invoices"
+        };
+      - |
+        option (google.api.http) = {
+          get: "/v1/billing/invoices/{invoice_id}/items"
+        };
+    bad:
+      - |
+        option (google.api.http) = {
+          get: "/v1/billing/getInvoice/{invoice_id}"
+        };
+      - |
+        option (google.api.http) = {
+          post: "/v1/billing/createPayment"
+        };
+      - |
+        option (google.api.http) = {
+          get: "/v1/billing/invoice/{invoice_id}"
+        };

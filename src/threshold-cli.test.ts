@@ -34,16 +34,15 @@ after(async () => {
 function writeScopeCase(project: Sandbox): string {
   const rulePath = writeFile(
     join(project.rules, 'threshold.yaml'),
-    yamlRule('Threshold review', 'Review every source.', { included: ['**/*.yaml'] }),
+    yamlRule('Review every source.', { included: ['**/*.yaml'] }),
   );
   writeFile(join(project.cwd, 'src', 'a.yaml'), 'service:\n  name: api\n');
   return rulePath;
 }
 
-function groupedRule(name: string): string {
+function groupedRule(): string {
   return [
     "version: 'v1'",
-    `name: '${name}'`,
     'files:',
     '  included:',
     "    - 'charts/**/*.yaml'",
@@ -52,7 +51,8 @@ function groupedRule(name: string): string {
     "  path: '$'",
     'decision:',
     '  group_by: folder',
-    'rule: Review the selected sources as one group.',
+    'check:',
+    "  rule: 'Review the selected sources as one group.'",
     '',
   ].join('\n');
 }
@@ -154,7 +154,7 @@ test('--debug reports the effective threshold and where it came from', async () 
 
 test('check judges a group against the same threshold policy as a scope', async () => {
   const project = sandbox.isolated('grouped');
-  const rulePath = writeFile(join(project.rules, 'grouped.yaml'), groupedRule('Grouped review'));
+  const rulePath = writeFile(join(project.rules, 'grouped.yaml'), groupedRule());
   writeFile(join(project.cwd, 'charts', 'a.yaml'), 'name: a\n');
   writeFile(join(project.cwd, 'charts', 'b.yaml'), 'name: b\n');
 

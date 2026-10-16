@@ -1,0 +1,45 @@
+inputs:
+  - filepath: proto/billing/v1/invoice.proto
+    source: |
+      syntax = "proto3";
+
+      package acme.billing.v1;
+
+      service BillingService {
+        rpc GetInvoice(GetInvoiceRequest) returns (GetInvoiceResponse) {
+          option (google.api.http) = {
+            get: "/v1/billing/invoices/{invoice_id}"
+          };
+        }
+
+        rpc StreamInvoices(StreamInvoicesRequest) returns (StreamInvoicesResponse);
+
+        rpc CreateInvoice(CreateInvoiceRequest) returns (CreateInvoiceResponse) {
+          option (google.api.http) = {
+            post: "/v1/billing/invoices"
+            additional_bindings {
+              get: "/v1/billing/invoices/{invoice_id}/items"
+            }
+          };
+        }
+      }
+expected:
+  contexts:
+    - filepath: proto/billing/v1/invoice.proto
+      scope:
+        lines: {start: 8, end: 8}
+        id: 'acme.billing.v1.BillingService.GetInvoice:/http/bindings/0/url'
+        source: '"/v1/billing/invoices/{invoice_id}"'
+        data: /v1/billing/invoices/{invoice_id}
+    - filepath: proto/billing/v1/invoice.proto
+      scope:
+        lines: {start: 16, end: 16}
+        id: 'acme.billing.v1.BillingService.CreateInvoice:/http/bindings/0/url'
+        source: '"/v1/billing/invoices"'
+        data: /v1/billing/invoices
+    - filepath: proto/billing/v1/invoice.proto
+      scope:
+        lines: {start: 18, end: 18}
+        id: 'acme.billing.v1.BillingService.CreateInvoice:/http/bindings/1/url'
+        source: '"/v1/billing/invoices/{invoice_id}/items"'
+        data: /v1/billing/invoices/{invoice_id}/items

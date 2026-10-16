@@ -29,6 +29,8 @@ const FIXTURE = resolve(ROOT, 'tests', 'decision-golden.json');
 
 const GOLDEN_CWD = resolve('/', 'project');
 
+const GOLDEN_RULE_FILE = join(GOLDEN_CWD, 'rules', 'golden.yaml');
+
 interface GoldenInput {
   readonly filepath: string;
   readonly source: string;
@@ -87,14 +89,14 @@ function goldenCases(): GoldenCase[] {
     const fragment = fragments[kind];
     if (fragment === undefined) throw new Error(`${where}.scope names no shared scope fragment`);
 
-    const lines = ["version: 'v1'", `name: '${name.replaceAll("'", "''")}'`, 'files:', '  included:'];
+    const lines = ["version: 'v1'", 'files:', '  included:'];
     for (const glob of stringList(entry.included, `${where}.included`)) lines.push(`    - '${glob}'`);
     lines.push('scope:', ...fragment.map(line => `  ${line}`));
     const filter = optionalLines(entry.filter, `${where}.filter`);
     if (filter !== undefined) lines.push('filter:', ...filter.map(line => `  ${line}`));
     const decisionLines = optionalLines(entry.decisionLines, `${where}.decisionLines`);
     if (decisionLines !== undefined) lines.push('decision:', ...decisionLines.map(line => `  ${line}`));
-    lines.push('rule: Review the selected scopes.', '');
+    lines.push('check:', '  rule: Review the selected scopes.', '');
 
     if (!Array.isArray(entry.inputs)) throw new Error(`${where}.inputs must be an array`);
     const inputs = entry.inputs.map((input: unknown, inputIndex: number) => {
@@ -142,7 +144,7 @@ function selected(context: DecisionContext): unknown {
 }
 
 function runGoldenCase(golden: GoldenCase): void {
-  const rule: CompiledRule = parseRule(golden.rule);
+  const rule: CompiledRule = parseRule(golden.rule, GOLDEN_RULE_FILE);
   assert.deepStrictEqual(rule.decision, golden.compiled, `${golden.name}: the decision is not the normalized grouping`);
   const contexts = golden.inputs.flatMap(input => rule.match({ filepath: input.filepath, source: input.source }));
 
@@ -184,20 +186,20 @@ after(async () => {
   await backend.close();
 });
 
-function globalRule(name: string, decision: readonly string[], included: readonly string[] = ['**/*.yaml']): string {
-  const lines = ["version: 'v1'", `name: '${name}'`, 'files:', '  included:'];
+function globalRule(decision: readonly string[], included: readonly string[] = ['**/*.yaml']): string {
+  const lines = ["version: 'v1'", 'files:', '  included:'];
   for (const glob of included) lines.push(`    - '${glob}'`);
   lines.push('scope:', '  format: yaml', "  path: '$'");
   if (decision.length > 0) lines.push('decision:', ...decision.map(line => `  ${line}`));
-  lines.push('rule: Review the selected scopes.', '');
+  lines.push('check:', '  rule: Review the selected scopes.', '');
   return lines.join('\n');
 }
 
-function itemRule(name: string, decision: readonly string[], filter?: readonly string[]): string {
-  const lines = ["version: 'v1'", `name: '${name}'`, 'files:', '  included:', "    - '**/*.yaml'"];
+function itemRule(decision: readonly string[], filter?: readonly string[]): string {
+  const lines = ["version: 'v1'", 'files:', '  included:', "    - '**/*.yaml'"];
   lines.push('scope:', '  format: yaml', "  path: '$.items[*]'", "  key: '$.id'");
   if (filter !== undefined) lines.push('filter:', ...filter.map(line => `  ${line}`));
-  lines.push('decision:', ...decision.map(line => `  ${line}`), 'rule: Review the selected items.', '');
+  lines.push('decision:', ...decision.map(line => `  ${line}`), 'check:', '  rule: Review the selected items.', '');
   return lines.join('\n');
 }
 
@@ -247,10 +249,29 @@ function findState(match: (state: Record<string, unknown>) => boolean, label: st
   throw new Error(`${label}: no recorded request carried the expected state`);
 }
 
+function findGroupState(filepaths: readonly string[], label: string): Record<string, unknown> {
+  return findState((state) => {
+    const files = state.files;
+    if (!Array.isArray(files) || files.length !== filepaths.length) return false;
+    return files.every(
+      (file, index) => isMapping(file) && typeof file.filepath === 'string' && file.filepath === filepaths[index],
+    );
+  }, label);
+}
+
+function stateFilepaths(state: Record<string, unknown>, label: string): string[] {
+  const files = state.files;
+  if (!Array.isArray(files)) throw new Error(`${label}: the grouped state carried no files`);
+  return files.map((file, index) => {
+    if (!isMapping(file)) throw new Error(`${label}.files[${index}] must be a mapping`);
+    return requireString(file.filepath, `${label}.files[${index}].filepath`);
+  });
+}
+
 test('check groups a project from the current tree with no repository and an unused base', async () => {
   backend.reset();
   const project = sandbox.isolated('grouped-no-repository');
-  const rulePath = writeFile(join(project.rules, 'project.yaml'), globalRule('project review', ['group_by: project']));
+  const rulePath = writeFile(join(project.rules, 'project.yaml'), globalRule(['group_by: project']));
   writeFile(join(project.cwd, 'src', 'app.yaml'), 'name: src-app');
   writeFile(join(project.cwd, 'top.yaml'), 'name: top');
 
@@ -277,8 +298,7 @@ test('check groups a project from the current tree with no repository and an unu
     },
   ]);
   assert.strictEqual(backend.requests.length, 1, 'one group must be one decision');
-  assert.deepStrictEqual(findState(state => isMapping(state.group) && state.group.path === '.', 'grouped without a repository'), {
-    group: { type: 'project', path: '.' },
+  assert.deepStrictEqual(findGroupState(['src/app.yaml', 'top.yaml'], 'grouped without a repository'), {
     files: [
       { filepath: 'src/app.yaml', scopes: [{ id: '0:', data: { name: 'src-app' } }] },
       { filepath: 'top.yaml', scopes: [{ id: '0:', data: { name: 'top' } }] },
@@ -299,25 +319,25 @@ test('check reads the committed change for a scope rule and the current tree for
   // The working tree moves on after the commit, and one file was never committed at all.
   writeFile(join(repo.cwd, 'charts/app/values.yaml'), 'name: dirty');
   writeFile(join(repo.cwd, 'charts/new/values.yaml'), 'name: new');
-  writeFile(join(repo.rules, 'a-scope.yaml'), globalRule('scope review', []));
-  writeFile(join(repo.rules, 'b-grouped.yaml'), globalRule('grouped review', ['group_by: project']));
+  writeFile(join(repo.rules, 'a-scope.yaml'), globalRule([]));
+  writeFile(join(repo.rules, 'b-grouped.yaml'), globalRule(['group_by: project']));
 
   const list = entries(
     await runCli(['check', '.', '--rules', repo.rules, '--diff-only', '--base', 'main'], repo),
     'mixed modes',
   );
-  assert.deepStrictEqual(list.map(entry => entry.name), ['scope review', 'grouped review']);
+  assert.deepStrictEqual(list.map(entry => entry.name), ['a-scope', 'b-grouped']);
 
   const scopeEntry = list[0]!;
   const groupedEntry = list[1]!;
   // The scope rule reviews the frozen committed change: neither the dirty edit nor the untracked file.
-  assert.deepStrictEqual(contextViews(scopeEntry, 'scope review').map(view => view.filepath), ['charts/app/values.yaml']);
+  assert.deepStrictEqual(contextViews(scopeEntry, 'a-scope').map(view => view.filepath), ['charts/app/values.yaml']);
   assert.deepStrictEqual(scopeEntry.decisions, [
     { filepath: 'charts/app/values.yaml', scopeId: '0:', follows: true, probability: 0.9, model: 'testmodel' },
   ]);
   // The grouped rule reviews the whole current tree, unchanged, dirty and untracked files alike.
   assert.deepStrictEqual(
-    contextViews(groupedEntry, 'grouped review').map(view => view.filepath),
+    contextViews(groupedEntry, 'b-grouped').map(view => view.filepath),
     ['charts/app/values.yaml', 'charts/new/values.yaml', 'charts/other/values.yaml'],
   );
   assert.deepStrictEqual(groupedEntry.decisions, [
@@ -343,20 +363,25 @@ test('check reads the committed change for a scope rule and the current tree for
     typeof patch === 'string' && patch.includes('-name: base') && patch.includes('+name: committed'),
     'the scope rule must review the committed change, not the working tree',
   );
-  assert.deepStrictEqual(findState(state => isMapping(state.group) && state.group.path === '.', 'mixed modes'), {
-    group: { type: 'project', path: '.' },
-    files: [
-      { filepath: 'charts/app/values.yaml', scopes: [{ id: '0:', data: { name: 'dirty' } }] },
-      { filepath: 'charts/new/values.yaml', scopes: [{ id: '0:', data: { name: 'new' } }] },
-      { filepath: 'charts/other/values.yaml', scopes: [{ id: '0:', data: { name: 'other' } }] },
-    ],
-  });
+  assert.deepStrictEqual(
+    findGroupState(
+      ['charts/app/values.yaml', 'charts/new/values.yaml', 'charts/other/values.yaml'],
+      'mixed modes',
+    ),
+    {
+      files: [
+        { filepath: 'charts/app/values.yaml', scopes: [{ id: '0:', data: { name: 'dirty' } }] },
+        { filepath: 'charts/new/values.yaml', scopes: [{ id: '0:', data: { name: 'new' } }] },
+        { filepath: 'charts/other/values.yaml', scopes: [{ id: '0:', data: { name: 'other' } }] },
+      ],
+    },
+  );
   backend.reset();
 });
 
 test('check narrows a grouped rule to the target and keeps the group of the narrowed file', async () => {
   const project = sandbox.isolated('grouped-target');
-  const rulePath = writeFile(join(project.rules, 'folder.yaml'), globalRule('folder review', ['group_by: folder']));
+  const rulePath = writeFile(join(project.rules, 'folder.yaml'), globalRule(['group_by: folder']));
   writeFile(join(project.cwd, 'charts', 'app', 'values.yaml'), 'name: app');
   writeFile(join(project.cwd, 'other', 'values.yaml'), 'name: other');
   writeFile(join(project.cwd, 'other', 'deep', 'values.yaml'), 'name: deep');
@@ -381,8 +406,12 @@ test('check narrows a grouped rule to the target and keeps the group of the narr
       `${label}: wrong groups`,
     );
     assert.strictEqual(backend.requests.length, 1, `${label}: one group must be one decision`);
-    const state = findState(state => isMapping(state.group) && state.group.path === 'charts/app', label);
-    assert.deepStrictEqual(state.group, { type: 'folder', path: 'charts/app' }, `${label}: wrong group path`);
+    const state = findGroupState(['charts/app/values.yaml'], label);
+    assert.deepStrictEqual(
+      stateFilepaths(state, label),
+      ['charts/app/values.yaml'],
+      `${label}: the grouped decision must carry only the narrowed file`,
+    );
     backend.reset();
   }
 });
@@ -392,15 +421,15 @@ test('check keeps every loaded descriptor out of a mixed scan', async () => {
   const project = sandbox.isolated('descriptor-exclusion');
   // Both descriptors are inside the scanned tree and both rules select every YAML file, so a
   // descriptor that leaks into either collection shows up as a reviewed source.
-  writeFile(join(project.cwd, 'rules', 'a-scope.yaml'), globalRule('scope rule', []));
-  writeFile(join(project.cwd, 'rules', 'b-grouped.yaml'), globalRule('grouped rule', ['group_by: file']));
+  writeFile(join(project.cwd, 'rules', 'a-scope.yaml'), globalRule([]));
+  writeFile(join(project.cwd, 'rules', 'b-grouped.yaml'), globalRule(['group_by: file']));
   writeFile(join(project.cwd, 'src', 'a.yaml'), 'name: alpha');
 
   const list = entries(
     await runCli(['check', '.', '--rules', join(project.cwd, 'rules')], project),
     'descriptor exclusion',
   );
-  assert.deepStrictEqual(list.map(entry => entry.name), ['scope rule', 'grouped rule']);
+  assert.deepStrictEqual(list.map(entry => entry.name), ['a-scope', 'b-grouped']);
   for (const entry of list) {
     const files = contextViews(entry, entry.name).map(view => view.filepath);
     assert.deepStrictEqual(files, ['src/a.yaml'], `${entry.name}: a loaded descriptor became a source`);
@@ -426,7 +455,7 @@ test('check keeps every loaded descriptor out of a mixed scan', async () => {
 test('check asks once per group and lists every member scope in order', async () => {
   backend.reset();
   const project = sandbox.isolated('grouped-members');
-  const rulePath = writeFile(join(project.rules, 'items.yaml'), itemRule('item review', ['group_by: file']));
+  const rulePath = writeFile(join(project.rules, 'items.yaml'), itemRule(['group_by: file']));
   writeFile(join(project.cwd, 'src', 'app', 'values.yaml'), items('a', 'b', 'c'));
   writeFile(join(project.cwd, 'src', 'lib', 'values.yaml'), items('x', 'y'));
 
@@ -467,7 +496,7 @@ test('check asks once per group and lists every member scope in order', async ()
   ]);
   // Five scopes in two groups: a group is answered once, never split, and never fanned out per scope.
   assert.strictEqual(backend.requests.length, 2, 'one group must be one decision');
-  assert.deepStrictEqual(findState(state => isMapping(state.group) && state.group.path === 'src/app/values.yaml', 'grouped members').files, [
+  assert.deepStrictEqual(findGroupState(['src/app/values.yaml'], 'grouped members').files, [
     {
       filepath: 'src/app/values.yaml',
       scopes: [
@@ -477,7 +506,7 @@ test('check asks once per group and lists every member scope in order', async ()
       ],
     },
   ]);
-  assert.deepStrictEqual(findState(state => isMapping(state.group) && state.group.path === 'src/lib/values.yaml', 'grouped members').files, [
+  assert.deepStrictEqual(findGroupState(['src/lib/values.yaml'], 'grouped members').files, [
     {
       filepath: 'src/lib/values.yaml',
       scopes: [
@@ -492,15 +521,15 @@ test('check asks once per group and lists every member scope in order', async ()
 test('check keeps the groups of distinct rules apart', async () => {
   backend.reset();
   const project = sandbox.isolated('rule-isolation');
-  writeFile(join(project.rules, 'a-charts.yaml'), globalRule('charts review', ['group_by: file'], ['charts/**/*.yaml']));
-  writeFile(join(project.rules, 'b-other.yaml'), globalRule('other review', ['group_by: project'], ['other/**/*.yaml']));
+  writeFile(join(project.rules, 'a-charts.yaml'), globalRule(['group_by: file'], ['charts/**/*.yaml']));
+  writeFile(join(project.rules, 'b-other.yaml'), globalRule(['group_by: project'], ['other/**/*.yaml']));
   writeFile(join(project.cwd, 'charts', 'one.yaml'), 'name: one');
   writeFile(join(project.cwd, 'charts', 'two.yaml'), 'name: two');
   writeFile(join(project.cwd, 'other', 'three.yaml'), 'name: three');
 
   const list = entries(await runCli(['check', '.', '--rules', project.rules], project), 'rule isolation');
 
-  assert.deepStrictEqual(list.map(entry => entry.name), ['charts review', 'other review']);
+  assert.deepStrictEqual(list.map(entry => entry.name), ['a-charts', 'b-other']);
   assert.deepStrictEqual(list[0]!.decisions, [
     {
       group: { type: 'file', path: 'charts/one.yaml' },
@@ -534,7 +563,7 @@ test('check keeps the groups of distinct rules apart', async () => {
 test('check stops at the group the backend fails on and writes nothing', async () => {
   backend.reset();
   const project = sandbox.isolated('grouped-failure');
-  const rulePath = writeFile(join(project.rules, 'items.yaml'), itemRule('failing review', ['group_by: file']));
+  const rulePath = writeFile(join(project.rules, 'items.yaml'), itemRule(['group_by: file']));
   for (const name of ['a', 'b', 'c']) writeFile(join(project.cwd, `${name}.yaml`), items(name));
 
   // One group at a time, so the first group is answered and the second is not, and the third is
@@ -550,7 +579,7 @@ test('check asks for no decision when a grouped rule selects no scope', async ()
   const project = sandbox.isolated('grouped-empty');
   const rulePath = writeFile(
     join(project.rules, 'items.yaml'),
-    itemRule('empty review', ['group_by: file'], ["non_empty: '$.data.missing'"]),
+    itemRule(['group_by: file'], ["non_empty: '$.data.missing'"]),
   );
   writeFile(join(project.cwd, 'src', 'values.yaml'), items('a'));
 
@@ -572,7 +601,6 @@ test('check sends a source-only scope with its source for a grouped rule', async
     join(project.rules, 'functions.yaml'),
     [
       "version: 'v1'",
-      "name: 'function review'",
       'files:',
       '  included:',
       "    - '**/*.js'",
@@ -583,7 +611,8 @@ test('check sends a source-only scope with its source for a grouped rule', async
       '    kind: function_declaration',
       'decision:',
       '  group_by: file',
-      'rule: Review every function.',
+      'check:',
+      '  rule: Review every function.',
       '',
     ].join('\n'),
   );
@@ -615,8 +644,7 @@ test('check sends a source-only scope with its source for a grouped rule', async
     },
   ]);
   // With no data to send, the scope's own source travels instead — never an empty placeholder.
-  assert.deepStrictEqual(findState(state => isMapping(state.group) && state.group.path === 'src/script.js', 'grouped source-only scopes'), {
-    group: { type: 'file', path: 'src/script.js' },
+  assert.deepStrictEqual(findGroupState(['src/script.js'], 'grouped source-only scopes'), {
     files: [
       {
         filepath: 'src/script.js',
@@ -641,7 +669,7 @@ test('check rejects a source outside the project root before asking for any grou
     const project = sandbox.isolated(`outside-${label}`);
     const rulePath = writeFile(
       join(project.rules, 'outside.yaml'),
-      globalRule(`outside ${label}`, decision, ['../outside.yaml']),
+      globalRule(decision, ['../outside.yaml']),
     );
     // The target `..` is the project's parent, so this file is scanned and the rule selects it as
     // `../outside.yaml`; the grouping root stays the project cwd, which cannot name it relatively.
