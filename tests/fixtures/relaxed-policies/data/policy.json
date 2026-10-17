@@ -1,0 +1,6 @@
+{
+  "policies": [
+    { "id": "logging", "strict": false },
+    { "id": "metrics", "strict": false }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "owners": ["alice", "bob"],
+  "services": [
+    { "name": "billing", "replicas": 3, "team": "payments" },
+    { "name": "ledger", "replicas": 7, "team": "payments" },
+    { "name": "audit" }
+  ]
+}

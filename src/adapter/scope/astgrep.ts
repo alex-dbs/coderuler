@@ -1,21 +1,19 @@
 import { parse, type NapiConfig, type SgNode } from '@ast-grep/napi';
-import { warnUnknownField } from '../console/warnings.ts';
-import { resolveAstGrepLanguage } from './astgrep-languages.ts';
-import { textLineSpan } from './lines.ts';
-import type {
-  CompiledScope,
-  ScopeCompileContext,
-  ScopeInput,
-  ScopeMatch,
-  ScopePlugin,
-} from '../../app/scope/types.ts';
+import type { ScopeMatch, ScopeSelector, SourceFile } from '../../app/rule.js';
+import { resolveAstGrepLanguage } from './astgrep-languages.js';
+import { textLineSpan } from './lines.js';
 
 interface CaptureSpec {
   readonly name: string;
   readonly multiple: boolean;
 }
 
-const OPTION_KEYS: readonly string[] = ['language', 'rule', 'constraints', 'utils'];
+export interface AstGrepScopeOptions {
+  readonly language: string;
+  readonly rule: NapiConfig['rule'];
+  readonly constraints?: NapiConfig['constraints'];
+  readonly utils?: NapiConfig['utils'];
+}
 
 const METAVARIABLE = /\$\$\$([A-Za-z_][A-Za-z0-9_]*)|\$([A-Za-z_][A-Za-z0-9_]*)/g;
 const ANONYMOUS = /^_+$/;
@@ -130,71 +128,49 @@ function uniqueIds(bases: readonly string[]): readonly string[] {
   return ids;
 }
 
-function compileAstGrepScope(
-  options: Readonly<Record<string, unknown>>,
-  context?: ScopeCompileContext,
-): CompiledScope {
-  const warn = context?.warnUnknownField ?? warnUnknownField;
-  for (const key of Object.keys(options)) {
-    if (!OPTION_KEYS.includes(key)) warn(`rule.scope.${key}`);
-  }
-
-  const language = options.language;
+export function astGrep(options: AstGrepScopeOptions): ScopeSelector {
+  const raw = options as unknown as Record<string, unknown>;
+  const language = raw.language;
   if (typeof language !== 'string' || language === '') {
     throw new Error('ast-grep scope option language must be a non-empty string');
   }
-  const rule = options.rule;
+  const rule = raw.rule;
   if (!isMapping(rule)) throw new Error('ast-grep scope option rule must be a mapping');
-  const constraints = optionalMapping(options.constraints, 'constraints');
-  const utils = optionalMapping(options.utils, 'utils');
+  const constraints = optionalMapping(raw.constraints, 'constraints');
+  const utils = optionalMapping(raw.utils, 'utils');
 
-  // Resolve the requested language to the name the native parser takes: catalog aliases and casing
-  // fold to the canonical spelling (registering the bundled grammars on first need), while a name
-  // the catalog does not know is the host's own language and reaches the parser exactly as written.
   const nativeLanguage = resolveAstGrepLanguage(language);
 
   const config: Record<string, unknown> = { rule };
   if (constraints !== undefined) config.constraints = constraints;
   if (utils !== undefined) config.utils = utils;
-  // Rule options come from rule YAML, so their shape is unknown to the compiler; the native
-  // parser validates them on the call below, which is exactly where a bad rule must surface.
   const nativeConfig = config as unknown as NapiConfig;
 
-  // Compile and validate the native query before any match; invalid language/rule/regex throw.
   parse(nativeLanguage, '').root().findAll(nativeConfig);
 
   const specs = new Map<string, boolean>();
   collectCaptureSpecs([rule, constraints, utils], specs);
-  const captureSpecs: CaptureSpec[] = [...specs].map(([name, multiple]) => ({ name, multiple }));
+  const captureSpecs: readonly CaptureSpec[] = [...specs].map(([name, multiple]) => ({ name, multiple }));
 
-  return {
-    select(input: ScopeInput): readonly ScopeMatch[] {
-      const matches = parse(nativeLanguage, input.source).root().findAll(nativeConfig);
-      const occurrences = new Map<string, number>();
-      const bases: string[] = [];
-      for (const node of matches) {
-        // `SgNode.kind()` is documented to return the node-kind name; its native type also admits the
-        // numeric index of the language types map, which no real syntax node uses, so narrow here.
-        const kind = node.kind() as string;
-        const occurrence = occurrences.get(kind) ?? 0;
-        occurrences.set(kind, occurrence + 1);
-        bases.push(identityOf(node, occurrence));
-      }
-      const ids = uniqueIds(bases);
-      return matches.map((node, index) => {
-        const text = node.text();
-        return {
-          id: ids[index]!,
-          source: text,
-          captures: readCaptures(node, captureSpecs),
-          lines: textLineSpan(node.range().start.line + 1, text),
-        };
-      });
-    },
+  return (file: SourceFile): readonly ScopeMatch[] => {
+    const matches = parse(nativeLanguage, file.source).root().findAll(nativeConfig);
+    const occurrences = new Map<string, number>();
+    const bases: string[] = [];
+    for (const node of matches) {
+      const kind = node.kind() as string;
+      const occurrence = occurrences.get(kind) ?? 0;
+      occurrences.set(kind, occurrence + 1);
+      bases.push(identityOf(node, occurrence));
+    }
+    const ids = uniqueIds(bases);
+    return matches.map((node, index) => {
+      const text = node.text();
+      return {
+        id: ids[index]!,
+        source: text,
+        captures: readCaptures(node, captureSpecs),
+        lines: textLineSpan(node.range().start.line + 1, text),
+      };
+    });
   };
 }
-
-export const astGrepPlugin: ScopePlugin = {
-  format: 'ast-grep',
-  compile: compileAstGrepScope,
-};

@@ -78,7 +78,6 @@ function isParseable(language: NativeLanguage): boolean {
 
 function canonicalLanguage(language: string): string {
   const folded = language.toLowerCase();
-  // Own keys only: a name such as `toString` must not pick up an inherited object property here.
   const alias = Object.hasOwn(LANGUAGE_ALIASES, folded) ? LANGUAGE_ALIASES[folded] : undefined;
   if (alias !== undefined) return alias;
   const known = BUILTIN_LANGUAGES[folded] === true || DYNAMIC_LANGUAGES[folded] === true;
@@ -101,8 +100,6 @@ function registerBundledGrammars(): void {
 export function createAstGrepLanguageRegistrations(): DynamicLangRegistrations {
   const registrations: DynamicLangRegistrations = {};
   for (const language of Object.keys(DYNAMIC_LANGUAGES)) {
-    // The package export is the registration record the native API wants: `@ast-grep/lang-<name>`
-    // loads lazily (its `libraryPath` is a getter the native call resolves) and restates nothing.
     registrations[language] = loadCommonJs(`@ast-grep/lang-${language}`) as LanguageRegistration;
   }
   return registrations;
@@ -112,9 +109,7 @@ export function resolveAstGrepLanguage(language: string): NativeLanguage {
   const canonical = canonicalLanguage(language);
   if (BUILTIN_LANGUAGES[canonical] === true) return canonical;
   if (DYNAMIC_LANGUAGES[canonical] !== true) return canonical;
-  // Every dynamic catalog name resolves once the bundled grammars are in place.
   if (bundledGrammarsActive) return canonical;
-  // A host may have registered this grammar itself; then the one native call is already spent.
   if (isParseable(canonical)) return canonical;
   registerBundledGrammars();
   if (isParseable(canonical)) {

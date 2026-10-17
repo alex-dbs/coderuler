@@ -14,5 +14,13 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "scripts/**/*.ts", "index.ts", "tests/**/*.ts"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.mts",
+    "tests/**/*.ts",
+    "tests/**/*.mts",
+    ".rulekeeper/**/*.ts",
+    ".rulekeeper/**/*.mts"
+  ],
+  "exclude": ["old", "dist", "coverage", "node_modules"]
 }

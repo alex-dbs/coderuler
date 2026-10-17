@@ -1,46 +1,68 @@
-import { realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { createProgram } from '../adapter/cli/program.ts';
-import { createRuleFiles } from '../adapter/filesystem/rule-files.ts';
-import { createSourceRepository } from '../adapter/filesystem/sources.ts';
-import { createSqliteStatistics } from '../adapter/sqlite/statistics.ts';
-import { createCheck } from '../app/check.ts';
-import { createContextCollector } from '../app/collect-contexts.ts';
-import { createRuleLoader } from '../app/load-rules.ts';
-import { trackCheck } from '../app/statistics.ts';
-import { createValidate } from '../app/validate.ts';
-import { createDecisionService } from './decision.ts';
-import { createInspectCommand } from './inspect.ts';
-import { parseRule } from './rules.ts';
+import { resolve } from 'node:path';
 
-export async function runCli(argv: readonly string[] = process.argv): Promise<void> {
+import { escapeDiagnostic, runProgram, type CliServices } from '../adapter/cli/program.js';
+import { createRedactor } from '../adapter/cli/reports.js';
+import { createProject, resolveTarget } from '../adapter/filesystem/project.js';
+import { createRuleLoader, resolveRuleSelector } from '../adapter/filesystem/rules.js';
+import { executeRules, validateRules } from '../app/execute.js';
+import { createDecisionResolver } from './settings.js';
+
+const EXIT_FAILURE = 2;
+const ENVIRONMENT_FILE = '.env';
+
+function loadEnvironment(cwd: string): void {
   try {
-    try {
-      process.loadEnvFile();
-    } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
-    }
-
-    const loadRules = createRuleLoader(createRuleFiles(), parseRule);
-    const statistics = createSqliteStatistics(join(homedir(), '.rulekeeper', 'stats.sqlite'));
-    const check = createCheck({
-      loadRules,
-      contexts: createContextCollector(createSourceRepository()),
-      createDecisionService: (settings, diagnostics, threshold) =>
-        createDecisionService(undefined, diagnostics, threshold, settings),
-      cwd: process.cwd(),
-    });
-    const program = createProgram({
-      check: trackCheck(check, realpathSync(process.cwd()), statistics, () => performance.now()),
-      validate: createValidate(loadRules),
-      inspect: createInspectCommand(statistics),
-      statistics,
-    });
-
-    await program.parseAsync([...argv]);
+    process.loadEnvFile(resolve(cwd, ENVIRONMENT_FILE));
   } catch (error) {
-    process.stderr.write(`rulekeeper: ${error instanceof Error ? error.message : String(error)}\n`);
-    process.exitCode = 1;
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
+}
+
+export function createServices(
+  cwd: string,
+  env: Readonly<Record<string, string | undefined>>,
+): CliServices {
+  const loader = createRuleLoader();
+  const redact = createRedactor([env.TYPESAFE_API_KEY]);
+  return {
+    cwd,
+    redact,
+
+    async loadRules(selection) {
+      return validateRules(loader, selection);
+    },
+
+    runRules: executeRules,
+
+    createProject,
+
+    resolveTarget,
+
+    resolveRuleSelector,
+
+    decisionResolver(thresholdOverride) {
+      return createDecisionResolver(env, thresholdOverride);
+    },
+
+    write(text) {
+      process.stdout.write(text);
+    },
+
+    writeError(text) {
+      process.stderr.write(text);
+    },
+  };
+}
+
+export async function runCli(argv: readonly string[]): Promise<number> {
+  const cwd = process.cwd();
+  try {
+    loadEnvironment(cwd);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const redact = createRedactor([process.env.TYPESAFE_API_KEY]);
+    process.stderr.write(`rulekeeper: ${redact(escapeDiagnostic(message))}\n`);
+    return EXIT_FAILURE;
+  }
+  return runProgram(argv, createServices(cwd, process.env));
 }

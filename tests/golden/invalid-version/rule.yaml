@@ -1,9 +1,0 @@
-version: 'v2'
-files:
-  included:
-    - '**/*.ts'
-scope:
-  format: yaml
-  path: '$'
-check:
-  rule: Review the change.

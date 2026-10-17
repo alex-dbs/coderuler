@@ -1,19 +1,14 @@
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer, type ServerResponse } from 'node:http';
+import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createServer, type IncomingHttpHeaders, type ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parse } from 'yaml';
-
-import { textLineSpan } from '../src/adapter/scope/lines.ts';
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-export const CLI = join(ROOT, 'index.ts');
-
-export const GOLDEN_ROOT = join(ROOT, 'tests', 'golden');
+export const CLI = join(ROOT, 'dist', 'cli.js');
 
 export interface CliResult {
   readonly status: number | null;
@@ -21,59 +16,31 @@ export interface CliResult {
   readonly stderr: string;
 }
 
-export interface CheckEntry {
-  readonly ruleFile: string;
-  readonly name: string;
-  readonly rule: string;
-  readonly examples: unknown;
-  readonly contexts: readonly unknown[];
-  readonly decisions: readonly CheckDecision[];
+export interface CliRun extends Promise<CliResult> {
+  terminate(): void;
 }
-
-export interface CheckGroupMember {
-  readonly filepath: string;
-  readonly scopeId: string;
-}
-
-export interface CheckScopeDecision extends CheckGroupMember {
-  readonly follows: boolean;
-  readonly probability: number;
-  readonly model: string;
-}
-
-export interface CheckGroupDecision {
-  readonly group: { readonly type: 'file' | 'folder' | 'project'; readonly path: string };
-  readonly members: readonly CheckGroupMember[];
-  readonly follows: boolean;
-  readonly probability: number;
-  readonly model: string;
-}
-
-export type CheckDecision = CheckScopeDecision | CheckGroupDecision;
-
-const GROUP_TYPES: Record<string, true> = { file: true, folder: true, project: true };
 
 export interface Sandbox {
+  readonly root: string;
   readonly cwd: string;
   readonly home: string;
-  readonly rules: string;
   readonly env: NodeJS.ProcessEnv;
 }
 
 export interface SandboxRoot {
   readonly root: string;
-  isolated(label: string): Sandbox;
+  isolated(label: string, overrides?: NodeJS.ProcessEnv): Sandbox;
   cleanup(): void;
 }
 
+const SANDBOX_PACKAGE = `${JSON.stringify({ name: 'sandbox-project', private: true, type: 'module' }, null, 2)}\n`;
+
 function withoutInheritedOverrides(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
-  for (const name of Object.keys(source)) {
-    if (name.startsWith('GIT_')) continue;
-    if (name.startsWith('RK_')) continue;
-    if (name.startsWith('TYPESAFE_')) continue;
+  for (const [name, value] of Object.entries(source)) {
+    if (name.startsWith('RK_') || name.startsWith('TYPESAFE_')) continue;
     if (name.toLowerCase().endsWith('proxy')) continue;
-    env[name] = source[name];
+    env[name] = value;
   }
   return env;
 }
@@ -84,33 +51,36 @@ export function isolatedEnv(home: string): NodeJS.ProcessEnv {
     HOME: home,
     USERPROFILE: home,
     XDG_CONFIG_HOME: join(home, '.config'),
-    GIT_CONFIG_NOSYSTEM: '1',
-    GIT_CONFIG_GLOBAL: join(home, '.gitconfig'),
-    GIT_CONFIG_SYSTEM: join(home, '.gitconfig-system'),
-    GIT_TERMINAL_PROMPT: '0',
-    GIT_AUTHOR_NAME: 'Rulekeeper Test',
-    GIT_AUTHOR_EMAIL: 'rulekeeper@example.invalid',
-    GIT_COMMITTER_NAME: 'Rulekeeper Test',
-    GIT_COMMITTER_EMAIL: 'rulekeeper@example.invalid',
     LC_ALL: 'C',
+    NO_COLOR: '1',
   };
 }
 
+function linkSdk(base: string): void {
+  const modules = join(base, 'node_modules');
+  mkdirSync(modules, { recursive: true });
+  const link = join(modules, 'rulekeeper');
+  if (!existsSync(link)) symlinkSync(ROOT, link, 'dir');
+}
+
+function linkHomeSdk(sandbox: Sandbox): void {
+  if (!existsSync(join(sandbox.home, '.rulekeeper'))) return;
+  linkSdk(sandbox.home);
+}
+
 export function createSandbox(prefix: string, overrides: NodeJS.ProcessEnv = {}): SandboxRoot {
-  // Canonicalize the root: on macOS the temporary directory is reached through a symlink
-  // (`/var` → `/private/var`), and the children report resolved paths, so an expectation built from
-  // the un-resolved path would name a different directory than the one a child actually sees.
   const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   let sequence = 0;
   return {
     root,
-    isolated(label: string): Sandbox {
+    isolated(label: string, extra: NodeJS.ProcessEnv = {}): Sandbox {
       const base = join(root, `${label}-${sequence++}`);
       const cwd = join(base, 'project');
       const home = join(base, 'home');
-      const rules = join(base, 'rules');
-      for (const path of [cwd, home, rules]) mkdirSync(path, { recursive: true });
-      return { cwd, home, rules, env: { ...isolatedEnv(home), ...overrides } };
+      for (const path of [cwd, home]) mkdirSync(path, { recursive: true });
+      writeFileSync(join(cwd, 'package.json'), SANDBOX_PACKAGE, 'utf8');
+      linkSdk(cwd);
+      return { root: base, cwd, home, env: { ...isolatedEnv(home), ...overrides, ...extra } };
     },
     cleanup(): void {
       rmSync(root, { recursive: true, force: true });
@@ -118,30 +88,18 @@ export function createSandbox(prefix: string, overrides: NodeJS.ProcessEnv = {})
   };
 }
 
-export interface CliPresentationOptions {
-  readonly json?: boolean;
-}
-
-function withDefaultJson(args: readonly string[], presentation: CliPresentationOptions): readonly string[] {
-  if (args[0] !== 'check') return args;
-  if (presentation.json === false) return args;
-  if (args.includes('--json')) return args;
-  return [...args, '--json'];
-}
-
 export function runCli(
   args: readonly string[],
   sandbox: Sandbox,
   overrides: NodeJS.ProcessEnv = {},
-  presentation: CliPresentationOptions = {},
-): Promise<CliResult> {
-  const command = withDefaultJson(args, presentation);
-  const { promise, resolve, reject } = Promise.withResolvers<CliResult>();
+): CliRun {
+  const { promise, resolve: settle, reject } = Promise.withResolvers<CliResult>();
   const env: NodeJS.ProcessEnv = { ...sandbox.env, ...overrides };
   for (const name of Object.keys(overrides)) {
     if (overrides[name] === undefined) delete env[name];
   }
-  const child = spawn(process.execPath, [CLI, ...command], {
+  linkHomeSdk(sandbox);
+  const child = spawn(process.execPath, [CLI, ...args], {
     cwd: sandbox.cwd,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -158,9 +116,13 @@ export function runCli(
   });
   child.on('error', reject);
   child.on('close', (status: number | null) => {
-    resolve({ status, stdout, stderr });
+    settle({ status, stdout, stderr });
   });
-  return promise;
+  return Object.assign(promise, {
+    terminate(): void {
+      child.kill('SIGKILL');
+    },
+  });
 }
 
 export function writeFile(path: string, contents: string): string {
@@ -169,270 +131,263 @@ export function writeFile(path: string, contents: string): string {
   return path;
 }
 
-export function runGit(cwd: string, args: readonly string[], env: NodeJS.ProcessEnv): string {
-  const result = spawnSync('git', ['-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8', env });
-  if (result.error !== undefined) throw result.error;
-  if (result.status !== 0) throw new Error(`git ${args.join(' ')} failed in ${cwd}: ${result.stderr}`);
-  return result.stdout;
+export function makeDirectory(path: string): string {
+  mkdirSync(path, { recursive: true });
+  return path;
 }
 
-export function isMapping(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+export function makeSymlink(path: string, target: string): string {
+  mkdirSync(dirname(path), { recursive: true });
+  symlinkSync(target, path);
+  return path;
 }
 
-export function requireString(value: unknown, where: string): string {
+export function listTree(root: string): readonly string[] {
+  const entries: string[] = [];
+  const walk = (directory: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      entries.push(relative(root, path).split(sep).join('/'));
+      if (entry.isDirectory()) walk(path);
+    }
+  };
+  walk(root);
+  return entries;
+}
+
+export function delay(ms: number): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setTimeout(resolve, ms);
+  return promise;
+}
+
+export function asMapping(value: unknown, where: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`${where} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function asString(value: unknown, where: string): string {
   if (typeof value !== 'string') throw new Error(`${where} must be a string`);
   return value;
 }
 
-function toGroupMember(value: unknown, where: string): CheckGroupMember {
-  if (!isMapping(value)) throw new Error(`${where} must be a mapping`);
-  return {
-    filepath: requireString(value.filepath, `${where}.filepath`),
-    scopeId: requireString(value.scopeId, `${where}.scopeId`),
+function asNumber(value: unknown, where: string): number {
+  if (typeof value !== 'number') throw new Error(`${where} must be a number`);
+  return value;
+}
+
+export interface CheckResultShape {
+  readonly status: 'pass' | 'violation';
+  readonly message?: string;
+  readonly probability?: number;
+  readonly model?: string;
+}
+
+export interface ScopeSubjectShape {
+  readonly kind: 'scope';
+  readonly filepath: string;
+  readonly id: string;
+  readonly source: string;
+  readonly data?: unknown;
+  readonly captures?: unknown;
+  readonly lines?: { readonly start: number; readonly end: number };
+}
+
+export interface GroupSubjectShape {
+  readonly kind: 'group';
+  readonly group: { readonly type: 'file' | 'folder' | 'project'; readonly path: string };
+  readonly members: readonly ScopeSubjectShape[];
+}
+
+export type SubjectShape = ScopeSubjectShape | GroupSubjectShape;
+
+export interface CheckEvaluationShape {
+  readonly subject: SubjectShape;
+  readonly result: CheckResultShape;
+}
+
+export interface CheckReportShape {
+  readonly name: string;
+  readonly ruleFile: string;
+  readonly status: 'pass' | 'violation' | 'skipped';
+  readonly reason?: string;
+  readonly evaluations: readonly CheckEvaluationShape[];
+}
+
+function toCheckResult(value: unknown, where: string): CheckResultShape {
+  const mapping = asMapping(value, where);
+  const status = mapping['status'];
+  if (status !== 'pass' && status !== 'violation') throw new Error(`${where}.status must be pass or violation`);
+  const result: { status: 'pass' | 'violation'; message?: string; probability?: number; model?: string } = { status };
+  const message = mapping['message'];
+  if (message !== undefined) result.message = asString(message, `${where}.message`);
+  const probability = mapping['probability'];
+  if (probability !== undefined) result.probability = asNumber(probability, `${where}.probability`);
+  const model = mapping['model'];
+  if (model !== undefined) result.model = asString(model, `${where}.model`);
+  return result;
+}
+
+function toScopeSubject(value: unknown, where: string): ScopeSubjectShape {
+  const mapping = asMapping(value, where);
+  if (mapping['kind'] !== 'scope') throw new Error(`${where}.kind must be "scope"`);
+  const subject: {
+    kind: 'scope';
+    filepath: string;
+    id: string;
+    source: string;
+    data?: unknown;
+    captures?: unknown;
+    lines?: { start: number; end: number };
+  } = {
+    kind: 'scope',
+    filepath: asString(mapping['filepath'], `${where}.filepath`),
+    id: asString(mapping['id'], `${where}.id`),
+    source: asString(mapping['source'], `${where}.source`),
   };
-}
-
-function toGroup(value: unknown, where: string): CheckGroupDecision['group'] {
-  if (!isMapping(value)) throw new Error(`${where} must be a mapping`);
-  const type = requireString(value.type, `${where}.type`);
-  if (GROUP_TYPES[type] !== true) throw new Error(`${where}.type must be file, folder or project`);
-  return { type: type as CheckGroupDecision['group']['type'], path: requireString(value.path, `${where}.path`) };
-}
-
-function toDecision(value: unknown, where: string): CheckDecision {
-  if (!isMapping(value)) throw new Error(`${where} must be a mapping`);
-  const follows = value.follows;
-  if (typeof follows !== 'boolean') throw new Error(`${where}.follows must be a boolean`);
-  const probability = value.probability;
-  if (typeof probability !== 'number') throw new Error(`${where}.probability must be a number`);
-  const model = requireString(value.model, `${where}.model`);
-
-  if (value.group !== undefined || value.members !== undefined) {
-    if (value.filepath !== undefined || value.scopeId !== undefined) {
-      throw new Error(`${where} must not mix a group decision with a scope decision`);
-    }
-    const members = value.members;
-    if (!Array.isArray(members)) throw new Error(`${where}.members must be an array`);
-    return {
-      group: toGroup(value.group, `${where}.group`),
-      members: members.map((member: unknown, index: number) => toGroupMember(member, `${where}.members[${index}]`)),
-      follows,
-      probability,
-      model,
+  if (mapping['data'] !== undefined) subject.data = mapping['data'];
+  if (mapping['captures'] !== undefined) subject.captures = mapping['captures'];
+  const lines = mapping['lines'];
+  if (lines !== undefined) {
+    const range = asMapping(lines, `${where}.lines`);
+    subject.lines = {
+      start: asNumber(range['start'], `${where}.lines.start`),
+      end: asNumber(range['end'], `${where}.lines.end`),
     };
   }
-
-  return {
-    filepath: requireString(value.filepath, `${where}.filepath`),
-    scopeId: requireString(value.scopeId, `${where}.scopeId`),
-    follows,
-    probability,
-    model,
-  };
+  return subject;
 }
 
-export function toCheckEntry(value: unknown, where: string): CheckEntry {
-  if (!isMapping(value)) throw new Error(`${where} must be a mapping`);
-  const contexts = value.contexts;
-  if (!Array.isArray(contexts)) throw new Error(`${where}.contexts must be an array`);
-  const decisions = value.decisions;
-  if (!Array.isArray(decisions)) throw new Error(`${where}.decisions must be an array`);
-  return {
-    ruleFile: requireString(value.ruleFile, `${where}.ruleFile`),
-    name: requireString(value.name, `${where}.name`),
-    rule: requireString(value.rule, `${where}.rule`),
-    examples: value.examples,
-    contexts,
-    decisions: decisions.map((decision: unknown, index: number) => toDecision(decision, `${where}.decisions[${index}]`)),
-  };
-}
-
-export function entries(result: CliResult, label: string): CheckEntry[] {
-  assert.strictEqual(result.status, 0, `${label}: expected success (stderr: ${result.stderr})`);
-  const payload: unknown = JSON.parse(result.stdout);
-  assert.ok(Array.isArray(payload), `${label}: expected the check output to be a JSON array`);
-  return payload.map((entry: unknown, index: number) => toCheckEntry(entry, `${label}[${index}]`));
-}
-
-export function soleEntry(result: CliResult, label: string): CheckEntry {
-  const list = entries(result, label);
-  assert.strictEqual(list.length, 1, `${label}: expected exactly one rule entry`);
-  return list[0]!;
-}
-
-export function assertFailed(result: CliResult, label: string): void {
-  assert.ok(result.status !== null && result.status > 0, `${label}: expected a nonzero exit status`);
-  assert.strictEqual(result.stdout, '', `${label}: expected no partial output on stdout`);
-  assert.notStrictEqual(result.stderr.trim(), '', `${label}: expected an actionable message on stderr`);
-}
-
-export function fileContext(filepath: string, source: string): unknown {
-  return { filepath, scope: { id: '0:', source, data: parse(source), lines: textLineSpan(1, source) } };
-}
-
-export interface RuleFiles {
-  readonly included: readonly string[];
-  readonly excluded?: readonly string[];
-}
-
-export function yamlRule(rule: string, files: RuleFiles, filter?: readonly string[]): string {
-  const lines = ["version: 'v1'", 'files:', '  included:'];
-  for (const glob of files.included) lines.push(`    - '${glob}'`);
-  if (files.excluded !== undefined) {
-    lines.push('  excluded:');
-    for (const glob of files.excluded) lines.push(`    - '${glob}'`);
+function toSubject(value: unknown, where: string): SubjectShape {
+  const mapping = asMapping(value, where);
+  if (mapping['kind'] === 'scope') return toScopeSubject(value, where);
+  if (mapping['kind'] !== 'group') throw new Error(`${where}.kind must be "scope" or "group"`);
+  const group = asMapping(mapping['group'], `${where}.group`);
+  const type = group['type'];
+  if (type !== 'file' && type !== 'folder' && type !== 'project') {
+    throw new Error(`${where}.group.type must be file, folder or project`);
   }
-  lines.push('scope:', '  format: yaml', "  path: '$'");
-  if (filter !== undefined) lines.push('filter:', ...filter);
-  lines.push('check:', `  rule: '${rule}'`, '');
-  return lines.join('\n');
-}
-
-const FIXTURE_PROBABILITY = 0.9;
-
-const FIXTURE_MODEL = 'testmodel';
-
-const FIXTURE_API_KEY = 'fixture-key';
-
-function decisionPayload(probability: number): unknown {
+  const members = mapping['members'];
+  if (!Array.isArray(members)) throw new Error(`${where}.members must be an array`);
   return {
-    model: FIXTURE_MODEL,
-    answers: { follows_instructions: { type: 'noul', noul: probability } },
-    usage: { prompt_tokens: 11, completion_tokens: 1, total_tokens: 12 },
+    kind: 'group',
+    group: { type, path: asString(group['path'], `${where}.group.path`) },
+    members: members.map((member: unknown, index: number) => toScopeSubject(member, `${where}.members[${index}]`)),
   };
 }
 
-export interface DecisionFixtureRequest {
+function toEvaluation(value: unknown, where: string): CheckEvaluationShape {
+  const mapping = asMapping(value, where);
+  return {
+    subject: toSubject(mapping['subject'], `${where}.subject`),
+    result: toCheckResult(mapping['result'], `${where}.result`),
+  };
+}
+
+export function parseCheckOutput(result: CliResult, label: string): readonly CheckReportShape[] {
+  assert.ok(
+    result.status === 0 || result.status === 1,
+    `${label}: expected a completed evaluation, got status ${String(result.status)} (stderr: ${result.stderr})`,
+  );
+  const payload: unknown = JSON.parse(result.stdout);
+  assert.ok(Array.isArray(payload), `${label}: the check output must be a bare JSON array`);
+  return payload.map((entry: unknown, index: number): CheckReportShape => {
+    const where = `${label}[${index}]`;
+    const mapping = asMapping(entry, where);
+    const status = mapping['status'];
+    if (status !== 'pass' && status !== 'violation' && status !== 'skipped') {
+      throw new Error(`${where}.status must be pass, violation or skipped`);
+    }
+    const ruleFile = asString(mapping['ruleFile'], `${where}.ruleFile`);
+    if (!isAbsolute(ruleFile)) throw new Error(`${where}.ruleFile must be absolute`);
+    const evaluations = mapping['evaluations'];
+    if (!Array.isArray(evaluations)) throw new Error(`${where}.evaluations must be an array`);
+    const report: {
+      name: string;
+      ruleFile: string;
+      status: 'pass' | 'violation' | 'skipped';
+      reason?: string;
+      evaluations: readonly CheckEvaluationShape[];
+    } = {
+      name: asString(mapping['name'], `${where}.name`),
+      ruleFile,
+      status,
+      evaluations: evaluations.map((evaluation: unknown, position: number) =>
+        toEvaluation(evaluation, `${where}.evaluations[${position}]`),
+      ),
+    };
+    const reason = mapping['reason'];
+    if (reason !== undefined) report.reason = asString(reason, `${where}.reason`);
+    return report;
+  });
+}
+
+export function reportNamed(
+  reports: readonly CheckReportShape[],
+  name: string,
+  label: string,
+): CheckReportShape {
+  const matches = reports.filter(report => report.name === name);
+  assert.equal(matches.length, 1, `${label}: expected exactly one report named '${name}'`);
+  return matches[0]!;
+}
+
+export function scopeSubjects(report: CheckReportShape, label: string): readonly ScopeSubjectShape[] {
+  return report.evaluations.map((evaluation, index) => {
+    assert.equal(evaluation.subject.kind, 'scope', `${label}[${index}]: expected a scope subject`);
+    return evaluation.subject as ScopeSubjectShape;
+  });
+}
+
+export function expectFailure(result: CliResult, label: string): void {
+  assert.equal(result.status, 2, `${label}: expected exit 2 (stdout: ${result.stdout} stderr: ${result.stderr})`);
+  assert.equal(result.stdout, '', `${label}: expected no partial report on stdout`);
+  assert.ok(result.stderr.trimStart().startsWith('rulekeeper:'), `${label}: stderr must be prefixed (${result.stderr})`);
+}
+
+export function expectStreamingFailure(result: CliResult, label: string): void {
+  assert.equal(result.status, 2, `${label}: expected exit 2 (stdout: ${result.stdout} stderr: ${result.stderr})`);
+  assert.ok(result.stderr.trimStart().startsWith('rulekeeper:'), `${label}: stderr must be prefixed (${result.stderr})`);
+}
+
+export interface DecisionRequestRecord {
   readonly method: string;
   readonly path: string;
   readonly authorization: string | undefined;
+  readonly headers: IncomingHttpHeaders;
   readonly body: unknown;
+  readonly raw: string;
+}
+
+export interface DecisionReply {
+  readonly status?: number;
+  readonly body?: string;
+  readonly probability?: number;
+  readonly model?: string;
+}
+
+export interface DecisionFixtureOptions {
+  readonly hold?: boolean;
+  readonly probability?: number;
+  readonly model?: string;
+  readonly apiKey?: string;
 }
 
 export interface DecisionFixture {
   readonly baseUrl: string;
   readonly apiKey: string;
-  readonly model: string;
   readonly env: NodeJS.ProcessEnv;
-  readonly requests: DecisionFixtureRequest[];
+  readonly requests: DecisionRequestRecord[];
   probability: number;
-  failFromRequest: number | undefined;
-  reset(): void;
-  close(): Promise<void>;
-}
-
-export function startDecisionFixture(): Promise<DecisionFixture> {
-  const { promise, resolve, reject } = Promise.withResolvers<DecisionFixture>();
-  const requests: DecisionFixtureRequest[] = [];
-  let probability = FIXTURE_PROBABILITY;
-  let failFromRequest: number | undefined;
-
-  const server = createServer((request, response) => {
-    const chunks: Buffer[] = [];
-    request.on('data', (chunk: Buffer) => {
-      chunks.push(chunk);
-    });
-    request.on('end', () => {
-      const raw = Buffer.concat(chunks).toString('utf8');
-      let body: unknown;
-      try {
-        body = JSON.parse(raw);
-      } catch {
-        body = undefined;
-      }
-      requests.push({
-        method: request.method ?? '',
-        path: request.url ?? '',
-        authorization: request.headers.authorization,
-        body,
-      });
-      const failed = failFromRequest !== undefined && requests.length - 1 >= failFromRequest;
-      const payload = failed ? { error: 'fixture backend failure' } : decisionPayload(probability);
-      response.writeHead(failed ? 500 : 200, { 'content-type': 'application/json' });
-      response.end(JSON.stringify(payload));
-    });
-  });
-  server.on('error', reject);
-  server.listen(0, '127.0.0.1', () => {
-    const address = server.address();
-    if (address === null || typeof address === 'string') {
-      reject(new Error('the decision fixture did not bind a loopback port'));
-      return;
-    }
-    resolve({
-      baseUrl: `http://127.0.0.1:${address.port}`,
-      apiKey: FIXTURE_API_KEY,
-      model: FIXTURE_MODEL,
-      env: {
-        TYPESAFE_BASE_URL: `http://127.0.0.1:${address.port}`,
-        TYPESAFE_API_KEY: FIXTURE_API_KEY,
-        TYPESAFE_DEFAULT_MODEL: FIXTURE_MODEL,
-      },
-      requests,
-      get probability(): number {
-        return probability;
-      },
-      set probability(value: number) {
-        probability = value;
-      },
-      get failFromRequest(): number | undefined {
-        return failFromRequest;
-      },
-      set failFromRequest(value: number | undefined) {
-        failFromRequest = value;
-      },
-      reset(): void {
-        requests.length = 0;
-        probability = FIXTURE_PROBABILITY;
-        failFromRequest = undefined;
-      },
-      close(): Promise<void> {
-        const stopped = Promise.withResolvers<void>();
-        server.close(error => {
-          if (error === undefined) stopped.resolve();
-          else stopped.reject(error);
-        });
-        // A child that was killed mid-request can leave its socket open; closing it unblocks close().
-        server.closeAllConnections();
-        return stopped.promise;
-      },
-    });
-  });
-  return promise;
-}
-
-const SCHEDULING_QUIET_MS = 250;
-
-const SCHEDULING_POLL_MS = 10;
-
-const SCHEDULING_TIMEOUT_MS = 30_000;
-
-export interface SchedulingRequest {
-  readonly method: string;
-  readonly path: string;
-  readonly authorization: string | undefined;
-  readonly body: unknown;
-  readonly key: string;
-}
-
-export interface SchedulingAnswer {
-  readonly probability?: number;
-  readonly status?: number;
-}
-
-export interface SchedulingFixture {
-  readonly baseUrl: string;
-  readonly apiKey: string;
-  readonly model: string;
-  readonly env: NodeJS.ProcessEnv;
-  readonly requests: SchedulingRequest[];
+  model: string;
+  limit: number | undefined;
+  answer: (request: DecisionRequestRecord, index: number) => DecisionReply;
   readonly active: number;
   readonly peak: number;
   readonly violations: number;
-  limit: number | undefined;
-  answer: (request: SchedulingRequest, index: number) => SchedulingAnswer;
-  heldKeys(): string[];
+  heldKeys(): readonly string[];
   waitForRequests(count: number): Promise<void>;
   waitForSilence(): Promise<void>;
   release(key: string): void;
@@ -441,81 +396,99 @@ export interface SchedulingFixture {
   close(): Promise<void>;
 }
 
-interface HeldRequest {
-  readonly request: SchedulingRequest;
-  readonly response: ServerResponse;
+const FIXTURE_PROBABILITY = 0.9;
+const FIXTURE_MODEL = 'testmodel';
+const FIXTURE_API_KEY = 'fixture-key';
+const QUIET_MS = 250;
+const POLL_MS = 10;
+const WAIT_TIMEOUT_MS = 20_000;
+const DRAIN_TIMEOUT_MS = 20_000;
+
+export function decisionPayload(probability: number, model: string): unknown {
+  return {
+    model,
+    answers: { follows_instructions: { type: 'noul', noul: probability } },
+    usage: { prompt_tokens: 11, completion_tokens: 1, total_tokens: 12 },
+  };
 }
 
-export function groupedDecisionKey(filepaths: readonly string[]): string {
-  return `files:${JSON.stringify(filepaths)}`;
-}
-
-function decisionKey(body: unknown): string {
-  if (!isMapping(body)) return 'unidentified';
+export function decisionKey(body: unknown): string {
+  if (typeof body !== 'object' || body === null || Array.isArray(body) || !('state' in body)) return 'unidentified';
   const state = body.state;
-  if (!isMapping(state)) return 'unidentified';
-  const files = state.files;
-  if (Array.isArray(files)) {
+  if (typeof state !== 'object' || state === null || Array.isArray(state)) return 'unidentified';
+  if ('files' in state && Array.isArray(state.files)) {
     const filepaths: string[] = [];
-    for (const file of files) {
-      if (!isMapping(file) || typeof file.filepath !== 'string') return 'unidentified';
+    for (const file of state.files) {
+      if (typeof file !== 'object' || file === null || !('filepath' in file) || typeof file.filepath !== 'string') {
+        return 'unidentified';
+      }
       filepaths.push(file.filepath);
     }
-    return groupedDecisionKey(filepaths);
+    return `files:${JSON.stringify(filepaths)}`;
   }
-  return typeof state.filepath === 'string' ? state.filepath : 'unidentified';
+  if ('filepath' in state && typeof state.filepath === 'string') return state.filepath;
+  return 'unidentified';
 }
 
-export function startSchedulingFixture(): Promise<SchedulingFixture> {
-  const { promise, resolve, reject } = Promise.withResolvers<SchedulingFixture>();
-  const requests: SchedulingRequest[] = [];
-  const held: HeldRequest[] = [];
+export function requestState(record: DecisionRequestRecord): Record<string, unknown> {
+  const body = asMapping(record.body, 'decision request body');
+  return asMapping(body['state'], 'decision request state');
+}
+
+export function requestInstructions(record: DecisionRequestRecord): Record<string, unknown> {
+  const body = asMapping(record.body, 'decision request body');
+  const questions = asMapping(body['questions'], 'decision request questions');
+  const question = asMapping(questions['follows_instructions'], 'decision request follows_instructions');
+  return asMapping(question['instructions'], 'decision request instructions');
+}
+
+export function requestQuestion(record: DecisionRequestRecord): Record<string, unknown> {
+  const body = asMapping(record.body, 'decision request body');
+  const questions = asMapping(body['questions'], 'decision request questions');
+  return asMapping(questions['follows_instructions'], 'decision request follows_instructions');
+}
+
+export function startDecisionFixture(options: DecisionFixtureOptions = {}): Promise<DecisionFixture> {
+  const hold = options.hold ?? false;
+  const apiKey = options.apiKey ?? FIXTURE_API_KEY;
+  const requests: DecisionRequestRecord[] = [];
+  const held: { readonly request: DecisionRequestRecord; readonly response: ServerResponse }[] = [];
   const watchers = new Set<() => void>();
+  let probability = options.probability ?? FIXTURE_PROBABILITY;
+  let model = options.model ?? FIXTURE_MODEL;
   let active = 0;
   let peak = 0;
-  let violations = 0;
   let limit: number | undefined;
+  let violations = 0;
   let lastArrival = 0;
-  let answerFn: SchedulingFixture['answer'] = () => ({ probability: FIXTURE_PROBABILITY });
+  let origin = '';
+  let answerFn: DecisionFixture['answer'] = () => ({});
 
-  const respond = (entry: HeldRequest): void => {
-    const { request, response } = entry;
-    active -= 1;
-    let answer: SchedulingAnswer;
+  const deliver = (request: DecisionRequestRecord, response: ServerResponse): void => {
+    let reply: DecisionReply;
     try {
-      answer = answerFn(request, requests.indexOf(request));
+      reply = answerFn(request, requests.indexOf(request));
     } catch {
-      answer = { status: 502 };
+      reply = { status: 502 };
     }
-    const status = answer.status ?? 200;
-    const payload = status >= 400 ? { error: 'fixture backend failure' } : decisionPayload(answer.probability ?? FIXTURE_PROBABILITY);
+    if (reply.body !== undefined) {
+      response.writeHead(reply.status ?? 200, { 'content-type': 'application/json' });
+      response.end(reply.body);
+      return;
+    }
+    const status = reply.status ?? 200;
+    const payload =
+      status >= 400 ? { error: 'fixture backend failure' } : decisionPayload(reply.probability ?? probability, reply.model ?? model);
     response.writeHead(status, { 'content-type': 'application/json' });
     response.end(JSON.stringify(payload));
   };
 
-  const waitForRequests = (count: number): Promise<void> => {
-    const { promise: waiting, resolve: settle, reject: fail } = Promise.withResolvers<void>();
-    const deadline = Date.now() + SCHEDULING_TIMEOUT_MS;
-    const stop = (): void => {
-      clearInterval(poll);
-      watchers.delete(check);
-    };
-    const check = (): void => {
-      if (requests.length >= count && Date.now() - lastArrival >= SCHEDULING_QUIET_MS) {
-        stop();
-        settle();
-        return;
-      }
-      if (Date.now() >= deadline) {
-        stop();
-        fail(new Error(`the run asked for ${requests.length} of ${count} expected decisions, then stopped`));
-      }
-    };
-    const poll = setInterval(check, SCHEDULING_POLL_MS);
-    watchers.add(check);
-    check();
-    return waiting;
+  const respond = (entry: { readonly request: DecisionRequestRecord; readonly response: ServerResponse }): void => {
+    active -= 1;
+    deliver(entry.request, entry.response);
   };
+
+  const { promise, resolve: settle, reject } = Promise.withResolvers<DecisionFixture>();
 
   const server = createServer((request, response) => {
     const chunks: Buffer[] = [];
@@ -530,39 +503,102 @@ export function startSchedulingFixture(): Promise<SchedulingFixture> {
       } catch {
         body = undefined;
       }
-      const recorded: SchedulingRequest = {
+      const record: DecisionRequestRecord = {
         method: request.method ?? '',
         path: request.url ?? '',
         authorization: request.headers.authorization,
+        headers: request.headers,
         body,
-        key: decisionKey(body),
+        raw,
       };
-      requests.push(recorded);
-      held.push({ request: recorded, response });
-      active += 1;
-      peak = Math.max(peak, active);
-      if (limit !== undefined && active > limit) violations += 1;
+      requests.push(record);
       lastArrival = Date.now();
-      for (const check of [...watchers]) check();
+      if (hold) {
+        held.push({ request: record, response });
+        active += 1;
+        peak = Math.max(peak, active);
+        if (limit !== undefined && active > limit) violations += 1;
+      } else {
+        deliver(record, response);
+      }
+      for (const watcher of [...watchers]) watcher();
     });
   });
-  server.on('error', reject);
+
+  const waitForRequests = (count: number): Promise<void> => {
+    const { promise, resolve: settle, reject: fail } = Promise.withResolvers<void>();
+    const deadline = Date.now() + WAIT_TIMEOUT_MS;
+    const finish = (): void => {
+      clearInterval(interval);
+      watchers.delete(onArrival);
+    };
+    const onArrival = (): void => {
+      if (requests.length < count || Date.now() - lastArrival < QUIET_MS) return;
+      finish();
+      settle();
+    };
+    const onTick = (): void => {
+      if (requests.length >= count && Date.now() - lastArrival >= QUIET_MS) {
+        finish();
+        settle();
+        return;
+      }
+      if (Date.now() >= deadline) {
+        finish();
+        fail(new Error(`expected ${count} decisions, saw ${requests.length}`));
+      }
+    };
+    const interval = setInterval(onTick, POLL_MS);
+    watchers.add(onArrival);
+    onTick();
+    return promise;
+  };
+
+  server.on('error', (error: Error) => {
+    for (const watcher of [...watchers]) watcher();
+    reject(error);
+  });
+
   server.listen(0, '127.0.0.1', () => {
     const address = server.address();
     if (address === null || typeof address === 'string') {
-      reject(new Error('the scheduling fixture did not bind a loopback port'));
+      reject(new Error('the decision fixture did not bind a loopback port'));
       return;
     }
-    const fixture: SchedulingFixture = {
-      baseUrl: `http://127.0.0.1:${address.port}`,
-      apiKey: FIXTURE_API_KEY,
-      model: FIXTURE_MODEL,
-      env: {
-        TYPESAFE_BASE_URL: `http://127.0.0.1:${address.port}`,
-        TYPESAFE_API_KEY: FIXTURE_API_KEY,
-        TYPESAFE_DEFAULT_MODEL: FIXTURE_MODEL,
+    origin = `http://127.0.0.1:${address.port}`;
+    settle({
+      get baseUrl(): string {
+        return origin;
+      },
+      apiKey,
+      get env(): NodeJS.ProcessEnv {
+        return { TYPESAFE_BASE_URL: origin, TYPESAFE_API_KEY: apiKey, TYPESAFE_DEFAULT_MODEL: model };
       },
       requests,
+      get probability(): number {
+        return probability;
+      },
+      set probability(value: number) {
+        probability = value;
+      },
+      get model(): string {
+        return model;
+      },
+      set model(value: string) {
+        model = value;
+      },
+      get limit(): number | undefined {
+        return limit;
+      },
+      set limit(value: number | undefined) {
+        limit = value;
+      },
+      get answer(): DecisionFixture['answer'] {
+        return answerFn;
+      },
+      set answer(value: DecisionFixture['answer']) {
+        answerFn = value;
+      },
       get active(): number {
         return active;
       },
@@ -572,25 +608,13 @@ export function startSchedulingFixture(): Promise<SchedulingFixture> {
       get violations(): number {
         return violations;
       },
-      get limit(): number | undefined {
-        return limit;
-      },
-      set limit(value: number | undefined) {
-        limit = value;
-      },
-      get answer(): SchedulingFixture['answer'] {
-        return answerFn;
-      },
-      set answer(value: SchedulingFixture['answer']) {
-        answerFn = value;
-      },
-      heldKeys: () => held.map(entry => entry.request.key),
+      heldKeys: () => held.map(entry => decisionKey(entry.request.body)),
       waitForRequests,
       waitForSilence: () => waitForRequests(requests.length),
-      release: (key) => {
-        const index = held.findIndex(entry => entry.request.key === key);
+      release: (key: string) => {
+        const index = held.findIndex(entry => decisionKey(entry.request.body) === key);
         if (index < 0) {
-          const waiting = held.map(entry => entry.request.key).join(', ');
+          const waiting = held.map(entry => decisionKey(entry.request.body)).join(', ');
           throw new Error(`no decision for ${key} is waiting; waiting on ${waiting}`);
         }
         respond(held.splice(index, 1)[0]!);
@@ -600,12 +624,12 @@ export function startSchedulingFixture(): Promise<SchedulingFixture> {
       },
       reset(): void {
         requests.length = 0;
-        held.length = 0;
         active = 0;
         peak = 0;
         violations = 0;
         limit = undefined;
-        answerFn = () => ({ probability: FIXTURE_PROBABILITY });
+        probability = FIXTURE_PROBABILITY;
+        answerFn = () => ({});
       },
       close(): Promise<void> {
         const stopped = Promise.withResolvers<void>();
@@ -616,8 +640,34 @@ export function startSchedulingFixture(): Promise<SchedulingFixture> {
         server.closeAllConnections();
         return stopped.promise;
       },
-    };
-    resolve(fixture);
+    });
   });
   return promise;
+}
+
+export async function releaseUntilDone(
+  fixture: DecisionFixture,
+  run: CliRun,
+): Promise<CliResult> {
+  let settled = false;
+  const tracked = run.finally(() => {
+    settled = true;
+  });
+  tracked.catch(() => {});
+  const deadline = Date.now() + DRAIN_TIMEOUT_MS;
+  while (!settled) {
+    if (Date.now() >= deadline) {
+      run.terminate();
+      try {
+        await tracked;
+      } catch {
+      }
+      throw new Error(
+        `the check did not finish within ${DRAIN_TIMEOUT_MS}ms after ${fixture.requests.length} decisions; the child was terminated`,
+      );
+    }
+    await delay(20);
+    fixture.releaseAll();
+  }
+  return tracked;
 }

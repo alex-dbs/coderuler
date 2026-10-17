@@ -1,32 +1,34 @@
 import { JSONPath, type ReturnObject } from 'jsonpath-plus';
-import { assertNonExecutable } from '../../app/jsonpath.ts';
-import { warnUnknownField } from '../console/warnings.ts';
-import { SourceLines } from './lines.ts';
-import { readRpcRecords, type ProtoRpcRecord, type ProtoSpan } from './protobuf-parser.ts';
-import type {
-  CompiledScope,
-  JsonValue,
-  ScopeCompileContext,
-  ScopeInput,
-  ScopeMatch,
-  ScopePlugin,
-} from '../../app/scope/types.ts';
+import type { JsonValue, ScopeMatch, ScopeSelector, SourceFile } from '../../app/rule.js';
+import { SourceLines, type LineSpan } from './lines.js';
+import { readRpcRecords, type ProtoRpcRecord, type ProtoSpan } from './protobuf-parser.js';
+import { pointerSegments, validatePath } from './structured.js';
 
-function pointerSegments(pointer: string): readonly string[] {
-  if (pointer === '') return [];
-  if (!pointer.startsWith('/')) throw new Error(`Unexpected JSON Pointer "${pointer}"`);
-  return pointer
-    .slice(1)
-    .split('/')
-    .map((segment) => segment.replaceAll('~1', '/').replaceAll('~0', '~'));
+export interface ProtobufScopeOptions {
+  readonly path?: string;
+}
+
+const DEFAULT_PATH = '$.rpcs[*]';
+
+type HttpNodeKind = 'http' | 'bindings' | 'binding' | 'method' | 'url';
+
+interface SelectedNode {
+  readonly id: string;
+  readonly data: JsonValue;
+  readonly span: ProtoSpan;
+}
+
+interface SelectedScope {
+  readonly id: string;
+  readonly source: string;
+  readonly data: JsonValue;
+  readonly lines: LineSpan;
 }
 
 function indexSegment(segment: string | undefined): number | undefined {
   if (segment === undefined || !/^\d+$/.test(segment)) return undefined;
   return Number(segment);
 }
-
-type HttpNodeKind = 'http' | 'bindings' | 'binding' | 'method' | 'url';
 
 function httpNodeKind(tail: readonly string[]): HttpNodeKind | undefined {
   if (tail[0] !== 'http') return undefined;
@@ -40,12 +42,6 @@ function httpNodeKind(tail: readonly string[]): HttpNodeKind | undefined {
   if (tail[3] === 'url') return 'url';
   return undefined;
 }
-
-type SelectedNode = {
-  readonly id: string;
-  readonly data: JsonValue;
-  readonly span: ProtoSpan;
-};
 
 function outsideSelection(pointer: string): Error {
   return new Error(`protobuf scope path selected "${pointer}", which is not an RPC record or its http annotation`);
@@ -72,7 +68,7 @@ function selectNode(
   pointer: string,
   source: string,
   lines: SourceLines,
-): ScopeMatch {
+): SelectedScope {
   const segments = pointerSegments(pointer);
   const position = segments[0] === 'rpcs' ? indexSegment(segments[1]) : undefined;
   const record = position === undefined ? undefined : records[position];
@@ -94,60 +90,38 @@ function selectNode(
   };
 }
 
-class ProtobufScope implements CompiledScope {
-  private readonly path: string;
+function resolvePath(options?: ProtobufScopeOptions): string {
+  const path = options?.path === undefined ? DEFAULT_PATH : options.path;
+  validatePath(path, 'protobuf scope option path');
+  return path;
+}
 
-  constructor(path: string) {
-    this.path = path;
-  }
-
-  select(input: ScopeInput): readonly ScopeMatch[] {
-    const records = readRpcRecords(input.source);
+export function protobuf<T = JsonValue>(options?: ProtobufScopeOptions): ScopeSelector<T> {
+  const path = resolvePath(options);
+  return (file: SourceFile): readonly ScopeMatch<T>[] => {
+    const records = readRpcRecords(file.source);
     const raw: unknown = JSONPath({
-      path: this.path,
+      path,
       json: { rpcs: records.map((record) => record.data) },
       resultType: 'all',
       wrap: true,
       eval: false,
     });
     if (!Array.isArray(raw) || raw.length === 0) return [];
-    const lines = new SourceLines(input.source);
+    const lines = new SourceLines(file.source);
     return raw.map((entry) => {
       const { pointer, parentProperty } = entry as ReturnObject;
       if (typeof pointer !== 'string') {
-        throw new Error(`protobuf scope path "${this.path}" produced a scope without a pointer`);
+        throw new Error(`protobuf scope path "${path}" produced a scope without a pointer`);
       }
       if (parentProperty === null) throw outsideSelection(pointer);
-      return selectNode(records, pointer, input.source, lines);
+      const scope = selectNode(records, pointer, file.source, lines);
+      return {
+        id: scope.id,
+        source: scope.source,
+        data: scope.data as unknown as T,
+        lines: scope.lines,
+      };
     });
-  }
+  };
 }
-
-function compileProtobufScope(
-  options: Readonly<Record<string, unknown>>,
-  context?: ScopeCompileContext,
-): CompiledScope {
-  const warn = context?.warnUnknownField ?? warnUnknownField;
-  for (const key of Object.keys(options)) {
-    if (key !== 'path') warn(`rule.scope.${key}`);
-  }
-  const path = options.path;
-  if (typeof path !== 'string' || path.length === 0) {
-    throw new Error('protobuf scope option path must be a non-empty string');
-  }
-  if (!path.startsWith('$')) {
-    throw new Error('protobuf scope option path must be a JSONPath expression beginning with $');
-  }
-  assertNonExecutable(path, 'protobuf scope option path');
-  try {
-    JSONPath({ path, json: { rpcs: [] }, eval: false });
-  } catch (error) {
-    throw new Error(`Invalid protobuf scope path: ${(error as Error).message}`);
-  }
-  return new ProtobufScope(path);
-}
-
-export const protobufPlugin: ScopePlugin = {
-  format: 'protobuf',
-  compile: compileProtobufScope,
-};

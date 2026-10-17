@@ -1,5 +1,3 @@
-export const DEFAULT_CONCURRENCY = 8;
-
 function invalidConcurrency(received: string): RangeError {
   return new RangeError(`--concurrency must be a positive safe integer, received ${received}`);
 }
@@ -8,17 +6,6 @@ function requirePositiveSafeInteger(concurrency: number): void {
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) {
     throw invalidConcurrency(String(concurrency));
   }
-}
-
-export function parseConcurrency(value: string): number {
-  if (!/^[0-9]+$/.test(value)) {
-    throw invalidConcurrency(JSON.stringify(value));
-  }
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 1) {
-    throw invalidConcurrency(JSON.stringify(value));
-  }
-  return parsed;
 }
 
 export async function mapConcurrent<T, R>(

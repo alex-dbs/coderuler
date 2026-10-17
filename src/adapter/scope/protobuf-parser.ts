@@ -640,7 +640,7 @@ class ProtoReader {
       }
       return skipStatement(this.tokens, cursor);
     }
-    const verb = STANDARD_VERBS[head.name];
+    const verb = Object.hasOwn(STANDARD_VERBS, head.name) ? STANDARD_VERBS[head.name] : undefined;
     if (verb !== undefined && index + 1 === fields.length) {
       const value = this.readStringValue(cursor);
       target.entries.push({
@@ -679,7 +679,7 @@ class ProtoReader {
       const field = token.text;
       let valueStart = cursor + 1;
       if (this.tokens[valueStart]?.text === ':') valueStart++;
-      const verb = STANDARD_VERBS[field];
+      const verb = Object.hasOwn(STANDARD_VERBS, field) ? STANDARD_VERBS[field] : undefined;
       if (verb !== undefined) {
         const value = this.readStringValue(valueStart);
         rule.entries.push({

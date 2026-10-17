@@ -1,6 +1,9 @@
-import type { LineSpan } from '../../app/scope/types.ts';
+export interface LineSpan {
+  readonly start: number;
+  readonly end: number;
+}
 
-const TRAILING_LINE_BREAKS = /[\r\n]+$/;
+const TRAILING_LINE_BREAKS = /(?:\r\n|\r|\n)$/;
 const LINE_BREAKS = /\r\n|[\r\n]/g;
 
 export function textLineSpan(startLine: number, text: string): LineSpan {
@@ -14,7 +17,12 @@ export class SourceLines {
   constructor(source: string) {
     const starts = [0];
     for (let index = 0; index < source.length; index += 1) {
-      if (source.charCodeAt(index) === 10) starts.push(index + 1);
+      const code = source.charCodeAt(index);
+      if (code === 10) starts.push(index + 1);
+      else if (code === 13) {
+        if (source.charCodeAt(index + 1) === 10) index += 1;
+        starts.push(index + 1);
+      }
     }
     this.#starts = starts;
   }

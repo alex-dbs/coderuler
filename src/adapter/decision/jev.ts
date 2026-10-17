@@ -1,7 +1,11 @@
 import axios, { type AxiosInstance } from 'axios';
 
-import type { BackendDecision, DecisionBackend, DecisionObserver, DecisionRequest } from '../../app/decision/port.ts';
-import type { Diagnostics } from '../../app/ports/diagnostics.ts';
+import type {
+  DecisionBackend,
+  DecisionObserver,
+  DecisionOutcome,
+  DecisionRequest,
+} from '../../app/ports.js';
 
 export interface JevOptions {
   readonly model: string;
@@ -10,19 +14,10 @@ export interface JevOptions {
 }
 
 const ENDPOINT = 'v1/systemone';
-
-const BACKEND = 'jev';
-
 const QUESTION_ID = 'follows_instructions';
-
 const TIMEOUT_MS = 30_000;
-
-const METHOD = 'POST';
-
-interface EndpointFacts {
-  readonly host: string;
-  readonly path: string;
-}
+const REDACTED = '[REDACTED]';
+const URL_LABEL = 'Decision base URL (TYPESAFE_BASE_URL)';
 
 function isMapping(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -33,53 +28,50 @@ function baseUrlOf(baseUrl: string): string {
   try {
     url = new URL(baseUrl);
   } catch {
-    throw new Error('Decision base URL (TYPESAFE_BASE_URL) is not an absolute URL');
+    throw new Error(`${URL_LABEL} is not an absolute URL`);
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new Error('Decision base URL (TYPESAFE_BASE_URL) must use http or https');
+    throw new Error(`${URL_LABEL} must use http or https`);
   }
-  // A bare `?` or `#` parses to an empty search or hash, yet either delimiter still swallows the
-  // path a request appends, so the raw delimiter decides rather than the parsed component. An
-  // encoded `%3F` or `%23` is part of the path and stays allowed.
   if (baseUrl.includes('?') || baseUrl.includes('#')) {
-    throw new Error('Decision base URL (TYPESAFE_BASE_URL) must not carry a query or a fragment');
+    throw new Error(`${URL_LABEL} must not carry a query or a fragment`);
   }
   if (url.username !== '' || url.password !== '') {
-    throw new Error('Decision base URL (TYPESAFE_BASE_URL) must not embed credentials');
+    throw new Error(`${URL_LABEL} must not embed credentials`);
   }
   return baseUrl;
 }
 
-interface RequestFailure {
-  readonly error: Error;
-  readonly reason: string;
-  readonly status?: number;
-  readonly code?: string;
+function redactionNeedles(apiKey: string): readonly string[] {
+  if (apiKey === '') return [];
+  const escaped = JSON.stringify(apiKey).slice(1, -1);
+  return escaped === apiKey ? [apiKey] : [escaped, apiKey];
 }
 
-function requestFailure(error: unknown): RequestFailure {
+function redact(text: string, needles: readonly string[]): string {
+  let redacted = text;
+  for (const needle of needles) redacted = redacted.replaceAll(needle, REDACTED);
+  return redacted;
+}
+
+function requestFailure(error: unknown): Error {
   if (axios.isAxiosError(error)) {
     const status = error.response?.status;
     if (status !== undefined) {
-      return { error: new Error(`Decision request failed with HTTP ${status}`), reason: `HTTP ${status}`, status };
+      return new Error(`Decision request failed with HTTP ${status}`);
     }
     if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
-      return { error: new Error(`Decision request timed out after ${TIMEOUT_MS} ms`), reason: 'timeout', code: error.code };
+      return new Error(`Decision request timed out after ${TIMEOUT_MS} ms`);
     }
-    // An axios code is a category of its own (`ECONNREFUSED`, `ERR_FR_TOO_MANY_REDIRECTS`); the
-    // error's own message is not reused, because it can carry the request URL.
     const code = error.code;
     return code === undefined
-      ? { error: new Error('Decision request failed: network error'), reason: 'network error' }
-      : { error: new Error(`Decision request failed: ${code}`), reason: code, code };
+      ? new Error('Decision request failed: network error')
+      : new Error(`Decision request failed: ${code}`);
   }
-  return {
-    error: new Error(`Decision request failed: ${error instanceof Error ? error.message : String(error)}`),
-    reason: 'unexpected',
-  };
+  return new Error(`Decision request failed: ${error instanceof Error ? error.message : String(error)}`);
 }
 
-function readBackendDecision(data: unknown): BackendDecision {
+function readDecision(data: unknown): DecisionOutcome {
   if (!isMapping(data)) {
     throw new Error('Decision response is not a JSON object');
   }
@@ -107,127 +99,49 @@ function readBackendDecision(data: unknown): BackendDecision {
 export class JevAdapter implements DecisionBackend {
   readonly #client: AxiosInstance;
   readonly #model: string;
-  readonly #diagnostics: Diagnostics | undefined;
-  readonly #endpoint: EndpointFacts | undefined;
-  readonly #serializedApiKey: string | undefined;
-  #requests = 0;
+  readonly #needles: readonly string[];
 
-  constructor({ model, baseUrl, apiKey }: JevOptions, diagnostics?: Diagnostics) {
+  constructor({ model, baseUrl, apiKey }: JevOptions) {
     this.#model = model;
-    this.#diagnostics = diagnostics;
-    this.#serializedApiKey = apiKey === '' ? undefined : JSON.stringify(apiKey).slice(1, -1);
+    this.#needles = redactionNeedles(apiKey);
     this.#client = axios.create({
       baseURL: baseUrlOf(baseUrl),
       timeout: TIMEOUT_MS,
       maxRedirects: 0,
       headers: { Authorization: `Bearer ${apiKey}` },
     });
-    const target = diagnostics === undefined ? undefined : new URL(this.#client.getUri({ url: ENDPOINT }));
-    const endpoint: EndpointFacts | undefined = target === undefined ? undefined : { host: target.host, path: target.pathname };
-    this.#endpoint = endpoint;
-    if (endpoint !== undefined) {
-      diagnostics?.important('decision.backend', {
-        backend: BACKEND,
-        model,
-        host: endpoint.host,
-        path: endpoint.path,
-        timeout_ms: TIMEOUT_MS,
-      });
-    }
   }
 
-  #redacted(serialized: string | undefined): string | undefined {
-    if (serialized === undefined || this.#serializedApiKey === undefined) return serialized;
-    return serialized.replaceAll(this.#serializedApiKey, '[REDACTED]');
-  }
-
-  async decide(request: DecisionRequest, observer?: DecisionObserver): Promise<BackendDecision> {
-    const diagnostics = this.#diagnostics;
-    const verbose = diagnostics?.verbose;
-    const endpoint = this.#endpoint;
-    const id = diagnostics === undefined ? undefined : (this.#requests += 1);
-    const startedAt = diagnostics === undefined ? 0 : performance.now();
-    const reported = observer !== undefined || verbose !== undefined;
-
+  async decide(request: DecisionRequest, observer?: DecisionObserver): Promise<DecisionOutcome> {
     const body = {
       model: this.#model,
-      // The state is data the model reads, not a template this adapter reshapes: it is sent exactly
-      // as the service projected it, and it stays distinguishable from the instruction beside it.
-      state: request.context,
+      state: request.state,
       questions: {
         [QUESTION_ID]: { type: 'noul', instructions: request.instructions },
       },
     };
 
     const wire = JSON.stringify(body);
-    const requestBody = reported ? this.#redacted(wire) : undefined;
-    verbose?.('http.request', {
-      id,
-      method: METHOD,
-      host: endpoint?.host,
-      path: endpoint?.path,
-      model: this.#model,
-      timeout_ms: TIMEOUT_MS,
-      body: requestBody,
-    });
-    observer?.({ type: 'request', body: requestBody ?? '' });
+    observer?.({ type: 'request', body: redact(wire, this.#needles) });
 
     let data: unknown;
     try {
-      const response = await this.#client.post<unknown>(ENDPOINT, wire, { headers: { 'Content-Type': 'application/json' } });
+      const response = await this.#client.post<unknown>(ENDPOINT, wire, {
+        headers: { 'Content-Type': 'application/json' },
+      });
       data = response.data;
-      diagnostics?.important('http.response', {
-        id,
-        status: response.status,
-        ms: Math.round(performance.now() - startedAt),
-        host: endpoint?.host,
-        path: endpoint?.path,
-        model: this.#model,
-      });
-      const responseBody = reported ? this.#redacted(JSON.stringify(data)) : undefined;
-      verbose?.('http.response.body', {
-        id,
-        status: response.status,
-        body: responseBody,
-      });
-      observer?.({ type: 'response', status: response.status, body: responseBody ?? '' });
+      observer?.({ type: 'response', status: response.status, body: redact(JSON.stringify(data) ?? '', this.#needles) });
     } catch (error) {
-      const failure = requestFailure(error);
-      diagnostics?.important('http.failure', {
-        id,
-        reason: failure.reason,
-        status: failure.status,
-        code: failure.code,
-        ms: Math.round(performance.now() - startedAt),
-        host: endpoint?.host,
-        path: endpoint?.path,
-        model: this.#model,
-      });
       if (axios.isAxiosError(error) && error.response !== undefined) {
-        const status = error.response.status;
-        const failureBody = reported ? this.#redacted(JSON.stringify(error.response.data)) : undefined;
-        verbose?.('http.response.body', {
-          id,
-          status,
-          body: failureBody,
+        observer?.({
+          type: 'response',
+          status: error.response.status,
+          body: redact(JSON.stringify(error.response.data) ?? '', this.#needles),
         });
-        observer?.({ type: 'response', status, body: failureBody ?? '' });
       }
-      throw failure.error;
+      throw requestFailure(error);
     }
 
-    try {
-      return readBackendDecision(data);
-    } catch (error) {
-      diagnostics?.important('http.response.invalid', {
-        id,
-        reason: error instanceof Error ? error.message : 'invalid response',
-        ms: Math.round(performance.now() - startedAt),
-        host: endpoint?.host,
-        path: endpoint?.path,
-        model: this.#model,
-      });
-      throw error;
-    }
+    return readDecision(data);
   }
 }
