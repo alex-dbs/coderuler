@@ -52,7 +52,7 @@ export const tests = [
   test('completed first').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
   test('blocked second').withFiles({ 'inputs/one.txt': 'WAIT http://127.0.0.1:${address.port}' }).passes(),
 ];`);
-  const child = spawn(process.execPath, [CLI, 'test'], {
+  const child = spawn(process.execPath, [CLI, 'test', '--concurrency', '1'], {
     cwd: target.cwd,
     env: target.env,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -94,7 +94,7 @@ export const tests = [
   test('completed before error').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
   test('exploding later case').withFiles({ 'inputs/one.txt': 'THROW' }).passes(),
 ];`);
-  const result = await runCli(['test'], target);
+  const result = await runCli(['test', '--concurrency', '1'], target);
   assert.equal(result.status, 2, result.stderr);
   assert.ok(result.stdout.includes('completed before error'), result.stdout);
   assert.ok(result.stderr.includes('exploding later case'), result.stderr);

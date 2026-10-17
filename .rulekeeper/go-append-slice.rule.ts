@@ -1,4 +1,4 @@
-import { Rule, ai, scopes } from 'rulekeeper';
+import { Rule, ai, scopes, test } from 'rulekeeper';
 
 export default class GoAppendSlice extends Rule {
   files = ['**/*.go'];
@@ -91,3 +91,52 @@ or assigning elements by index and also appending them, is a violation.`,
     },
   });
 }
+
+export const tests = [
+  test('indexed filling without append selects no scope').withFiles({
+    'copy.go': `package example
+
+func copyItems(values []string) []string {
+    out := make([]string, len(values))
+    for i := range values {
+        out[i] = values[i]
+    }
+    return out
+}`,
+  }).skips(),
+  test('append after a loop selects no scope').withFiles({
+    'footer.go': `package example
+
+func withFooter(values []string, footer string) []string {
+    out := make([]string, len(values))
+    for i := range values {
+        out[i] = values[i]
+    }
+    return append(out, footer)
+}`,
+  }).skips(),
+  test('a method looping without append selects no scope').withFiles({
+    'scores.go': `package example
+
+type Scores []int
+
+func (scores Scores) Total() int {
+    total := 0
+    for _, score := range scores {
+        total += score
+    }
+    return total
+}`,
+  }).skips(),
+  test('append in a loop outside Go files is skipped').withFiles({
+    'example.txt': `package example
+
+func copyItems(values []string) []string {
+    out := make([]string, 0, len(values))
+    for _, value := range values {
+        out = append(out, value)
+    }
+    return out
+}`,
+  }).skips(),
+] as const;

@@ -1,6 +1,6 @@
 import BigNumber from 'bignumber.js';
 
-import { Rule, pass, scopes, violation, type CheckResult, type ScopeSubject, type Subject } from 'rulekeeper';
+import { Rule, pass, scopes, test, violation, type CheckResult, type ScopeSubject, type Subject } from 'rulekeeper';
 
 import { isPresent } from './presence.ts';
 
@@ -37,3 +37,22 @@ export default class MemoryRatio extends Rule<MemoryResources> {
       : violation('Memory limit must not exceed 1.5 times the memory request.');
   };
 }
+
+function memory(request: string, limit: string) {
+  return { app: { container: { resources: { requests: { memory: request }, limits: { memory: limit } } } } };
+}
+
+export const tests = [
+  test('a limit below 1.5 times the request passes').withFiles({
+    'tests/manual/production.yml': memory('100M', '149M'),
+  }).passes(),
+  test('a limit exactly 1.5 times the request passes').withFiles({
+    'tests/manual/production.yml': memory('100M', '150M'),
+  }).passes(),
+  test('a limit above 1.5 times the request violates').withFiles({
+    'tests/manual/production.yml': memory('100M', '150.001M'),
+  }).violates(),
+  test('kilobytes and megabytes use the same ratio boundary').withFiles({
+    'tests/manual/production.yml': memory('1000k', '1.5M'),
+  }).passes()
+] as const;

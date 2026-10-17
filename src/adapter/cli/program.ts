@@ -68,6 +68,7 @@ export interface CliServices {
     rules: readonly LoadedRule[],
     onResult: (result: RuleTestResult, lastInRule: boolean) => void,
     timeoutMs: number,
+    concurrency: number,
   ) => Promise<readonly RuleTestResult[]>;
   readonly createProject: (
     root: string,
@@ -107,6 +108,7 @@ interface InspectOptions {
 
 interface TestOptions {
   readonly timeout: number;
+  readonly concurrency: number;
 }
 
 interface RuleChoice {
@@ -228,6 +230,12 @@ export function createProgram(services: CliServices): Command {
         .argParser(parseTimeout)
         .default(10_000, '10s'),
     )
+    .option(
+      '--concurrency <number>',
+      `bounded in-flight test cases (${CONCURRENCY_HINT})`,
+      parseConcurrency,
+      1,
+    )
     .action(async (rulePath: string | undefined, options: TestOptions) => {
       const progress = services.terminal?.interactive === true
         ? createProgress(services.writeError, () => services.terminal?.columns ?? 80)
@@ -258,7 +266,7 @@ export function createProgram(services: CliServices): Command {
           else failed += 1;
           durationMs += result.durationMs;
           progress?.message(`Running tests (${passed + failed} completed)`);
-        }, options.timeout);
+        }, options.timeout, options.concurrency);
       } finally {
         progress?.stop();
       }

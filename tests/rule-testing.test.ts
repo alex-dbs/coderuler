@@ -52,7 +52,7 @@ export const tests = [
   writeFile(join(target.cwd, 'budgets/working-tree.yml'), 'budget: 1000');
   writeFile(join(target.cwd, '.rulekeeper/no-tests.rule.ts'), TEXT_RULE);
 
-  const result = await runCli(['test'], target);
+  const result = await runCli(['test', '--concurrency', '1'], target);
   assert.equal(result.status, 0, result.stderr || result.stdout);
   for (const name of [
     'combined budget exceeds limit', 'previous files do not leak', 'literal YAML source',
@@ -60,32 +60,6 @@ export const tests = [
   ]) assert.ok(result.stdout.includes(name), result.stdout);
   assert.equal(readFileSync(join(target.cwd, 'budgets/working-tree.yml'), 'utf8'), 'budget: 1000');
   assert.equal(existsSync(join(target.cwd, 'budgets/one.yml')), false);
-});
-
-test('test caches module state within each rule suite without sharing it between suites', async () => {
-  const target = sandbox.isolated('module-state');
-  writeFile(join(target.cwd, '.rulekeeper/sequence.js'), `let runs = 0;
-export const nextRun = () => ++runs;
-`);
-  for (const name of ['first', 'second']) {
-    writeFile(join(target.cwd, '.rulekeeper', `${name}.rule.ts`), `import { Rule, pass, test, violation } from 'rulekeeper';
-import { nextRun } from './sequence.js';
-export default class Sequence extends Rule {
-  files = ['inputs/*.txt'];
-  check = subject => nextRun() === Number(subject.source) ? pass() : violation('module state crossed rule suites');
-}
-export const tests = [
-  test('${name} starts with fresh module state').withFiles({ 'inputs/one.txt': '1' }).passes(),
-  test('${name} retains its own module state').withFiles({ 'inputs/one.txt': '2' }).passes(),
-];`);
-  }
-  const result = await runCli(['test'], target);
-  assert.equal(result.status, 0, result.stderr || result.stdout);
-  assert.equal((result.stdout.match(/^[├└]─ PASS /gm) ?? []).length, 4, result.stdout);
-  for (const name of ['first', 'second']) {
-    assert.ok(result.stdout.includes(`${name} starts with fresh module state`), result.stdout);
-    assert.ok(result.stdout.includes(`${name} retains its own module state`), result.stdout);
-  }
 });
 
 test('test reports mismatches, continues to later cases, and does not run during check or validate', async () => {
@@ -189,7 +163,7 @@ export const tests = [
   test('passes before operational error').withFiles({ 'inputs/a.txt': 'GOOD' }).passes(),
   test('exploding case').withFiles({ 'inputs/a.txt': 'BAD' }).passes(),
 ];`);
-  const pending = runCli(['test'], target);
+  const pending = runCli(['test', '--concurrency', '1'], target);
   context.signal.addEventListener('abort', () => pending.terminate(), { once: true });
   const result = await pending;
   assert.equal(result.status, 2, result.stdout || result.stderr);

@@ -35,12 +35,15 @@ class RuleTestWorkerSession {
   private nextId = 0;
   private failure: Error | undefined;
   private rejectPending: ((error: Error) => void) | undefined;
+  private onFailure: ((error: Error) => void) | undefined;
   private terminating = false;
   private termination: Promise<number> | undefined;
 
   private readonly onError = (error: Error) => {
+    if (this.terminating) return;
     this.failure ??= error;
-    this.rejectPending?.(error);
+    if (this.rejectPending !== undefined) this.rejectPending(error);
+    else this.onFailure?.(error);
   };
 
   private readonly onExit = (code: number) => {
@@ -58,7 +61,12 @@ class RuleTestWorkerSession {
     if (this.failure !== undefined) throw this.failure;
   }
 
-  async run(request: Omit<RuleTestWorkerRequest, 'id'>, deadline: number): Promise<TestActual> {
+  async run(
+    request: Omit<RuleTestWorkerRequest, 'id'>,
+    deadline: number,
+    onFailure: (error: Error) => void,
+  ): Promise<TestActual> {
+    this.onFailure = onFailure;
     this.assertHealthy();
     const id = this.nextId++;
     const result = Promise.withResolvers<TestActual>();
@@ -95,6 +103,7 @@ class RuleTestWorkerSession {
   async stop(): Promise<void> {
     if (this.termination === undefined) {
       this.terminating = true;
+      this.rejectPending?.(new Error('Rule test worker stopped'));
       this.termination = this.worker.terminate();
     }
     await this.termination;
@@ -105,12 +114,13 @@ class RuleTestWorkerSession {
 
 interface RuleTestSession {
   current: RuleTestWorkerSession | undefined;
+  cancelled: boolean;
 }
 
 async function stopSession(session: RuleTestSession): Promise<void> {
   const current = session.current;
-  session.current = undefined;
   await current?.stop();
+  if (session.current === current) session.current = undefined;
 }
 
 async function runCase(
@@ -118,23 +128,34 @@ async function runCase(
   example: RuleTestCase,
   timeoutMs: number,
   session: RuleTestSession,
-  lastInRule: boolean,
+  onFailure: (error: unknown) => void,
 ): Promise<RuleTestResult> {
   const started = performance.now();
   const deadline = started + timeoutMs;
+  let failure: Error | undefined;
+  const failCase = (error: unknown): Error => {
+    if (failure !== undefined) return failure;
+    const detail = error instanceof Error ? error.message : String(error);
+    failure = new Error(`Rule "${entry.name}" test "${example.name}" failed: ${detail}`, { cause: error });
+    onFailure(failure);
+    return failure;
+  };
   try {
     const root = await mkdtemp(join(await realpath(tmpdir()), 'rulekeeper-test-'));
     let actual: TestActual | undefined;
     let active: RuleTestWorkerSession | undefined;
     try {
+      if (session.cancelled) throw new Error('Rule test run cancelled');
       if (performance.now() >= deadline) actual = 'timeout';
       else {
         active = session.current ??= new RuleTestWorkerSession();
-        actual = await active.run({ root, ruleFile: entry.ruleFile, files: example.files }, deadline);
+        actual = await active.run({ root, ruleFile: entry.ruleFile, files: example.files }, deadline, failCase);
       }
+    } catch (error) {
+      throw failCase(error);
     } finally {
       try {
-        if (actual === undefined || actual === 'timeout' || lastInRule) await stopSession(session);
+        if (actual === undefined || actual === 'timeout') await stopSession(session);
       } finally {
         await rm(root, { recursive: true, force: true });
       }
@@ -148,9 +169,9 @@ async function runCase(
       durationMs: performance.now() - started,
     };
   } catch (error) {
+    const cause = failCase(error);
     await stopSession(session);
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`Rule "${entry.name}" test "${example.name}" failed: ${detail}`, { cause: error });
+    throw cause;
   }
 }
 
@@ -158,27 +179,70 @@ export async function runRuleTests(
   rules: readonly LoadedRule[],
   onResult?: (result: RuleTestResult, lastInRule: boolean) => void,
   timeoutMs = 10_000,
+  concurrency = 1,
 ): Promise<readonly RuleTestResult[]> {
+  if (!Number.isSafeInteger(concurrency) || concurrency < 1) {
+    throw new RangeError(`--concurrency must be a positive safe integer, received ${String(concurrency)}`);
+  }
   const results: RuleTestResult[] = [];
-  for (const rule of rules) {
-    const session: RuleTestSession = { current: undefined };
-    try {
+  const sessions: RuleTestSession[] = [];
+  let failureObserved = false;
+  let failure: unknown;
+  let cancellation: Promise<unknown> | undefined;
+  const fail = (error: unknown): void => {
+    if (failureObserved) return;
+    failureObserved = true;
+    failure = error;
+    cancellation = Promise.allSettled(sessions.map(session => {
+      session.cancelled = true;
+      return stopSession(session);
+    }));
+  };
+
+  try {
+    for (const rule of rules) {
+      if (failureObserved) throw failure;
       // Discovery selects the rule module path at runtime.
       const { tests } = await import(pathToFileURL(rule.ruleFile).href) as { readonly tests?: unknown };
+      if (failureObserved) throw failure;
       if (tests === undefined) continue;
       const label = `Rule "${rule.name}" tests`;
       if (!Array.isArray(tests)) throw new Error(`${label}: expected an array of test cases`);
-      for (let index = 0; index < tests.length; index += 1) {
-        const example = validateCase(tests[index], `${label}[${index}]`);
-        const lastInRule = index === tests.length - 1;
-        const result = await runCase(rule, example, timeoutMs, session, lastInRule);
-        results.push(result);
-        onResult?.(result, lastInRule);
+      const completed = new Array<RuleTestResult | undefined>(tests.length);
+      let nextIndex = 0;
+      let nextResult = 0;
+      const runWorker = async (session: RuleTestSession): Promise<void> => {
+        while (!failureObserved) {
+          const index = nextIndex++;
+          if (index >= tests.length) return;
+          try {
+            const example = validateCase(tests[index], `${label}[${index}]`);
+            completed[index] = await runCase(rule, example, timeoutMs, session, fail);
+            if (failureObserved) return;
+            while (completed[nextResult] !== undefined) {
+              const result = completed[nextResult]!;
+              results.push(result);
+              nextResult += 1;
+              onResult?.(result, nextResult === tests.length);
+            }
+          } catch (error) {
+            fail(error);
+          }
+        }
+      };
+      const workers: Promise<void>[] = [];
+      const workerCount = Math.min(concurrency, tests.length);
+      for (let index = 0; index < workerCount && !failureObserved; index += 1) {
+        const session = sessions[index] ??= { current: undefined, cancelled: false };
+        workers.push(runWorker(session));
       }
-    } finally {
-      await stopSession(session);
+      await Promise.all(workers);
+      if (failureObserved) throw failure;
     }
+    if (results.length === 0) throw new Error('No rule test cases found in the selected rules');
+    return results;
+  } finally {
+    await cancellation;
+    await Promise.all(sessions.map(stopSession));
   }
-  if (results.length === 0) throw new Error('No rule test cases found in the selected rules');
-  return results;
 }

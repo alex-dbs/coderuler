@@ -169,13 +169,17 @@ source text for code or hand-written fixtures.
 
 Paths are project-root-relative and must match the rule's selection. Each case runs the real
 selection, filters, grouping, and check with its own temporary project and fresh rule instance.
-Successful cases reuse one worker per rule, so module imports and top-level state are cached within
-that rule's suite; different rule suites use different workers. Await all asynchronous work before
-returning from a check. The working tree is not modified. Tests run offline; AI calls fail rather
-than contact a provider.
+Cases within a rule can run concurrently on a reusable worker pool; rule suites run in discovery order.
+Each worker caches imported modules across cases and rules, so do not rely on module-level state
+being isolated or ordered between cases. Await all asynchronous work before returning from a check.
+The working tree is not modified. Tests run offline; AI calls fail rather than contact a provider.
 
 These chains only declare cases. Ordinary `check` and `validate` do not execute them. Use the
 [`test` command](#test-rule-path) to run them; the repository's `npm test` also runs its inline cases.
+
+Run `npm start -- test .rulekeeper` to test the repository's local rules. Cases cover environment
+duplicates, memory-ratio boundaries, and public/internal protobuf URLs. The Go append rule has only
+offline scope-selection cases; its AI policy is not evaluated.
 
 ### Execution order and concurrency
 
@@ -414,17 +418,23 @@ to the invocation cwd.
 node dist/cli.js test
 node dist/cli.js test .rulekeeper/duplicated-env.rule.ts
 node dist/cli.js test --timeout 30s
+node dist/cli.js test --concurrency 4
 ```
 
-Streams each completed case immediately as a tree under its rule heading, followed by passed/failed
-totals. Each row shows its elapsed time; the summary's `Time` is the sum of those case durations, not
-command wall-clock time. Timing includes fixture setup, execution, and temporary-project cleanup.
-The first case includes worker startup; the final case includes worker shutdown. Initial rule
-discovery and output rendering are excluded. Durations use the same two-decimal `ms`, `s`, `min`,
-`h`, and `d` scaling as evaluations.
+Streams results in declaration order as a tree under each rule heading, followed by passed/failed
+totals. Later cases can finish first, but their results wait for earlier cases before printing.
+Each row shows its elapsed time; the summary's `Time` is the sum of those case durations, not command
+wall-clock time. Timing includes fixture setup, execution, and temporary-project cleanup, but not
+time waiting for a worker. A worker's first case includes startup; successful pool shutdown, initial
+rule discovery, and output rendering are excluded. Durations use the same two-decimal `ms`, `s`,
+`min`, `h`, and `d` scaling as evaluations.
 
 Passing labels are green and failing labels red; assertion mismatches show expected and actual
 statuses and do not prevent later cases from running.
+
+`--concurrency <number>` sets the maximum number of reusable workers, defaulting to `1`. It must be a
+positive safe integer. Workers start lazily and remain available across rule files. Increase the
+limit for parallel execution; lightweight suites may run faster serially because startup has a cost.
 
 `--timeout <duration>` limits each case independently, defaulting to `10s`. Use a positive duration
 with an `ms`, `s`, or `m` suffix, such as `500ms`, `30s`, or `2m`; the maximum is `2147483647ms`.
@@ -711,8 +721,8 @@ check and never contacts the provider.
   numeric credentials.
 - Test rows show elapsed time and summaries show summed case time using the evaluation duration
   scales. `test --timeout <duration>` enforces a per-case deadline (default `10s`) in isolated workers.
-- Rule tests reuse a warm worker within each rule suite, avoiding repeated engine and module startup
-  while retaining fresh rule instances, separate temporary projects, and worker replacement on timeout.
+- Rule tests reuse a bounded worker pool across rule files. `test --concurrency <number>` defaults to
+  `1`, with ordered output, fresh rule instances, separate projects, and worker replacement on timeout.
 - Scope-selector results and rule `files`/`exclude` lists reject missing or inherited-only array
   entries; an empty scope result still skips normally, and disabled rules still validate fully.
 - Project readers, stat, literal glob prefixes, targets, and custom selection enforce reserved-directory

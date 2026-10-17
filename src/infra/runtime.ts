@@ -43,7 +43,8 @@ export function createServices(
 
     runRules: executeRules,
 
-    testRules: (rules, onResult, timeoutMs) => runRuleTests(rules, onResult, timeoutMs),
+    testRules: (rules, onResult, timeoutMs, concurrency) =>
+      runRuleTests(rules, onResult, timeoutMs, concurrency),
 
     createProject,
 

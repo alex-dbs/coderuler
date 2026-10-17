@@ -81,4 +81,14 @@ export const tests = [
   test('all-empty env scopes are skipped').withFiles({
     'tests/manual/production.yml': env({ EMPTY: '', NULL: null, LIST: [], MAP: {} }),
   }).skips(),
+  test('a duplicate among otherwise empty env scopes still violates').withFiles({
+    'tests/manual/default.yml': env({}, { SHARED: 'one' }, { EMPTY: '' }),
+    'tests/manual/production.yml': env({ NULL: null }, { SHARED: 'one' }, {}),
+  }).violates(),
+  test('missing env or text fields are skipped').withFiles({
+    'tests/manual/production.yml': {
+      app: { container: { image: 'example/app:1' } },
+      worker: { env: {} },
+    },
+  }).skips(),
 ] as const;
