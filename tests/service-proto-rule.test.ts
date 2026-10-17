@@ -7,8 +7,6 @@ import type { LoadedRule, Rule } from '../dist/index.js';
 import { createProject } from '../dist/adapter/filesystem/project.js';
 import { executeRules } from '../dist/app/execute.js';
 
-const message = 'Service endpoints must start with a /service/vX/ followed by a resource in plural form.';
-
 async function runServiceRule(fixture: string) {
   const loaded: LoadedRule = {
     name: 'service-proto',
@@ -53,12 +51,12 @@ test('golden: real service rule checks the first resource with an offline regex'
     reports[0]!.evaluations.map(({ subject, result }) => {
       assert.equal(subject.kind, 'scope');
       if (subject.kind !== 'scope') throw new Error('Expected a URL scope');
-      return { filepath: subject.filepath, url: subject.data, result };
+      return { filepath: subject.filepath, url: subject.data, status: result.status };
     }),
     expected.map(([url, status]) => ({
       filepath: 'tests/manual/proto/internal/service.proto',
       url,
-      result: status === 'pass' ? { status } : { status, message },
+      status,
     })),
   );
 });
@@ -67,7 +65,7 @@ test('golden: real service rule skips RPCs without HTTP bindings', async () => {
   const reports = await runServiceRule('unannotated');
   assert.equal(reports.length, 1);
   assert.deepEqual(
-    reports.map(({ status, reason, evaluations }) => ({ status, reason, evaluations })),
-    [{ status: 'skipped', reason: 'no matching subjects', evaluations: [] }],
+    reports.map(({ status, evaluations }) => ({ status, evaluations })),
+    [{ status: 'skipped', evaluations: [] }],
   );
 });

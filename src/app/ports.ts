@@ -78,6 +78,7 @@ export interface DecisionRuntime {
 export interface RunContext {
   readonly project: Project;
   readonly isTarget: (filepath: string) => boolean;
+  readonly changedFiles?: ReadonlySet<string>;
   readonly concurrency: number;
   readonly resolveDecision: (settings: RuleSettings) => DecisionRuntime;
   readonly emit?: (event: RunEvent) => void;

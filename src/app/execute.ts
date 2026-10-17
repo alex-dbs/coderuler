@@ -4,7 +4,6 @@ import type {
   CheckContext,
   CheckResult,
   Grouping,
-  GroupSubject,
   JsonValue,
   PredicateResult,
   ProjectContext,
@@ -86,6 +85,10 @@ export async function executeRules(
   const emit = (event: RunEvent): void => {
     context.emit?.(event);
   };
+  const changedFiles = context.changedFiles;
+  const changedPaths = changedFiles === undefined
+    ? undefined
+    : [...changedFiles].filter(filepath => isEligibleRelativePath(filepath) && context.isTarget(filepath));
 
   const traceFor =
     (name: string, evaluationId?: number) =>
@@ -146,6 +149,7 @@ export async function executeRules(
     name: string,
     selection: Selection<T>,
     evaluationId?: number,
+    changedOnly = false,
   ): Promise<readonly ScopeSubject<T>[]> => {
     const exclude = selection.exclude ?? [];
     const candidates = await context.project.glob(selection.files);
@@ -153,8 +157,9 @@ export async function executeRules(
     for (const filepath of candidates) {
       const excluded = exclude.some(pattern => matchesGlob(filepath, pattern));
       const targeted = context.isTarget(filepath);
-      const selected = !excluded && targeted;
-      const reason = excluded ? 'excluded' : targeted ? undefined : 'outside target';
+      const changed = !changedOnly || changedFiles === undefined || changedFiles.has(filepath);
+      const selected = !excluded && targeted && changed;
+      const reason = excluded ? 'excluded' : !targeted ? 'outside target' : changed ? undefined : 'unchanged';
       emit({
         type: 'file',
         name,
@@ -189,10 +194,10 @@ export async function executeRules(
     return collected.flat();
   };
 
-  const selectionContextFor = (name: string): SelectionContext => ({
+  const selectionContextFor = (name: string, changedOnly: boolean): SelectionContext => ({
     project: context.project,
     trace: traceFor(name),
-    select: selection => selectFromRule(name, selection),
+    select: selection => selectFromRule(name, selection, undefined, changedOnly),
   });
 
   const runtimeOf = (plan: Plan): DecisionRuntime => {
@@ -324,10 +329,14 @@ export async function executeRules(
       ...(gateReason === undefined ? {} : { reason: gateReason }),
     });
 
+    const changedOnly = rule.group === 'scope' || rule.group === 'file';
     let selected: readonly ScopeSubject<JsonValue>[];
     try {
-      const raw = await rule.select.call(rule, selectionContextFor(name));
-      selected = validateScopeSubjects(raw, `Rule "${name}" selection`);
+      const raw = await rule.select.call(rule, selectionContextFor(name, changedOnly));
+      const subjects = validateScopeSubjects(raw, `Rule "${name}" selection`);
+      selected = changedOnly && changedFiles !== undefined
+        ? subjects.filter(subject => changedFiles.has(subject.filepath))
+        : subjects;
       await assertEligible(name, selected);
     } catch (error) {
       throw fail(name, 'select', error);
@@ -366,11 +375,15 @@ export async function executeRules(
     const groupingStartedAt = performance.now();
     const grouping: Grouping = plan.rule.group;
     try {
-      plan.evaluationSubjects = groupSubjects(
-        plan.subjects,
-        grouping,
-        subject => emit({ type: 'group', name: plan.name, subject }),
-      );
+      const subjects = groupSubjects(plan.subjects, grouping);
+      plan.evaluationSubjects = changedPaths === undefined || grouping === 'scope' || grouping === 'file'
+        ? subjects
+        : subjects.filter(subject => subject.kind === 'group' && changedPaths.some(filepath =>
+            subject.group.path === '.' || filepath.startsWith(`${subject.group.path}/`)));
+      for (const subject of plan.evaluationSubjects) {
+        if (subject.kind === 'group') emit({ type: 'group', name: plan.name, subject });
+      }
+      if (plan.evaluationSubjects.length === 0) plan.skipped = 'no changed subjects';
     } catch (error) {
       throw fail(plan.name, 'group', error);
     }
@@ -417,7 +430,6 @@ export async function executeRules(
 function groupSubjects(
   subjects: readonly ScopeSubject<JsonValue>[],
   grouping: Grouping,
-  emitGroup: (subject: GroupSubject<JsonValue>) => void,
 ): readonly Subject<JsonValue>[] {
   if (grouping === 'scope') return [...subjects];
 
@@ -446,8 +458,6 @@ function groupSubjects(
 
   return descriptors.map(descriptor => {
     const members = buckets.get(`${descriptor.type}\u0000${descriptor.path}`)!;
-    const subject: GroupSubject<JsonValue> = { kind: 'group', group: descriptor, members };
-    emitGroup(subject);
-    return subject;
+    return { kind: 'group', group: descriptor, members };
   });
 }

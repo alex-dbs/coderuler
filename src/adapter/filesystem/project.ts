@@ -1,4 +1,4 @@
-import type { BigIntStats } from 'node:fs';
+import type { BigIntStats, Dirent } from 'node:fs';
 import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
 import { TextDecoder } from 'node:util';
@@ -18,6 +18,10 @@ const SKIPPED_ANY_DEPTH: ReadonlySet<string> = new Set([
 const ROOT_GENERATED: ReadonlySet<string> = new Set(['dist', 'coverage']);
 
 const GLOB_MAGIC = /[*?[\]{}]/;
+
+export function isReservedDirectory(name: string, rootLevel: boolean): boolean {
+  return SKIPPED_ANY_DEPTH.has(name) || (rootLevel && ROOT_GENERATED.has(name));
+}
 
 export interface ProjectOptions {
   readonly excludeFiles?: readonly string[];
@@ -66,20 +70,47 @@ async function lstatOrUndefined(absolute: string): Promise<BigIntStats | undefin
   }
 }
 
-async function assertPathBoundary(root: string, absolute: string, display: string): Promise<void> {
+export async function traversablePath(root: string, filepath: string): Promise<string | undefined> {
+  const segments = filepath.split('/');
+  let absolute = root;
+  let missing = false;
+  for (const [index, segment] of segments.entries()) {
+    const ancestor = index < segments.length - 1;
+    if (!missing) absolute = join(absolute, segment);
+    const stats = missing ? undefined : await lstatOrUndefined(absolute);
+    if (stats === undefined) {
+      missing = true;
+      if (ancestor && isReservedDirectory(segment, index === 0)) return undefined;
+      continue;
+    }
+    if (stats.isSymbolicLink()) return undefined;
+    const actual = basename(await realpath(absolute));
+    segments[index] = actual;
+    if (stats.isDirectory() && isReservedDirectory(actual, index === 0)) return undefined;
+  }
+  return segments.join('/');
+}
+
+async function assertPathBoundary(
+  root: string,
+  absolute: string,
+  display: string,
+): Promise<BigIntStats | undefined> {
   const relativePath = relative(root, absolute);
   const segments = relativePath === '' ? [] : relativePath.split(sep);
+  let finalStats: BigIntStats | undefined;
   for (const [index, segment] of segments.entries()) {
     const last = index === segments.length - 1;
     const candidate = join(root, ...segments.slice(0, index + 1));
     const stats = await lstatOrUndefined(candidate);
+    if (last) finalStats = stats;
     if (stats === undefined) continue;
     if (!last && stats.isSymbolicLink()) {
       throw new Error(`Project path ${display} passes through a symbolic link at ${segment}/`);
     }
     if (!stats.isDirectory()) continue;
     const actual = basename(await realpath(candidate));
-    if (SKIPPED_ANY_DEPTH.has(actual) || (index === 0 && ROOT_GENERATED.has(actual))) {
+    if (isReservedDirectory(actual, index === 0)) {
       throw new Error(
         last
           ? `Project path ${display} targets the reserved directory ${actual}/`
@@ -87,6 +118,7 @@ async function assertPathBoundary(root: string, absolute: string, display: strin
       );
     }
   }
+  return finalStats;
 }
 
 async function assertPatternAllowed(root: string, pattern: string): Promise<void> {
@@ -106,26 +138,37 @@ async function assertPatternAllowed(root: string, pattern: string): Promise<void
     if (stats?.isSymbolicLink() === true) break;
     if (stats?.isDirectory() !== true) continue;
     const actual = basename(await realpath(candidate));
-    if (SKIPPED_ANY_DEPTH.has(actual) || (dirname(candidate) === root && ROOT_GENERATED.has(actual))) {
+    if (isReservedDirectory(actual, dirname(candidate) === root)) {
       throw new Error(`Project glob pattern ${pattern} targets the reserved directory ${actual}/`);
     }
   }
+}
+
+function literalDirectory(pattern: string): string {
+  const segments: string[] = [];
+  for (const segment of pattern.split('/').slice(0, -1)) {
+    if (segment === '' || segment === '.') continue;
+    if (!/^[\w .-]+$/.test(segment)) break;
+    segments.push(segment);
+  }
+  return segments.join('/');
 }
 
 async function walkInventory(
   directory: string,
   prefix: string,
   files: InventoryFile[],
+  readDirectory: (directory: string) => Promise<readonly Dirent[]>,
 ): Promise<void> {
-  const entries = await readdir(directory, { withFileTypes: true });
+  const entries = await readDirectory(directory);
   for (const entry of entries) {
     if (entry.isSymbolicLink()) continue;
     const relativePath = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
     if (entry.isDirectory()) {
-      if (SKIPPED_ANY_DEPTH.has(entry.name) || (prefix === '' && ROOT_GENERATED.has(entry.name))) {
+      if (isReservedDirectory(entry.name, prefix === '')) {
         continue;
       }
-      await walkInventory(join(directory, entry.name), relativePath, files);
+      await walkInventory(join(directory, entry.name), relativePath, files, readDirectory);
     } else if (entry.isFile()) {
       files.push({ path: relativePath, absolute: join(directory, entry.name) });
     }
@@ -137,16 +180,25 @@ export function createProject(root: string, options: ProjectOptions = {}): Proje
   const excludeFiles = new Set((options.excludeFiles ?? []).map((file) => resolve(file)));
   const textCache = new Map<string, Promise<string>>();
   let physicalRootPromise: Promise<string> | undefined;
-  let inventoryPromise: Promise<readonly InventoryFile[]> | undefined;
+  const directories = new Map<string, Promise<readonly Dirent[]>>();
+
+  const readDirectory = (directory: string): Promise<readonly Dirent[]> => {
+    let pending = directories.get(directory);
+    if (pending === undefined) {
+      pending = readdir(directory, { withFileTypes: true });
+      directories.set(directory, pending);
+    }
+    return pending;
+  };
 
   async function readSource(absolute: string, display: string): Promise<string> {
     const cached = textCache.get(absolute);
     if (cached !== undefined) return cached;
     const pending = (async (): Promise<string> => {
-      await assertPathBoundary(resolvedRoot, absolute, display);
+      const inspected = await assertPathBoundary(resolvedRoot, absolute, display);
       let stats;
       try {
-        stats = await lstat(absolute);
+        stats = inspected ?? await lstat(absolute);
       } catch (error) {
         throw new Error(`Project file ${display} could not be read: ${describe(error)}`, {
           cause: error,
@@ -178,18 +230,31 @@ export function createProject(root: string, options: ProjectOptions = {}): Proje
     const list = typeof patterns === 'string' ? [patterns] : patterns;
     for (const pattern of list) await assertPatternAllowed(resolvedRoot, pattern);
     if (list.length === 0) return [];
-    const files = await (inventoryPromise ??= (async (): Promise<readonly InventoryFile[]> => {
-      const physical = await (physicalRootPromise ??= realpath(resolvedRoot));
-      const collected: InventoryFile[] = [];
-      await walkInventory(physical, '', collected);
-      return collected.sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
-    })());
+    const physical = await (physicalRootPromise ??= realpath(resolvedRoot));
+    const prefixes = [...new Set(list.map(literalDirectory))];
+    const roots = prefixes.filter(prefix => !prefixes.some(parent =>
+      parent !== prefix && (parent === '' || prefix.startsWith(`${parent}/`))));
+    const files: InventoryFile[] = [];
+    for (const prefix of roots) {
+      let directory = physical;
+      let traversable = true;
+      const segments = prefix === '' ? [] : prefix.split('/');
+      for (const [index, segment] of segments.entries()) {
+        const entry = (await readDirectory(directory)).find(entry => entry.name === segment);
+        if (entry?.isDirectory() !== true || isReservedDirectory(entry.name, index === 0)) {
+          traversable = false;
+          break;
+        }
+        directory = join(directory, segment);
+      }
+      if (traversable) await walkInventory(directory, prefix, files, readDirectory);
+    }
     const matched: string[] = [];
     for (const file of files) {
       if (excludeFiles.has(file.absolute)) continue;
-      if (list.some((pattern) => matchesGlob(file.path, pattern))) matched.push(file.path);
+      if (list.some(pattern => matchesGlob(file.path, pattern))) matched.push(file.path);
     }
-    return matched;
+    return matched.sort();
   };
 
   return {
@@ -201,10 +266,10 @@ export function createProject(root: string, options: ProjectOptions = {}): Proje
 
     async stat(path) {
       const absolute = helperPath(resolvedRoot, path);
-      await assertPathBoundary(resolvedRoot, absolute, path);
+      const inspected = await assertPathBoundary(resolvedRoot, absolute, path);
       let stats;
       try {
-        stats = await lstat(absolute);
+        stats = inspected ?? await lstat(absolute);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
         throw new Error(`Project path ${path} could not be inspected: ${describe(error)}`, {

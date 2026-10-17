@@ -1564,8 +1564,6 @@ test('usage errors exit 2 while removed commands and options stay unknown', asyn
     ['nope'],
     ['stats'],
     ['stats', 'reset'],
-    ['check', '--diff-only'],
-    ['check', '--base', 'main'],
     ['check', '--bogus'],
     ['inspect'],
   ]) {

@@ -6,6 +6,7 @@ import { createRedactor } from '../adapter/cli/reports.js';
 import { createProject, resolveTarget } from '../adapter/filesystem/project.js';
 import { runRuleTests } from '../adapter/filesystem/rule-tests.js';
 import { createRuleLoader, resolveRuleSelector } from '../adapter/filesystem/rules.js';
+import { changedFiles } from '../adapter/git/changes.js';
 import { executeRules, validateRules } from '../app/execute.js';
 import { createDecisionResolver } from './settings.js';
 
@@ -47,6 +48,8 @@ export function createServices(
     createProject,
 
     resolveTarget,
+
+    changedFiles,
 
     resolveRuleSelector,
 

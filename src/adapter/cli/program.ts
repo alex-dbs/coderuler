@@ -74,6 +74,7 @@ export interface CliServices {
     options?: { readonly excludeFiles?: readonly string[] },
   ) => Project;
   readonly resolveTarget: (root: string, target: string) => Promise<CliTarget>;
+  readonly changedFiles: (root: string, base: string) => Promise<ReadonlySet<string>>;
   readonly resolveRuleSelector: (
     selector: string,
     invocationCwd: string,
@@ -92,6 +93,8 @@ interface CheckOptions {
   readonly outputAll?: boolean;
   readonly debug?: boolean;
   readonly verbose?: boolean;
+  readonly diffOnly?: boolean;
+  readonly base?: string;
   readonly concurrency: number;
   readonly threshold?: number;
 }
@@ -274,6 +277,8 @@ export function createProgram(services: CliServices): Command {
     .option('--output-all', 'include passing and skipped rules and every verification in the output')
     .option('--debug', 'stream framework metadata and force concurrency 1')
     .option('--verbose', 'stream the redacted walkthrough at the configured concurrency')
+    .option('--diff-only', 'evaluate changed files and affected groups against a Git base')
+    .option('--base <ref>', 'Git base for --diff-only (default: HEAD)')
     .option(
       '--concurrency <number>',
       `bounded in-flight selection and evaluation tasks (${CONCURRENCY_HINT})`,
@@ -284,6 +289,9 @@ export function createProgram(services: CliServices): Command {
     .action(async (target: string, options: CheckOptions) => {
       if (options.json === true && options.jsonl === true) {
         throw new Error('--json and --jsonl are mutually exclusive');
+      }
+      if (options.base !== undefined && options.diffOnly !== true) {
+        throw new Error('--base requires --diff-only');
       }
       const debug = options.debug === true;
       const verbose = options.verbose === true;
@@ -296,12 +304,19 @@ export function createProgram(services: CliServices): Command {
       let walkthrough: WalkthroughRenderer | undefined;
       try {
         const area = await services.resolveTarget(services.cwd, target);
+        let changedFiles = options.diffOnly === true
+          ? await services.changedFiles(area.root, options.base ?? 'HEAD')
+          : undefined;
         const prepared = await planWalk(
           services,
           area.root,
           filepath => area.contains(filepath),
           options.rules === undefined ? {} : { rulesPath: options.rules },
         );
+        if (changedFiles !== undefined) {
+          const ruleFiles = new Set(prepared.rules.map(entry => relative(area.root, resolve(entry.ruleFile)).split(sep).join('/')));
+          changedFiles = new Set([...changedFiles].filter(path => !ruleFiles.has(path)));
+        }
         const concurrency = debug ? 1 : options.concurrency;
         walkthrough = verbose
           ? createWalkthroughRenderer({
@@ -321,6 +336,7 @@ export function createProgram(services: CliServices): Command {
           concurrency,
           resolveDecision: services.decisionResolver(options.threshold),
           ...(emit === undefined ? {} : { emit }),
+          ...(changedFiles === undefined ? {} : { changedFiles }),
         };
         const startedAt = performance.now();
         reports = await services.runRules(prepared.rules, context);

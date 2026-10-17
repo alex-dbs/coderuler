@@ -3,7 +3,7 @@
 **One rule = one TypeScript/JS class.** rulekeeper selects *scopes* (named, source-located slices of
 files), filters their applicability, groups them if needed, and evaluates each subject — with a remote
 AI decision (Jev), with a deterministic local check, or with any code you write. It runs against the
-**current working tree**: no Git, no revisions, no diffs.
+**current working tree**, optionally selecting only files changed from a Git reference.
 
 A rule is a normal ES module that default-exports a class extending `Rule`. The framework provides the
 shared mechanics (file selection, scope extraction, filtering, grouping, concurrency, reporting);
@@ -277,6 +277,8 @@ the invocation cwd for `check`/`validate` and the resolved `[folder]` for `inspe
 sibling folder is its own root. Reads require real files, decode UTF-8 strictly, and error on
 missing/unreadable/invalid input — a read error never masquerades as a missing value or empty selection.
 Source text is cached once per run; parsed values are per-use so one rule cannot mutate another's view.
+Globs avoid unrelated trees when a simple literal directory prefix identifies the search root.
+Directory listings are cached when visited rather than taking a whole-project snapshot.
 
 ## Evaluators
 
@@ -449,6 +451,8 @@ evaluates them.
 | Flag | Meaning |
 |---|---|
 | `--rules <path>` | Explicit rule file or recursive directory instead of discovery. |
+| `--diff-only` | Evaluate changed files only; folder/project groups retain full contents but run only when affected. |
+| `--base <ref>` | Git reference to compare directly with the working tree; default `HEAD`; requires `--diff-only`. |
 | `--json` | JSON object on stdout: `{ "durationMs": number, "reports": [...] }`; violations only by default. |
 | `--jsonl` | Compact `{ "type": "rule", ...report }` records with each rule's `durationMs`; violations only by default, with no summary record. |
 | `--output-all` | Include every verification and skipped rule in human, JSON, or JSONL output. |
@@ -458,6 +462,27 @@ evaluates them.
 | `--threshold <number>` | Decision threshold override; finite decimal in `0–1`; no implicit default. |
 
 `--debug` and `--verbose` combine: the verbose walkthrough is preserved and concurrency stays 1.
+
+```sh
+node dist/cli.js check --diff-only
+node dist/cli.js check src --diff-only --base origin/main
+```
+
+Diff-only includes tracked changes relative to the base (committed, staged, unstaged, deleted, and
+renamed paths) and nonignored untracked files. It compares **directly with the base tree**, not a merge
+base, and evaluates current contents rather than historical snapshots or individual changed lines.
+Staged edits reverted in the working tree are unchanged if their current contents match the base.
+Git is required only in this mode; a missing repository or invalid reference exits `2`.
+Changed paths use the physical spelling of existing files and directories, so edits after case-only
+renames still match selected files on case-insensitive filesystems. Deleted paths use the spelling of
+any surviving ancestors; missing suffixes retain Git's spelling.
+
+Scope/file rules evaluate all selected scopes in changed files. Folder/project groups keep every
+normally selected, filter-accepted member, including unchanged files, and run if any eligible changed
+path falls within their folder/project and the positional target. Folder levels still apply. Deleted
+paths and both sides of a rename can trigger surviving groups; wholly removed groups are not
+synthesized. Unaffected groups and an empty diff are skipped. Traversal exclusions and loaded rule-file
+exclusions still apply. Gates, project readers, and check-time `context.select` retain normal access.
 
 `--json` and `--jsonl` are mutually exclusive. By default they omit passing/skipped rules and passing
 evaluations inside mixed-result rules. `--output-all` preserves every report and evaluation. Included
@@ -476,6 +501,18 @@ grouping, and evaluation phases, excluding unrelated rules' selection and waitin
 evaluation starts. Concurrent subjects use the interval from the first start to the last completion,
 not the sum of their individual times. Rule durations can overlap and must not be added to obtain the
 total. JSONL has no separate total-duration item.
+
+**Engine + I/O baseline (repository):**
+
+```sh
+npx tsx src/cli.ts check --rules benchmarks/engine.rule.ts --jsonl --output-all
+```
+
+This explicit-only rule lives outside default `.rulekeeper` discovery. It selects the three existing
+`tests/manual/*.yml` files as whole-file scopes and always passes: no YAML parsing, policy, or AI.
+Its `durationMs` measures filesystem selection/read/stat plus engine validation, grouping, and
+evaluation—not pure CPU or CLI startup/import time. Use fresh invocations when comparing results;
+filesystem cache state can still affect timings.
 
 `[path]` may be relative or absolute within the working root. On a case-insensitive filesystem,
 alternate-case root and target spellings resolve to their actual filesystem names before selection
@@ -563,14 +600,15 @@ still obeys the reserved-source boundary: `old/`, `node_modules/`, `.rulekeeper/
 
 `help`, `help <command>`, and `--help` exit `0`; an unknown help target, unknown commands/options,
 and argument errors exit `2` (Commander `exitOverride`).
-Removed surfaces are **unknown, not ignored**: `stats`, `stats reset`, `--diff-only`, and `--base` all
-exit `2`. Piped output is plain unless color is explicitly forced; unsafe control characters in untrusted
-paths/source/messages are escaped.
+Removed commands are **unknown, not ignored**: `stats` and `stats reset` exit `2`. Piped output is plain
+unless color is explicitly forced; unsafe control characters in untrusted paths/source/messages are
+escaped.
 
 ## Boundaries and isolation
 
-- **Current tree only.** There is no Git integration or revision/diff abstraction; no snapshot ports, and
-  no `.gitignore` inference.
+- **Current contents.** Git is used only by `check --diff-only` to identify changed paths; checks always
+  read the working tree. Normal selection does not infer `.gitignore`; diff-only excludes ignored
+  untracked files, while tracked files remain eligible.
 - **Traversal exclusions.** Selection and the file inventory skip symlinks and the directories `.git`,
   `node_modules`, `.rulekeeper`, and `old`, plus a root-level `dist/` and `coverage/`. Explicit source
   targets inside an excluded directory are errors, not overrides.
