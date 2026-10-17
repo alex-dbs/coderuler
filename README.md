@@ -312,6 +312,8 @@ first actual AI call. A skipped, filtered, regex-only, or otherwise deterministi
 works even with unused invalid AI environment values. A *set-but-blank* used value is an error; values
 shadowed by a higher-precedence setting are not consulted. Rule and flag values validate eagerly.
 
+Copy `.env.example` to `.env` and set `TYPESAFE_API_KEY` for AI-backed rules. Other values show defaults.
+
 The CLI loads `.env` from the invocation cwd via `process.loadEnvFile()` **without overriding exported
 shell variables**; a missing `.env` is ignored. There is no other configuration system and no statistics
 directory or database.
@@ -339,6 +341,15 @@ a decision request. Empty or omitted lists remain valid; dense example order is 
 > AI-backed rules require `TYPESAFE_API_KEY`. Without it, `validate`, deterministic and regex rules, and
 > all skipped/no-subject rules run fully offline. This document describes behavior only; it does not
 > assert that a live provider was contacted.
+
+The repository's `.rulekeeper/memory.rule.ts` example supports decimal memory quantities with
+`k`, `M`, or `G` suffixes (such as `512M` or `.5G`). It converts them to bytes with `bignumber.js`
+and checks that the limit is at most 1.5 times the request, exactly and without AI credentials.
+
+`service-proto.rule.ts` uses the same regex convention as `public-proto`: the first resource segment
+after `/service/vN/` must end in `s`. This is a naming convention, not linguistic plural detection.
+`duplicated-env.rule.ts` compares each override's variable names and JSON values against every
+`default.yml` scope in the same folder. Both rules run offline without AI credentials.
 
 ## Commands
 

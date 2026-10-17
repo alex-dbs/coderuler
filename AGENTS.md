@@ -1,7 +1,14 @@
 # Code style
 
-- Write clean, self-explanatory code that is easy to read.
-- Use clear names and small, focused functions instead of explanatory comments.
-- Do not add prose comments or JSDoc to explain the code. Refactor unclear code rather than documenting it with comments.
+- Keep code short, scannable, maintainable, and straight to the point.
+- Use clear names and small, focused functions.
+- Refactor unclear code instead of adding prose comments or JSDoc.
 - Preserve comments required by compilers, tooling, or licenses.
-- TDD. And leverage real use cases through golden tests.
+- Use TDD and golden tests based on real use cases.
+
+# Rules
+
+- Establish applicability and required data in filters; checks trust those preconditions.
+- Keep checks focused on policy. Do not repeat filters or guard against impossible inputs.
+- Use domain names and direct comparisons so the policy reads naturally.
+- Add helpers and validation only when they clarify real behavior, not hypothetical edge cases.

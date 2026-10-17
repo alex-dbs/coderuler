@@ -65,6 +65,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
+    "bignumber.js": "11.1.5",
     "typescript": "^7.0.2"
   }
 }

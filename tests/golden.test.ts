@@ -836,18 +836,13 @@ test('golden: duplicated-env skips scopes whose env values are all empty', async
   assert.ok(entry !== undefined);
 
   const events: RunEvent[] = [];
-  let decisions = 0;
 
   const reports = await executeRules(rules, {
     project: createProject(root, { excludeFiles: rules.map(ruleEntry => ruleEntry.ruleFile) }),
     isTarget: () => true,
     concurrency: 2,
     resolveDecision: () => {
-      decisions += 1;
-      return {
-        threshold: 0.4,
-        backend: { decide: async () => ({ probability: 1, model: 'filter-stub' }) },
-      };
+      throw new Error('duplicated-env must not call the decision backend');
     },
     emit: event => {
       events.push(event);
@@ -868,7 +863,6 @@ test('golden: duplicated-env skips scopes whose env values are all empty', async
     ],
   );
   assert.equal(events.filter(event => event.type === 'group').length, 0);
-  assert.equal(decisions, 0, 'an all-empty env mapping must never reach the decision backend');
   assert.deepEqual(stableReports(reports), [
     {
       name: 'duplicated-env',
@@ -906,25 +900,13 @@ test('golden: duplicated-env keeps zero, false, and nonempty env values in one f
   });
   const rules = await loadDuplicatedEnv(root);
   assert.deepEqual(rules.map(ruleEntry => ruleEntry.name), ['duplicated-env']);
-  const [entry] = rules;
-  assert.ok(entry !== undefined);
 
-  const requests: DecisionRequest[] = [];
   const reports = await executeRules(rules, {
     project: createProject(root, { excludeFiles: rules.map(ruleEntry => ruleEntry.ruleFile) }),
     isTarget: () => true,
     concurrency: 2,
-    resolveDecision: settings => {
-      assert.deepEqual(settings, {});
-      return {
-        threshold: 0.4,
-        backend: {
-          decide: async request => {
-            requests.push(request);
-            return { probability: 1, model: 'filter-stub' };
-          },
-        },
-      };
+    resolveDecision: () => {
+      throw new Error('duplicated-env must not call the decision backend');
     },
     emit: () => {},
   });
@@ -954,36 +936,106 @@ test('golden: duplicated-env keeps zero, false, and nonempty env values in one f
                 { filepath: 'tests/manual/timeouts.yml', id: '0:/global/env/text', data: { TIMEOUT_SECONDS: 0 } },
               ],
             },
-            result: { status: 'pass', probability: 1, threshold: 0.4, model: 'filter-stub' },
+            result: { status: 'pass' },
           },
         ],
       },
     ],
   );
-  assert.deepEqual(
-    requests.map(request => request.state),
-    [
-      {
-        files: [
-          {
-            filepath: 'tests/manual/default.yml',
-            scopes: [{ id: '0:/global/env/text', data: { LOG_LEVEL: 'info' } }],
-          },
-          {
-            filepath: 'tests/manual/production.yml',
-            scopes: [{ id: '0:/global/env/text', data: { RETRIES: 0 } }],
-          },
-          {
-            filepath: 'tests/manual/staging.yml',
-            scopes: [{ id: '0:/global/env/text', data: { FEATURE_ENABLED: false, EMPTY_STRING: '' } }],
-          },
-          {
-            filepath: 'tests/manual/timeouts.yml',
-            scopes: [{ id: '0:/global/env/text', data: { TIMEOUT_SECONDS: 0 } }],
-          },
-        ],
+});
+
+test('golden: duplicated-env compares every override against every default without AI', async t => {
+  const cases: {
+    name: string;
+    files: Record<string, readonly Record<string, JsonValue>[]>;
+    duplicate: boolean;
+  }[] = [
+    {
+      name: 'changed values, new names, distinct JSON types, and reordered arrays pass',
+      files: {
+        default: [{ NAME: 'one', COUNT: 0, ENABLED: false, ORDER: ['a', 'b'] }],
+        production: [{ NAME: 'two', OTHER: 'one', COUNT: '0', ENABLED: 'false', ORDER: ['b', 'a'] }],
       },
-    ],
-  );
-  assert.equal(requests.length, 1, 'one folder group is exactly one provider request');
+      duplicate: false,
+    },
+    {
+      name: 'a late override repeats an earlier default even when a later default changes it',
+      files: {
+        default: [{ SHARED: 'first' }, { SHARED: 'second' }],
+        production: [{ SHARED: 'changed' }, { OTHER: 'second' }],
+        staging: [{ NEW: 'first' }, { SHARED: 'first' }],
+      },
+      duplicate: true,
+    },
+    {
+      name: 'a later default scope is also compared',
+      files: {
+        default: [{ FIRST: 'one' }, { SECOND: 'two' }],
+        production: [{ SECOND: 'two' }],
+      },
+      duplicate: true,
+    },
+    {
+      name: 'zero remains a duplicate',
+      files: { default: [{ COUNT: 0 }], production: [{ COUNT: 0 }] },
+      duplicate: true,
+    },
+    {
+      name: 'false remains a duplicate',
+      files: { default: [{ ENABLED: false }], production: [{ ENABLED: false }] },
+      duplicate: true,
+    },
+    {
+      name: 'object equality ignores property order',
+      files: {
+        default: [{ CONFIG: { first: 1, nested: { enabled: false, retries: 0 } } }],
+        production: [{ CONFIG: { nested: { retries: 0, enabled: false }, first: 1 } }],
+      },
+      duplicate: true,
+    },
+    {
+      name: 'equal arrays remain duplicates',
+      files: { default: [{ ORDER: ['a', 'b'] }], production: [{ ORDER: ['a', 'b'] }] },
+      duplicate: true,
+    },
+    {
+      name: 'default scopes are not compared with one another',
+      files: { default: [{ SHARED: 'one' }, { SHARED: 'one' }] },
+      duplicate: false,
+    },
+    {
+      name: 'overrides without defaults pass even if they match each other',
+      files: { production: [{ SHARED: 'one' }], staging: [{ SHARED: 'one' }] },
+      duplicate: false,
+    },
+  ];
+
+  for (const example of cases) {
+    await t.test(example.name, async () => {
+      const files = Object.fromEntries(Object.entries(example.files).map(([name, values]) => [
+        `tests/manual/${name}.yml`,
+        JSON.stringify(Object.fromEntries(values.map((text, index) => [`scope${index}`, { env: { text } }]))),
+      ]));
+      const root = await makeManualRoot('duplicated-env-policy', files);
+      const rules = await loadDuplicatedEnv(root);
+      const reports = await executeRules(rules, {
+        project: createProject(root, { excludeFiles: rules.map(ruleEntry => ruleEntry.ruleFile) }),
+        isTarget: () => true,
+        concurrency: 2,
+        resolveDecision: () => {
+          throw new Error('duplicated-env must not call the decision backend');
+        },
+        emit: () => {},
+      });
+
+      assert.equal(reports.length, 1);
+      const [report] = reports;
+      assert.equal(report?.status, example.duplicate ? 'violation' : 'pass');
+      assert.deepEqual(report?.evaluations.map(({ result }) => result), [
+        example.duplicate
+          ? { status: 'violation', message: 'Env var is overriden with the default value, so we can remove it.' }
+          : { status: 'pass' },
+      ]);
+    });
+  }
 });

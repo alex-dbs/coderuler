@@ -1,0 +1,5 @@
+invalid:
+  container:
+    resources:
+      requests: { memory: 512M }
+      limits: { memory: not-a-quantity }

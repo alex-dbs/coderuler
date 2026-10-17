@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+package acme.service.v1;
+
+service UnannotatedService {
+  rpc StreamEvents(Request) returns (stream Response);
+}

@@ -1,0 +1,84 @@
+equal:
+  container:
+    resources:
+      requests: { memory: 512M }
+      limits: { memory: 512M }
+boundary:
+  container:
+    resources:
+      requests: { memory: 512M }
+      limits: { memory: 768M }
+mixedBoundary:
+  container:
+    resources:
+      requests: { memory: 1G }
+      limits: { memory: 1500M }
+overLimit:
+  container:
+    resources:
+      requests: { memory: 512M }
+      limits: { memory: 1G }
+fractionalBoundary:
+  container:
+    resources:
+      requests: { memory: .5G }
+      limits: { memory: 750M }
+kiloBoundary:
+  container:
+    resources:
+      requests: { memory: 1000k }
+      limits: { memory: 1.5M }
+decimalOverflow:
+  container:
+    resources:
+      requests: { memory: 1G }
+      limits: { memory: 1500.000001M }
+largeBoundary:
+  container:
+    resources:
+      requests: { memory: '9007199254740993M' }
+      limits: { memory: '13510798882111489.5M' }
+largeOverflow:
+  container:
+    resources:
+      requests: { memory: '9007199254740993M' }
+      limits: { memory: '13510798882111489.500001M' }
+zeroBoundary:
+  container:
+    resources:
+      requests: { memory: 0M }
+      limits: { memory: 0M }
+zeroOverflow:
+  container:
+    resources:
+      requests: { memory: 0M }
+      limits: { memory: 1k }
+missingRequest:
+  container:
+    resources:
+      requests: {}
+      limits: { memory: 1G }
+missingLimit:
+  container:
+    resources:
+      requests: { memory: 1G }
+emptyRequest:
+  container:
+    resources:
+      requests: { memory: '' }
+      limits: { memory: 1G }
+emptyLimit:
+  container:
+    resources:
+      requests: { memory: 1G }
+      limits: { memory: '' }
+nullRequest:
+  container:
+    resources:
+      requests: { memory: null }
+      limits: { memory: 1G }
+nullLimit:
+  container:
+    resources:
+      requests: { memory: 1G }
+      limits: { memory: null }
