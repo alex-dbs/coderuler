@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package acme.billing.generated.v1;
+
+service GeneratedBillingService {
+  rpc GetInvoice(GetInvoiceRequest) returns (GetInvoiceResponse) {
+    option (google.api.http) = {
+      get: "/v1/billing/invoices/{invoice_id}"
+    };
+  }
+}

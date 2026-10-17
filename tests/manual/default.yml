@@ -1,0 +1,12 @@
+global:
+  env:
+    text:
+      LOG_LEVEL: info
+      DB_NAME: my-app
+
+app:
+  container:
+    tenv:
+      text:
+        LOG_LEVEL: debug
+        DB_NAME: my-app

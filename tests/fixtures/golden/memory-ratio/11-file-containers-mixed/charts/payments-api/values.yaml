@@ -1,0 +1,20 @@
+containers:
+  - name: payments-api
+    image: registry.example.com/payments-api:1.4.2
+    resources:
+      requests:
+        memory: 512Mi
+      limits:
+        memory: 2Gi
+  - name: ledger
+    image: registry.example.com/ledger:2.0.0
+    resources:
+      requests:
+        memory: 256Mi
+  - name: cache
+    image: registry.example.com/cache:3.1.0
+    resources:
+      limits:
+        memory: 1Gi
+  - name: helper
+    image: registry.example.com/helper:1.0.0

@@ -1,0 +1,70 @@
+{
+  "name": "rulekeeper",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "rulekeeper": "./dist/cli.js"
+  },
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "npx tsx src/cli.ts",
+    "start": "node dist/cli.js",
+    "test": "npm run build && node --test tests/*.test.ts",
+    "test:golden": "npm run build && node --test tests/golden.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ast-grep/lang-angular": "0.0.10",
+    "@ast-grep/lang-bash": "0.0.8",
+    "@ast-grep/lang-bicep": "0.0.2",
+    "@ast-grep/lang-c": "0.0.6",
+    "@ast-grep/lang-cpp": "0.0.6",
+    "@ast-grep/lang-csharp": "0.0.6",
+    "@ast-grep/lang-dart": "0.0.7",
+    "@ast-grep/lang-elixir": "0.0.7",
+    "@ast-grep/lang-glimmer-javascript": "0.0.2",
+    "@ast-grep/lang-glimmer-typescript": "0.0.2",
+    "@ast-grep/lang-go": "0.0.6",
+    "@ast-grep/lang-haskell": "0.0.7",
+    "@ast-grep/lang-java": "0.0.7",
+    "@ast-grep/lang-json": "0.0.7",
+    "@ast-grep/lang-kotlin": "0.0.7",
+    "@ast-grep/lang-lua": "0.0.7",
+    "@ast-grep/lang-markdown": "0.0.6",
+    "@ast-grep/lang-php": "0.0.7",
+    "@ast-grep/lang-python": "0.0.6",
+    "@ast-grep/lang-ruby": "0.0.7",
+    "@ast-grep/lang-rust": "0.0.7",
+    "@ast-grep/lang-scala": "0.0.7",
+    "@ast-grep/lang-sql": "0.0.8",
+    "@ast-grep/lang-swift": "0.0.8",
+    "@ast-grep/lang-toml": "0.0.9",
+    "@ast-grep/lang-yaml": "0.0.6",
+    "@ast-grep/napi": "0.50.0",
+    "axios": "1.20.0",
+    "commander": "15.0.0",
+    "csv-parse": "7.0.3",
+    "jsonc-parser": "3.3.1",
+    "jsonpath-plus": "11.2.1",
+    "string-width": "8.3.0",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^7.0.2"
+  }
+}
