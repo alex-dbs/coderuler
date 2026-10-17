@@ -1,7 +1,8 @@
 import { basename } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
-import { Rule, pass, scopes, violation, type CheckResult, type GroupSubject, type JsonValue, type ScopeSubject, type Subject } from 'rulekeeper';
+import { Rule, pass, scopes, test, violation } from 'rulekeeper';
+import type { CheckResult, GroupSubject, JsonValue, ScopeSubject, Subject } from 'rulekeeper';
 
 import { isPresent } from './presence.ts';
 
@@ -35,3 +36,49 @@ export default class DuplicatedEnv extends Rule<Record<string, JsonValue>> {
     return pass();
   };
 }
+
+function env(...values: readonly Record<string, JsonValue>[]) {
+  return Object.fromEntries(values.map((text, index) => [`scope${index}`, { env: { text } }]));
+}
+
+export const tests = [
+  test('changed values, new names, distinct JSON types, and reordered arrays pass').withFiles({
+    'tests/manual/default.yml': env({ NAME: 'one', COUNT: 0, ENABLED: false, ORDER: ['a', 'b'] }),
+    'tests/manual/production.yml': env({ NAME: 'two', OTHER: 'one', COUNT: '0', ENABLED: 'false', ORDER: ['b', 'a'] }),
+  }).passes(),
+  test('a late override repeats an earlier default even when a later default changes it').withFiles({
+    'tests/manual/default.yml': env({ SHARED: 'first' }, { SHARED: 'second' }),
+    'tests/manual/production.yml': env({ SHARED: 'changed' }, { OTHER: 'second' }),
+    'tests/manual/staging.yml': env({ NEW: 'first' }, { SHARED: 'first' }),
+  }).violates(),
+  test('a later default scope is also compared').withFiles({
+    'tests/manual/default.yml': env({ FIRST: 'one' }, { SECOND: 'two' }),
+    'tests/manual/production.yml': env({ SECOND: 'two' }),
+  }).violates(),
+  test('zero remains a duplicate').withFiles({
+    'tests/manual/default.yml': env({ COUNT: 0 }),
+    'tests/manual/production.yml': env({ COUNT: 0 }),
+  }).violates(),
+  test('false remains a duplicate').withFiles({
+    'tests/manual/default.yml': env({ ENABLED: false }),
+    'tests/manual/production.yml': env({ ENABLED: false }),
+  }).violates(),
+  test('object equality ignores property order').withFiles({
+    'tests/manual/default.yml': env({ CONFIG: { first: 1, nested: { enabled: false, retries: 0 } } }),
+    'tests/manual/production.yml': env({ CONFIG: { nested: { retries: 0, enabled: false }, first: 1 } }),
+  }).violates(),
+  test('equal arrays remain duplicates').withFiles({
+    'tests/manual/default.yml': env({ ORDER: ['a', 'b'] }),
+    'tests/manual/production.yml': env({ ORDER: ['a', 'b'] }),
+  }).violates(),
+  test('default scopes are not compared with one another').withFiles({
+    'tests/manual/default.yml': env({ SHARED: 'one' }, { SHARED: 'one' }),
+  }).passes(),
+  test('overrides without defaults pass even if they match each other').withFiles({
+    'tests/manual/production.yml': env({ SHARED: 'one' }),
+    'tests/manual/staging.yml': env({ SHARED: 'one' }),
+  }).passes(),
+  test('all-empty env scopes are skipped').withFiles({
+    'tests/manual/production.yml': env({ EMPTY: '', NULL: null, LIST: [], MAP: {} }),
+  }).skips(),
+] as const;

@@ -1,6 +1,6 @@
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
-import { Command, CommanderError, InvalidArgumentError } from 'commander';
+import { Command, CommanderError, InvalidArgumentError, Option } from 'commander';
 
 import type {
   LoadedRule,
@@ -9,6 +9,7 @@ import type {
   RuleSelection,
   RunContext,
 } from '../../app/ports.js';
+import type { RuleTestResult } from '../../app/rule-tests.js';
 import { createInspectJsonRenderer } from './inspect-json.js';
 import { createProgress, type TerminalCapabilities } from './progress.js';
 import {
@@ -21,6 +22,9 @@ import {
   renderCheckJson,
   renderCheckJsonl,
   renderCheckSummary,
+  renderRuleTestHeading,
+  renderRuleTestResult,
+  renderRuleTestSummary,
   type InspectRenderer,
   type TextRedactor,
   type TextWriter,
@@ -38,6 +42,8 @@ const SUCCESSFUL_COMMANDER_CODES: Record<string, true> = {
 const CONCURRENCY_HINT = 'must be a positive safe integer';
 const THRESHOLD_HINT = 'must be a decimal number between 0 and 1';
 const THRESHOLD_PATTERN = /^(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)$/;
+const TIMEOUT_HINT = 'must be a positive duration in ms, s, or m, at most 2147483647ms';
+const TIMEOUT_UNITS = { ms: 1, s: 1_000, m: 60_000 } as const;
 
 export interface CliTarget {
   readonly root: string;
@@ -58,6 +64,11 @@ export interface CliServices {
     rules: readonly LoadedRule[],
     context: RunContext,
   ) => Promise<readonly RuleReport[]>;
+  readonly testRules: (
+    rules: readonly LoadedRule[],
+    onResult: (result: RuleTestResult, lastInRule: boolean) => void,
+    timeoutMs: number,
+  ) => Promise<readonly RuleTestResult[]>;
   readonly createProject: (
     root: string,
     options?: { readonly excludeFiles?: readonly string[] },
@@ -89,6 +100,10 @@ interface InspectOptions {
   readonly json?: boolean;
   readonly jsonl?: boolean;
   readonly raw?: boolean;
+}
+
+interface TestOptions {
+  readonly timeout: number;
 }
 
 interface RuleChoice {
@@ -133,6 +148,17 @@ function parseThreshold(value: string): number {
     throw new InvalidArgumentError(THRESHOLD_HINT);
   }
   return parsed;
+}
+
+function parseTimeout(value: string): number {
+  const match = /^([0-9]+(?:\.[0-9]+)?|\.[0-9]+)(ms|s|m)$/.exec(value.trim());
+  const durationMs = match === null
+    ? NaN
+    : Number(match[1]) * TIMEOUT_UNITS[match[2] as keyof typeof TIMEOUT_UNITS];
+  if (!Number.isFinite(durationMs) || durationMs <= 0 || durationMs > 2_147_483_647) {
+    throw new InvalidArgumentError(TIMEOUT_HINT);
+  }
+  return durationMs;
 }
 
 function ruleSelection(
@@ -188,6 +214,54 @@ export function createProgram(services: CliServices): Command {
       for (const entry of rules) {
         services.write(services.redact(`Valid rule: ${escapeText(entry.name)}\n`));
       }
+    });
+
+  program
+    .command('test')
+    .description('Run the declared test cases for the selected rules')
+    .argument('[rule-path]', 'explicit rule module or directory instead of discovery')
+    .addOption(
+      new Option('--timeout <duration>', 'per-test timeout (ms, s, or m)')
+        .argParser(parseTimeout)
+        .default(10_000, '10s'),
+    )
+    .action(async (rulePath: string | undefined, options: TestOptions) => {
+      const progress = services.terminal?.interactive === true
+        ? createProgress(services.writeError, () => services.terminal?.columns ?? 80)
+        : undefined;
+      const color = services.terminal?.color === true;
+      let passed = 0;
+      let failed = 0;
+      let durationMs = 0;
+      let previousRuleName: string | undefined;
+      try {
+        const rules = await services.loadRules(
+          ruleSelection(
+            services,
+            rulePath === undefined ? {} : { rulesPath: rulePath },
+            services.cwd,
+          ),
+        );
+        progress?.message('Running tests');
+        await services.testRules(rules, (result, lastInRule) => {
+          progress?.clear();
+          if (result.ruleName !== previousRuleName) {
+            if (previousRuleName !== undefined) services.write('\n');
+            services.write(renderRuleTestHeading(result.ruleName, services.redact, color));
+            previousRuleName = result.ruleName;
+          }
+          services.write(renderRuleTestResult(result, services.redact, color, lastInRule));
+          if (result.expected === result.actual) passed += 1;
+          else failed += 1;
+          durationMs += result.durationMs;
+          progress?.message(`Running tests (${passed + failed} completed)`);
+        }, options.timeout);
+      } finally {
+        progress?.stop();
+      }
+      if (previousRuleName !== undefined) services.write('\n');
+      services.write(renderRuleTestSummary(passed, failed, durationMs, services.redact, color));
+      if (failed > 0) throw new CliExit(EXIT_VIOLATION);
     });
 
   program

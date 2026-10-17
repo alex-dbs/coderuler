@@ -5,6 +5,7 @@ import { applyEdits, format, visit } from 'jsonc-parser';
 import stringWidth from 'string-width';
 
 import type { LoadedRule, RuleReport, RunEvent } from '../../app/ports.js';
+import type { RuleTestResult } from '../../app/rule-tests.js';
 import type { JsonValue, ScopeSubject, Subject } from '../../app/rule.js';
 
 const MAX_VIOLATIONS = 10;
@@ -50,6 +51,40 @@ export function escapeText(text: string): string {
     CONTROL_CHARACTERS,
     character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`,
   );
+}
+
+export function renderRuleTestHeading(ruleName: string, redact: TextRedactor, color: boolean): string {
+  return `${paint(escapeText(redact(ruleName)), 'bold', color)}\n`;
+}
+
+export function renderRuleTestResult(
+  result: RuleTestResult,
+  redact: TextRedactor,
+  color: boolean,
+  lastInRule: boolean,
+): string {
+  const safe = (text: string): string => escapeText(redact(text));
+  const matches = result.expected === result.actual;
+  const label = paint(safe(matches ? 'PASS' : 'FAIL'), matches ? 'green' : 'red', color);
+  const branch = paint(lastInRule ? '└─ ' : '├─ ', 'dim', color);
+  const detail = matches
+    ? ''
+    : safe(` (expected ${result.expected}, actual ${result.actual})`);
+  const duration = paint(safe(` (${formatDuration(result.durationMs)})`), 'dim', color);
+  return `${branch}${label} ${safe(result.name)}${detail}${duration}\n`;
+}
+
+export function renderRuleTestSummary(
+  passed: number,
+  failed: number,
+  durationMs: number,
+  redact: TextRedactor,
+  color: boolean,
+): string {
+  const safe = (text: string): string => escapeText(redact(text));
+  const passing = paint(safe(`${passed} passed`), 'green', color);
+  const failing = paint(safe(`${failed} failed`), failed === 0 ? 'dim' : 'red', color);
+  return `${passing}, ${failing}${safe(`  Time: ${formatDuration(durationMs)}`)}\n`;
 }
 
 export function createRedactor(values: readonly (string | undefined)[]): TextRedactor {

@@ -4,6 +4,7 @@ import { escapeDiagnostic, runProgram, type CliServices } from '../adapter/cli/p
 import { terminalCapabilities } from '../adapter/cli/progress.js';
 import { createRedactor } from '../adapter/cli/reports.js';
 import { createProject, resolveTarget } from '../adapter/filesystem/project.js';
+import { runRuleTests } from '../adapter/filesystem/rule-tests.js';
 import { createRuleLoader, resolveRuleSelector } from '../adapter/filesystem/rules.js';
 import { executeRules, validateRules } from '../app/execute.js';
 import { createDecisionResolver } from './settings.js';
@@ -40,6 +41,8 @@ export function createServices(
     },
 
     runRules: executeRules,
+
+    testRules: (rules, onResult, timeoutMs) => runRuleTests(rules, onResult, timeoutMs),
 
     createProject,
 

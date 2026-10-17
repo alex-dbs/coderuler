@@ -1,4 +1,6 @@
 export { Rule } from './app/rule.js';
+export { test } from './app/rule-tests.js';
+export type { RuleTestCase } from './app/rule-tests.js';
 export type {
   AiExamples,
   AiOptions,

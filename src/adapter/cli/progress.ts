@@ -40,17 +40,22 @@ export function createProgress(write: TextWriter, columns: () => number = () => 
   let active = true;
   let drawn = false;
   let progress: Extract<RunEvent, { type: 'progress' }> | undefined;
+  let message = 'Loading rules';
+
+  const clear = () => {
+    if (drawn) write(CLEAR_LINE);
+    drawn = false;
+  };
 
   const draw = () => {
     const width = Math.max(0, Math.floor(columns()) - 1);
     if (width === 0) {
-      if (drawn) write(CLEAR_LINE);
-      drawn = false;
+      clear();
       return;
     }
     const spinner = FRAMES[frame % FRAMES.length]!;
     frame += 1;
-    let text = `${spinner} Loading rules`;
+    let text = `${spinner} ${message}`;
     if (progress !== undefined) {
       const label = progress.phase === 'selection' ? 'Scanning' : 'Evaluating';
       const units = progress.phase === 'selection' ? 'rules' : 'subjects';
@@ -72,6 +77,13 @@ export function createProgress(write: TextWriter, columns: () => number = () => 
   draw();
   const timer = setInterval(draw, FRAME_INTERVAL);
   return {
+    message(text: string): void {
+      if (!active) return;
+      message = text;
+      progress = undefined;
+      draw();
+    },
+    clear,
     emit(event: RunEvent): void {
       if (!active || event.type !== 'progress') return;
       progress = event;
@@ -81,7 +93,7 @@ export function createProgress(write: TextWriter, columns: () => number = () => 
       if (!active) return;
       active = false;
       clearInterval(timer);
-      if (drawn) write(CLEAR_LINE);
+      clear();
     },
   };
 }

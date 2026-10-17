@@ -13,6 +13,7 @@ Node access — this is an authoring framework, not a sandbox.
 | Command | Purpose |
 |---|---|
 | `rulekeeper validate [rule-path]` | Load and structurally validate rules offline. |
+| `rulekeeper test [rule-path]` | Run inline rule datasets and check their declared outcomes. |
 | `rulekeeper check [path]` | Run every selected rule and report violations (exit 1 when any). |
 | `rulekeeper inspect <rule> [folder]` | Walk one rule through selection/filter/group/evaluate, printing each step and the exact request/result. |
 
@@ -134,6 +135,47 @@ invalid, including on disabled rules. Structural validation runs before any hook
 
 Each load constructs a **fresh** rule instance. Modules are imported once per process (the CLI is
 one-shot); there is no cache-busting or hot reload.
+
+### Inline rule tests
+
+Export named `tests` alongside the default rule class. Import `test` from the SDK, supply editable
+file data, and finish each case with `.passes()`, `.violates()`, or `.skips()`:
+
+```ts
+import { test } from 'rulekeeper';
+
+export const tests = [
+  test('repeating a default value')
+    .withFiles({
+      'tests/manual/default.yml': env({ LOG_LEVEL: 'info' }),
+      'tests/manual/production.yml': env({ LOG_LEVEL: 'info' }),
+    })
+    .violates(),
+
+  test('changing a default value')
+    .withFiles({
+      'tests/manual/default.yml': env({ LOG_LEVEL: 'info' }),
+      'tests/manual/production.yml': env({ LOG_LEVEL: 'debug' }),
+    })
+    .passes(),
+];
+```
+
+`env(...)` is a small helper local to `.rulekeeper/duplicated-env.rule.ts`, not an SDK function:
+each argument is an environment-variable map wrapped in the config shape the selector reads.
+Multiple arguments create multiple scopes. File values can be plain objects, arrays, numbers,
+booleans, or `null`; they are serialized as JSON, which is also valid YAML. Strings remain literal
+source text for code or hand-written fixtures.
+
+Paths are project-root-relative and must match the rule's selection. Each case runs the real
+selection, filters, grouping, and check with its own temporary project and fresh rule instance.
+Successful cases reuse one worker per rule, so module imports and top-level state are cached within
+that rule's suite; different rule suites use different workers. Await all asynchronous work before
+returning from a check. The working tree is not modified. Tests run offline; AI calls fail rather
+than contact a provider.
+
+These chains only declare cases. Ordinary `check` and `validate` do not execute them. Use the
+[`test` command](#test-rule-path) to run them; the repository's `npm test` also runs its inline cases.
 
 ### Execution order and concurrency
 
@@ -360,6 +402,45 @@ relative to the invocation cwd). Prints `Valid rule: <name>` per rule. It does *
 target sources, contact Jev, or act as a type checker — use `tsc` for semantic checking. Exit `0`, or `2`
 on error.
 
+### `test [rule-path]`
+
+Run the named `tests` exports from selected rules. With no path, discovery reads the working root's
+`.rulekeeper` and home rules; an explicit file or directory replaces discovery and resolves relative
+to the invocation cwd.
+
+```sh
+node dist/cli.js test
+node dist/cli.js test .rulekeeper/duplicated-env.rule.ts
+node dist/cli.js test --timeout 30s
+```
+
+Streams each completed case immediately as a tree under its rule heading, followed by passed/failed
+totals. Each row shows its elapsed time; the summary's `Time` is the sum of those case durations, not
+command wall-clock time. Timing includes fixture setup, execution, and temporary-project cleanup.
+The first case includes worker startup; the final case includes worker shutdown. Initial rule
+discovery and output rendering are excluded. Durations use the same two-decimal `ms`, `s`, `min`,
+`h`, and `d` scaling as evaluations.
+
+Passing labels are green and failing labels red; assertion mismatches show expected and actual
+statuses and do not prevent later cases from running.
+
+`--timeout <duration>` limits each case independently, defaulting to `10s`. Use a positive duration
+with an `ms`, `s`, or `m` suffix, such as `500ms`, `30s`, or `2m`; the maximum is `2147483647ms`.
+Timed-out workers are terminated, their temporary projects are removed, and later cases continue
+with a replacement worker. Both synchronous hangs and never-resolving async checks are bounded.
+
+Interactive terminals show a spinner on stderr while rules load and tests run. It clears before each
+result and stops before the summary or an error. Redirected output has no animation; colors honor
+`NO_COLOR`, `FORCE_COLOR`, and `TERM=dumb`, with the same precedence as `check`.
+
+Rules with no cases are ignored; selecting no cases is an error. A `.skips()` case passes when the
+rule is skipped, including when filtering or file selection leaves no subjects.
+
+Exit `0` when all assertions match, `1` for assertion mismatches or timeouts, or `2` for invalid
+declarations, loading/runtime errors, unsafe fixture paths, AI calls, or no test cases. Runtime errors
+identify the rule and case and abort the run; already printed results remain visible, and temporary
+projects are removed even on failure.
+
 ### `check [path]`
 
 Target defaults to `.`. Selects rules from `.rulekeeper` in the working root and home (or `--rules`), then
@@ -584,6 +665,16 @@ check and never contacts the provider.
 
 ## Release notes
 
+- Rules can declare fluent inline datasets with `test(name).withFiles(files).passes()`, `.violates()`,
+  or `.skips()`. The new `test [rule-path]` command runs them in isolated temporary projects.
+- Test output streams colored per-rule trees with an interactive spinner, preserving completed
+  results when a later case fails at runtime.
+- Test output redacts secrets before applying ANSI styling, preserving colors even for short
+  numeric credentials.
+- Test rows show elapsed time and summaries show summed case time using the evaluation duration
+  scales. `test --timeout <duration>` enforces a per-case deadline (default `10s`) in isolated workers.
+- Rule tests reuse a warm worker within each rule suite, avoiding repeated engine and module startup
+  while retaining fresh rule instances, separate temporary projects, and worker replacement on timeout.
 - Scope-selector results and rule `files`/`exclude` lists reject missing or inherited-only array
   entries; an empty scope result still skips normally, and disabled rules still validate fully.
 - Project readers, stat, literal glob prefixes, targets, and custom selection enforce reserved-directory
