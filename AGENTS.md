@@ -12,3 +12,4 @@
 - Keep checks focused on policy. Do not repeat filters or guard against impossible inputs.
 - Use domain names and direct comparisons so the policy reads naturally.
 - Add helpers and validation only when they clarify real behavior, not hypothetical edge cases.
+- No `skips` tests on the rules
