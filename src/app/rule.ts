@@ -57,6 +57,7 @@ export interface CheckResult {
   readonly status: 'pass' | 'violation';
   readonly message?: string;
   readonly probability?: number;
+  readonly threshold?: number;
   readonly model?: string;
 }
 

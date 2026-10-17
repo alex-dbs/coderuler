@@ -117,12 +117,13 @@ export async function evaluateAi<T = JsonValue>(
   const decision = await runtime.backend.decide({ state, instructions: instructionsOf(options) }, observer);
 
   if (decision.probability > runtime.threshold) {
-    return { status: 'pass', probability: decision.probability, model: decision.model };
+    return { status: 'pass', probability: decision.probability, threshold: runtime.threshold, model: decision.model };
   }
   return {
     status: 'violation',
-    message: options.violationMessage ?? `Rule "${context.ruleName}" was violated`,
+    ...(options.violationMessage === undefined ? {} : { message: options.violationMessage }),
     probability: decision.probability,
+    threshold: runtime.threshold,
     model: decision.model,
   };
 }
@@ -172,8 +173,7 @@ export function regex<T = JsonValue>(options: RegexOptions<T>): Evaluator<T> {
 
     context.trace('regex', { pattern: pattern.source, flags: pattern.flags, evaluations });
 
-    return evaluations.every(evaluation => evaluation.matched)
-      ? pass()
-      : violation(violationMessage ?? `Rule "${context.ruleName}" was violated`);
+    if (evaluations.every(evaluation => evaluation.matched)) return pass();
+    return violationMessage === undefined ? { status: 'violation' } : violation(violationMessage);
   };
 }

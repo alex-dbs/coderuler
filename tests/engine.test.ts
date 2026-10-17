@@ -209,6 +209,7 @@ async function runRule(
   const report = reports[0];
   assert.ok(report, 'expected exactly one rule report');
   assert.equal(reports.length, 1);
+  assert.ok(Number.isFinite(report.durationMs) && report.durationMs >= 0);
   return { report, harness };
 }
 
@@ -217,6 +218,30 @@ function eventsOfType<K extends RunEvent['type']>(
   type: K,
 ): Extract<RunEvent, { type: K }>[] {
   return events.filter((event): event is Extract<RunEvent, { type: K }> => event.type === type);
+}
+
+function assertEvaluationLifecycle(events: readonly RunEvent[]): void {
+  const started = new Map<number, Extract<RunEvent, { type: 'evaluation' }>>();
+  const terminal = new Set<number>();
+  for (const event of events) {
+    if (event.type === 'evaluation') {
+      assert.ok(Number.isSafeInteger(event.evaluationId) && event.evaluationId > 0);
+      assert.ok(!started.has(event.evaluationId), 'evaluation IDs must be unique within a run');
+      started.set(event.evaluationId, event);
+      continue;
+    }
+    if (event.type === 'request' || event.type === 'response' || event.type === 'result') {
+      assert.equal(typeof event.evaluationId, 'number');
+    }
+    if (!('evaluationId' in event) || event.evaluationId === undefined) continue;
+    const start = started.get(event.evaluationId);
+    assert.ok(start, `${event.type} must follow its evaluation start`);
+    assert.equal(event.name, start.name);
+    assert.ok(!terminal.has(event.evaluationId), `${event.type} must precede its evaluation terminal`);
+    if ('subject' in event) assert.deepEqual(event.subject, start.subject);
+    if (event.type === 'result' || event.type === 'error') terminal.add(event.evaluationId);
+  }
+  assert.deepEqual([...terminal].sort((a, b) => a - b), [...started.keys()].sort((a, b) => a - b));
 }
 
 function asScope(subject: Subject): ScopeSubject {
@@ -236,6 +261,13 @@ function scopeSubject(
   extra: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return { kind: 'scope', filepath, id, source, ...extra };
+}
+
+function stableReports(reports: readonly RuleReport[]) {
+  return reports.map(({ durationMs, ...report }) => {
+    assert.ok(Number.isFinite(durationMs) && durationMs >= 0);
+    return report;
+  });
 }
 
 test('validateRules validates every loaded module before any hook runs', async () => {
@@ -332,15 +364,16 @@ test('a structured gate reason is reported verbatim and applies:true proceeds', 
 });
 
 test('a throwing gate rejects the run and emits a named error event', async () => {
+  const failure = new Error('gate exploded');
   const rule = new TestRule({
     files: ['**/*.txt'],
     when: () => {
-      throw new Error('gate exploded');
+      throw failure;
     },
   });
   const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }));
 
-  await assert.rejects(() => executeRules([loaded('boom', rule)], harness.context), /gate exploded/);
+  await assert.rejects(() => executeRules([loaded('boom', rule)], harness.context), error => error === failure);
 
   const errors = eventsOfType(harness.events, 'error');
   assert.equal(errors.length, 1);
@@ -348,6 +381,9 @@ test('a throwing gate rejects the run and emits a named error event', async () =
   assert.match(errors[0]?.message ?? '', /gate exploded/);
   assert.ok((errors[0]?.stage.length ?? 0) > 0);
   assert.equal(rule.checkCalls, 0);
+  assert.deepEqual(eventsOfType(harness.events, 'progress'), [
+    { type: 'progress', phase: 'selection', completed: 0, total: 1 },
+  ]);
 });
 
 test('a malformed gate return is an error, not a skip', async () => {
@@ -484,7 +520,7 @@ export default class Scopes extends Rule {
   check = pass;
 }
 `);
-  const accepted = await runCli(['check', '--json'], target);
+  const accepted = await runCli(['check', '--json', '--output-all'], target);
   assert.equal(accepted.status, 0);
   const reports = parseCheckOutput(accepted, 'empty scope result');
   assert.equal(reports[0]?.status, 'skipped');
@@ -834,7 +870,13 @@ test('probability equal to the threshold violates; above it passes', async () =>
 
   const report = reports[0];
   assert.ok(report);
-  assert.deepEqual(report.evaluations.map(evaluation => evaluation.result.status), ['violation', 'pass']);
+  const expected: readonly CheckResult[] = [
+    { status: 'violation', probability: 0.4, threshold: 0.4, model: 'recording-model' },
+    { status: 'pass', probability: 0.4001, threshold: 0.4, model: 'recording-model' },
+  ];
+  assert.deepEqual(report.evaluations.map(evaluation => evaluation.result), expected);
+  assert.deepEqual(eventsOfType(harness.events, 'result').map(event => event.result), expected);
+  assert.equal(harness.resolveCalls, 1);
   assert.equal(report.status, 'violation');
 });
 
@@ -849,6 +891,10 @@ test('rule settings threshold overrides the harness default', async () => {
   const report = reports[0];
   assert.ok(report);
   assert.equal(report.status, 'violation');
+  assert.deepEqual(report.evaluations[0]?.result, {
+    status: 'violation', probability: 0.5, threshold: 0.9, model: 'recording-model',
+  });
+  assert.deepEqual(eventsOfType(harness.events, 'result')[0]?.result, report.evaluations[0]?.result);
   assert.equal(asScope(report.evaluations[0]?.subject ?? ({} as Subject)).filepath, 'a.txt');
   assert.equal(harness.backend.requests.length, 1);
 });
@@ -921,7 +967,9 @@ test('violationMessage is reporting only and examples are normalized', async () 
   const fallbackRun = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }));
   fallbackRun.backend.probabilities = [0.1];
   const [fell] = await executeRules([loaded('ai-fallback', fallback)], fallbackRun.context);
-  assert.equal(fell?.evaluations[0]?.result.message, 'Rule "ai-fallback" was violated');
+  assert.deepEqual(fell?.evaluations[0]?.result, {
+    status: 'violation', probability: 0.1, threshold: 0.4, model: 'recording-model',
+  });
 
   const emptyExamples = new TestRule({
     files: ['a.txt'],
@@ -955,7 +1003,7 @@ class PrototypePass {
   }
 }
 
-test('a check result keeps prototype status and optional fields when the default message is added', async () => {
+test('a check result keeps prototype status and optional fields without inventing a message', async () => {
   const offending = new TestRule({ files: ['a.txt'], check: () => new PrototypeViolation() });
   const { report, harness } = await runRule(
     offending,
@@ -967,7 +1015,7 @@ test('a check result keeps prototype status and optional fields when the default
   assert.equal(report.status, 'violation');
   const result = report.evaluations[0]?.result;
   assert.equal(result?.status, 'violation');
-  assert.equal(result?.message, 'Rule "prototype-violation" was violated');
+  assert.equal(Object.hasOwn(result!, 'message'), false);
   assert.equal(result?.model, 'class-model');
   assert.equal(result?.probability, 0.25);
 
@@ -994,6 +1042,9 @@ class MessagedViolation {
   }
   get probability(): number {
     return 0.4;
+  }
+  get threshold(): number {
+    return 0.6;
   }
   get model(): string {
     return 'getter-model';
@@ -1032,7 +1083,7 @@ class AccessorScopeSubject {
 
 test('a check result is canonicalized to declared plain fields', async () => {
   const withMessage = new TestRule({ files: ['a.txt'], check: () => new MessagedViolation() });
-  const { report: messaged } = await runRule(
+  const { report: messaged, harness: messagedRun } = await runRule(
     withMessage,
     new MemoryProject('/repo', { 'a.txt': 'A' }),
     {},
@@ -1042,8 +1093,10 @@ test('a check result is canonicalized to declared plain fields', async () => {
     status: 'violation',
     message: 'getter message',
     probability: 0.4,
+    threshold: 0.6,
     model: 'getter-model',
   });
+  assert.deepEqual(eventsOfType(messagedRun.events, 'result')[0]?.result, messaged.evaluations[0]?.result);
 
   const passing = new TestRule({ files: ['a.txt'], check: () => new SilentPass() });
   const { report: passed } = await runRule(
@@ -1056,17 +1109,18 @@ test('a check result is canonicalized to declared plain fields', async () => {
 
   const leaky = new TestRule({
     files: ['a.txt'],
-    check: () => ({ status: 'pass', leak: 'should-not-appear' }) as unknown as CheckResult,
+    check: () => ({ status: 'pass', threshold: 0.125, leak: 'should-not-appear' }) as unknown as CheckResult,
   });
-  const { report: leaked } = await runRule(
+  const { report: leaked, harness: leakyRun } = await runRule(
     leaky,
     new MemoryProject('/repo', { 'a.txt': 'A' }),
     {},
     'leaky',
   );
-  assert.deepEqual(JSON.parse(JSON.stringify(leaked.evaluations[0]?.result)), { status: 'pass' });
+  assert.deepEqual(JSON.parse(JSON.stringify(leaked.evaluations[0]?.result)), { status: 'pass', threshold: 0.125 });
+  assert.deepEqual(eventsOfType(leakyRun.events, 'result')[0]?.result, { status: 'pass', threshold: 0.125 });
 
-  const blank = new TestRule({ files: ['a.txt'], check: () => ({ status: 'violation', message: '' }) });
+  const blank = new TestRule({ files: ['a.txt'], check: () => ({ status: 'violation', message: '', threshold: 0 }) });
   const { report: blankMessage } = await runRule(
     blank,
     new MemoryProject('/repo', { 'a.txt': 'A' }),
@@ -1076,6 +1130,7 @@ test('a check result is canonicalized to declared plain fields', async () => {
   assert.deepEqual(JSON.parse(JSON.stringify(blankMessage.evaluations[0]?.result)), {
     status: 'violation',
     message: '',
+    threshold: 0,
   });
 });
 
@@ -1183,6 +1238,7 @@ test('a deterministic rule never resolves a decision runtime', async () => {
   const { report, harness } = await runRule(rule, new MemoryProject('/repo', { 'a.txt': 'abc', 'b.txt': 'def' }), {}, 'regex');
 
   assert.equal(report.status, 'pass');
+  assert.deepEqual(report.evaluations.map(evaluation => evaluation.result), [{ status: 'pass' }, { status: 'pass' }]);
   assert.equal(harness.resolveCalls, 0);
   assert.equal(harness.backend.requests.length, 0);
   assert.equal(eventsOfType(harness.events, 'request').length, 0);
@@ -1194,13 +1250,33 @@ test('context.ai inside a custom check uses the same projection and runtime', as
     files: ['a.txt'],
     check: (_subject, context) => context.ai({ rule: 'Inside policy' }),
   });
-  const { harness } = await runRule(rule, new MemoryProject('/repo', { 'a.txt': 'A' }), { threshold: 0.5 }, 'inside');
+  rule.settings = { threshold: 0.67 };
+  const { report, harness } = await runRule(
+    rule, new MemoryProject('/repo', { 'a.txt': 'A' }), { threshold: 0.5 }, 'inside',
+  );
+  const expected: CheckResult = { status: 'pass', probability: 0.9, threshold: 0.67, model: 'recording-model' };
+  assert.deepEqual(report.evaluations[0]?.result, expected);
+  assert.deepEqual(eventsOfType(harness.events, 'result')[0]?.result, expected);
   assert.equal(harness.resolveCalls, 1);
   assert.deepEqual(harness.backend.requests[0]?.state, { filepath: 'a.txt', scope: { id: '$', source: 'A' } });
   assert.deepEqual(harness.backend.requests[0]?.instructions, {
     rule: 'Inside policy',
     question: 'Is the rule respected?',
   });
+});
+
+test('a custom check replacing its AI result does not inherit threshold metadata', async () => {
+  const rule = new TestRule({
+    files: ['a.txt'],
+    check: async (_subject, context) => {
+      await context.ai({ rule: 'Advisory policy' });
+      return pass();
+    },
+  });
+  const { report, harness } = await runRule(rule, new MemoryProject('/repo', { 'a.txt': 'A' }), { threshold: 0.67 });
+  assert.equal(harness.backend.requests.length, 1);
+  assert.deepEqual(report.evaluations[0]?.result, { status: 'pass' });
+  assert.deepEqual(eventsOfType(harness.events, 'result')[0]?.result, { status: 'pass' });
 });
 
 test('a skipped rule never resolves a runtime or sends a request', async () => {
@@ -1235,6 +1311,11 @@ test('a full run emits associated rule/gate/file/scope/result events', async () 
     ['two', 'pass'],
   ]);
   assert.equal(results[0]?.name, 'events');
+  assert.deepEqual(eventsOfType(harness.events, 'evaluation').map(event =>
+    [event.evaluationId, event.name, asScope(event.subject).id],
+  ), [[1, 'events', 'one'], [2, 'events', 'two']]);
+  assert.deepEqual(results.map(event => event.evaluationId), [1, 2]);
+  assertEvaluationLifecycle(harness.events);
 });
 
 test('custom traces are surfaced as trace events tied to the rule', async () => {
@@ -1252,6 +1333,8 @@ test('custom traces are surfaced as trace events tied to the rule', async () => 
   assert.equal(traces[0]?.name, 'traced');
   assert.equal(traces[0]?.message, 'inspect-scope');
   assert.deepEqual(traces[0]?.details, { id: '$' });
+  assert.equal(traces[0]?.evaluationId, 1);
+  assertEvaluationLifecycle(harness.events);
 });
 
 test('malformed check results are errors, never coerced to passes', async () => {
@@ -1260,6 +1343,8 @@ test('malformed check results are errors, never coerced to passes', async () => 
     undefined,
     { status: 'weird' },
     { status: 'pass', probability: 2 },
+    { status: 'pass', threshold: NaN },
+    { status: 'violation', threshold: 1.1 },
     { status: 'violation', model: '' },
   ];
   for (const result of cases) {
@@ -1272,19 +1357,146 @@ test('malformed check results are errors, never coerced to passes', async () => 
       () => executeRules([loaded('bad-result', rule)], harness.context),
       `expected ${JSON.stringify(result)} to be rejected`,
     );
+    assert.deepEqual(eventsOfType(harness.events, 'error').map(event => [event.evaluationId, event.stage]), [[1, 'check']]);
+    assert.equal(eventsOfType(harness.events, 'result').length, 0);
+    assertEvaluationLifecycle(harness.events);
   }
 });
 
-test('a violation without a message falls back to the rule name in report and event', async () => {
+test('concurrent duplicate subjects retain task IDs across traces, selections, AI calls and check errors', { timeout: 5000 }, async () => {
+  const project = new MemoryProject('/repo', {
+    'a.txt': 'A',
+    'context-keep.txt': 'keep',
+    'context-skip.txt': 'skip',
+  });
+  const harness = new Harness(project, { concurrency: 2 });
+  const checks: string[] = [];
+  const makeRule = (label: string) => new TestRule({
+    files: ['a.txt'],
+    check: async (_subject, context) => {
+      checks.push(label);
+      context.trace('started', { label });
+      await context.select({ files: ['context-*.txt'], exclude: ['context-skip.txt'] });
+      context.trace('selected', { label });
+      await context.ai({ rule: label });
+      if (label === 'second') throw new Error('second check failed');
+      await new Promise<void>(resolve => { setImmediate(resolve); });
+      context.trace('resumed', { label });
+      return context.ai({ rule: `${label} again` });
+    },
+  });
+
+  await assert.rejects(() => executeRules([
+    loaded('duplicate', makeRule('first')),
+    loaded('duplicate', makeRule('second')),
+  ], harness.context), /second check failed/);
+
+  assert.deepEqual(checks, ['first', 'second']);
+  const starts = eventsOfType(harness.events, 'evaluation');
+  assert.deepEqual(starts.map(event => event.evaluationId), [1, 2]);
+  assert.deepEqual(starts[0]?.subject, starts[1]?.subject);
+  assert.equal(starts[0]?.name, starts[1]?.name);
+  assert.deepEqual(eventsOfType(harness.events, 'trace').map(event =>
+    [event.evaluationId, event.message, event.details],
+  ), [
+    [1, 'started', { label: 'first' }],
+    [2, 'started', { label: 'second' }],
+    [1, 'selected', { label: 'first' }],
+    [2, 'selected', { label: 'second' }],
+    [1, 'resumed', { label: 'first' }],
+  ]);
+  assert.deepEqual(eventsOfType(harness.events, 'file').map(event =>
+    [event.evaluationId, event.filepath, event.selected, event.reason],
+  ), [
+    [undefined, 'a.txt', true, undefined],
+    [undefined, 'a.txt', true, undefined],
+    [1, 'context-keep.txt', true, undefined],
+    [1, 'context-skip.txt', false, 'excluded'],
+    [2, 'context-keep.txt', true, undefined],
+    [2, 'context-skip.txt', false, 'excluded'],
+  ]);
+  assert.deepEqual(eventsOfType(harness.events, 'request').map(event =>
+    [event.evaluationId, (JSON.parse(event.body) as DecisionRequest).instructions.rule],
+  ), [[1, 'first'], [2, 'second'], [1, 'first again']]);
+  assert.deepEqual(eventsOfType(harness.events, 'response').map(event => event.evaluationId), [1, 2, 1]);
+  assert.deepEqual(eventsOfType(harness.events, 'error').map(event =>
+    [event.evaluationId, event.name, event.stage],
+  ), [[2, 'duplicate', 'check']]);
+  assert.deepEqual(eventsOfType(harness.events, 'result').map(event => event.evaluationId), [1]);
+  assertEvaluationLifecycle(harness.events);
+});
+
+test('stage traces and failures remain outside evaluations even after another rule was selected', async () => {
+  const project = new MemoryProject('/repo', { 'a.txt': 'A' });
+  const trace = (context: ProjectContext) => { context.trace('setup'); };
+  for (const stage of ['when', 'select', 'filter', 'group'] as const) {
+    const failure = new Error(`${stage} failed`);
+    const rule = new TestRule({
+      files: ['a.txt'],
+      when: context => {
+        trace(context);
+        if (stage === 'when') throw failure;
+        return true;
+      },
+      select: async context => {
+        trace(context);
+        if (stage === 'select') throw failure;
+        return context.select({ files: ['a.txt'] });
+      },
+      filter: (_subject, context) => {
+        trace(context);
+        if (stage === 'filter') throw failure;
+        return true;
+      },
+    });
+    if (stage === 'group') rule.group = null as unknown as Grouping;
+    const harness = new Harness(project);
+
+    await assert.rejects(() => executeRules([
+      loaded('selected-first', new TestRule({ files: ['a.txt'] })),
+      loaded('failing-stage', rule),
+    ], harness.context), stage === 'group' ? /./ : error => error === failure);
+
+    assert.equal(eventsOfType(harness.events, 'evaluation').length, 0);
+    const errors = eventsOfType(harness.events, 'error');
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0]?.name, 'failing-stage');
+    assert.equal(errors[0]?.stage, stage);
+    assert.equal(Object.hasOwn(errors[0]!, 'evaluationId'), false);
+    assert.ok(eventsOfType(harness.events, 'trace').length > 0);
+    assert.ok(eventsOfType(harness.events, 'trace').every(event => !Object.hasOwn(event, 'evaluationId')));
+    assert.ok(eventsOfType(harness.events, 'file').every(event => !Object.hasOwn(event, 'evaluationId')));
+    assertEvaluationLifecycle(harness.events);
+  }
+});
+
+test('evaluation task IDs restart at one for each run and skip unevaluated rules', async () => {
+  const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }));
+  const rules = [
+    loaded('skipped', new TestRule({ when: () => false })),
+    loaded('checked', new TestRule({ files: ['a.txt'] })),
+  ];
+  for (let run = 0; run < 2; run += 1) {
+    harness.events.length = 0;
+    const reports = await executeRules(rules, harness.context);
+    assert.deepEqual(reports.map(report => report.status), ['skipped', 'pass']);
+    assert.deepEqual(eventsOfType(harness.events, 'evaluation').map(event =>
+      [event.evaluationId, event.name],
+    ), [[1, 'checked']]);
+    assertEvaluationLifecycle(harness.events);
+  }
+});
+
+test('a violation without a message preserves its result in the report and event', async () => {
   const rule = new TestRule({ files: ['a.txt'], check: () => ({ status: 'violation' }) });
   const { report, harness } = await runRule(rule, new MemoryProject('/repo', { 'a.txt': 'A' }), {}, 'fallback');
 
   assert.equal(report.status, 'violation');
-  assert.equal(report.evaluations[0]?.result.message, 'Rule "fallback" was violated');
-  assert.equal(eventsOfType(harness.events, 'result')[0]?.result.message, 'Rule "fallback" was violated');
+  assert.deepEqual(report.evaluations[0]?.result, { status: 'violation' });
+  assert.deepEqual(eventsOfType(harness.events, 'result')[0]?.result, { status: 'violation' });
 });
 
-test('the fallback message preserves supplied probability and model metadata', async () => {
+test('message-free violations preserve supplied probability and model metadata', async () => {
   const rule = new TestRule({
     files: ['a.txt'],
     check: () => ({ status: 'violation', probability: 0.2, model: 'custom' }),
@@ -1293,7 +1505,6 @@ test('the fallback message preserves supplied probability and model metadata', a
 
   const expected: CheckResult = {
     status: 'violation',
-    message: 'Rule "preserve" was violated',
     probability: 0.2,
     model: 'custom',
   };
@@ -1302,7 +1513,7 @@ test('the fallback message preserves supplied probability and model metadata', a
   assert.deepEqual(eventsOfType(harness.events, 'result')[0]?.result, expected);
 });
 
-test('an explicit empty message stays empty rather than taking the fallback', async () => {
+test('an explicit empty message is preserved in reports and events', async () => {
   const rule = new TestRule({ files: ['a.txt'], check: () => ({ status: 'violation', message: '' }) });
   const { report, harness } = await runRule(rule, new MemoryProject('/repo', { 'a.txt': 'A' }), {}, 'empty-message');
 
@@ -1343,6 +1554,288 @@ test('rules share the run project while each check receives a bound context', as
   assert.equal(contexts[0]?.ruleName, 'A');
   assert.equal(contexts[1]?.ruleName, 'B');
   assert.ok(contexts.every(context => context.project === project));
+});
+
+test('progress covers rule selection before counting grouped evaluation subjects', async () => {
+  const project = new MemoryProject('/repo', { 'a.txt': 'A', 'b.txt': 'B' });
+  const harness = new Harness(project, { concurrency: 3 });
+  const disabled = new TestRule();
+  disabled.enabled = false;
+  const scope: ScopeSelector = file => [
+    { id: 'first', source: file.source },
+    { id: 'second', source: file.source },
+  ];
+  const check = (): CheckResult => {
+    const progress = eventsOfType(harness.events, 'progress');
+    assert.deepEqual(progress.filter(event => event.phase === 'selection').at(-1), {
+      type: 'progress', phase: 'selection', completed: 5, total: 5,
+    });
+    assert.deepEqual(progress.find(event => event.phase === 'evaluation'), {
+      type: 'progress', phase: 'evaluation', completed: 0, total: 6,
+    });
+    return pass();
+  };
+  const reports = await executeRules([
+    loaded('disabled', disabled),
+    loaded('gated', new TestRule({ when: () => false })),
+    loaded('filtered', new TestRule({ files: ['*.txt'], filter: () => false })),
+    loaded('files', new TestRule({ files: ['*.txt'], scope, group: 'file', check })),
+    loaded('scopes', new TestRule({ files: ['*.txt'], scope, check })),
+  ], harness.context);
+
+  assert.deepEqual(reports.map(report => [report.status, report.evaluations.length]), [
+    ['skipped', 0], ['skipped', 0], ['skipped', 0], ['pass', 2], ['pass', 4],
+  ]);
+  assert.deepEqual(eventsOfType(harness.events, 'progress'), [
+    ...Array.from({ length: 6 }, (_, completed) => ({
+      type: 'progress', phase: 'selection', completed, total: 5,
+    })),
+    ...Array.from({ length: 7 }, (_, completed) => ({
+      type: 'progress', phase: 'evaluation', completed, total: 6,
+    })),
+  ]);
+  const selectionEnd = harness.events.findIndex(event =>
+    event.type === 'progress' && event.phase === 'selection' && event.completed === event.total,
+  );
+  const evaluationStart = harness.events.findIndex(event =>
+    event.type === 'progress' && event.phase === 'evaluation',
+  );
+  const lastSelection = harness.events.findLastIndex(event => event.type === 'scope');
+  const lastGroup = harness.events.findLastIndex(event => event.type === 'group');
+  const firstResult = harness.events.findIndex(event => event.type === 'result');
+  assert.ok(lastSelection < selectionEnd && selectionEnd < evaluationStart);
+  assert.ok(lastGroup < evaluationStart && evaluationStart < firstResult);
+});
+
+test('empty and entirely skipped runs complete both progress phases without evaluations', async () => {
+  const disabled = new TestRule();
+  disabled.enabled = false;
+  const skipped = [
+    loaded('disabled', disabled),
+    loaded('gated', new TestRule({ when: () => false })),
+    loaded('unmatched', new TestRule({ files: ['missing.txt'] })),
+    loaded('filtered', new TestRule({ files: ['a.txt'], filter: () => false })),
+  ];
+  for (const rules of [[], skipped]) {
+    const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }));
+    const reports = await executeRules(rules, harness.context);
+    assert.ok(reports.every(report => report.status === 'skipped'));
+    assert.equal(reports.length, rules.length);
+    assert.equal(eventsOfType(harness.events, 'result').length, 0);
+    assert.equal(harness.resolveCalls, 0);
+    assert.deepEqual(eventsOfType(harness.events, 'progress'), [
+      ...Array.from({ length: rules.length + 1 }, (_, completed) => ({
+        type: 'progress', phase: 'selection', completed, total: rules.length,
+      })),
+      { type: 'progress', phase: 'evaluation', completed: 0, total: 0 },
+    ]);
+  }
+});
+
+test('evaluation progress counts concurrent completions rather than scheduling order', { timeout: 5000 }, async () => {
+  let firstWaveStarted!: () => void;
+  let lastStarted!: () => void;
+  const firstWave = new Promise<void>(resolve => { firstWaveStarted = resolve; });
+  const last = new Promise<void>(resolve => { lastStarted = resolve; });
+  const releases = new Map<string, () => void>();
+  const finished: string[] = [];
+  const rule = new TestRule({
+    files: ['a.txt'],
+    scope: file => ['0', '1', '2'].map(id => ({ id, source: file.source })),
+    check: async subject => {
+      const id = asScope(subject).id;
+      await new Promise<void>(resolve => {
+        releases.set(id, resolve);
+        if (releases.size === 2) firstWaveStarted();
+        if (releases.size === 3) lastStarted();
+      });
+      finished.push(id);
+      return pass();
+    },
+  });
+  const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }), { concurrency: 2 });
+  const running = executeRules([loaded('concurrent', rule)], harness.context);
+  await firstWave;
+  assert.deepEqual(eventsOfType(harness.events, 'progress').filter(event => event.phase === 'evaluation'), [
+    { type: 'progress', phase: 'evaluation', completed: 0, total: 3 },
+  ]);
+  releases.get('1')!();
+  await last;
+  assert.deepEqual(eventsOfType(harness.events, 'progress').filter(event => event.phase === 'evaluation'), [
+    { type: 'progress', phase: 'evaluation', completed: 0, total: 3 },
+    { type: 'progress', phase: 'evaluation', completed: 1, total: 3 },
+  ]);
+  releases.get('2')!();
+  releases.get('0')!();
+  const reports = await running;
+  assert.deepEqual(finished, ['1', '2', '0']);
+  assert.deepEqual(eventsOfType(harness.events, 'progress').filter(event => event.phase === 'evaluation'), [
+    { type: 'progress', phase: 'evaluation', completed: 0, total: 3 },
+    { type: 'progress', phase: 'evaluation', completed: 1, total: 3 },
+    { type: 'progress', phase: 'evaluation', completed: 2, total: 3 },
+    { type: 'progress', phase: 'evaluation', completed: 3, total: 3 },
+  ]);
+  assert.deepEqual(reports[0]?.evaluations.map(evaluation => asScope(evaluation.subject).id), ['0', '1', '2']);
+});
+
+test('rule timing excludes unrelated selection and initial queue waiting while overlapping checks use wall time', { timeout: 5000 }, async t => {
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  const waits = new Map<string, {
+    started: Promise<void>;
+    start: () => void;
+    completed: Promise<void>;
+    complete: () => void;
+    observed: Promise<void>;
+    observe: () => void;
+  }>();
+  for (const id of ['early-0', 'early-1', 'early-2', 'queued-0', 'queued-1']) {
+    let start!: () => void;
+    let complete!: () => void;
+    let observe!: () => void;
+    const started = new Promise<void>(resolve => { start = resolve; });
+    const completed = new Promise<void>(resolve => { complete = resolve; });
+    const observed = new Promise<void>(resolve => { observe = resolve; });
+    waits.set(id, { started, start, completed, complete, observed, observe });
+  }
+  const starts: [string, number][] = [];
+  const makeRule = (prefix: string, count: number, selectionMs: number) => new TestRule({
+    select: () => {
+      now += selectionMs;
+      return Array.from({ length: count }, (_, index) => ({
+        kind: 'scope' as const, filepath: 'a.txt', id: `${prefix}-${index}`, source: 'A',
+      }));
+    },
+    check: async subject => {
+      const id = asScope(subject).id;
+      starts.push([id, now]);
+      const wait = waits.get(id)!;
+      wait.start();
+      await wait.completed;
+      return pass();
+    },
+  });
+  const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }), { concurrency: 2 });
+  const running = executeRules([
+    loaded('early', makeRule('early', 3, 5)),
+    loaded('slow-selection', makeRule('slow', 0, 100)),
+    loaded('queued', makeRule('queued', 2, 7)),
+  ], {
+    ...harness.context,
+    emit: event => {
+      harness.context.emit?.(event);
+      if (event.type === 'result') waits.get(asScope(event.subject).id)!.observe();
+    },
+  });
+  await waits.get('early-0')!.started;
+  await waits.get('early-1')!.started;
+  for (const [id, finishAt, next] of [
+    ['early-1', 122, 'early-2'],
+    ['early-2', 132, 'queued-0'],
+    ['queued-0', 137, 'queued-1'],
+    ['queued-1', 142, undefined],
+    ['early-0', 152, undefined],
+  ] as const) {
+    now = finishAt;
+    waits.get(id)!.complete();
+    await waits.get(id)!.observed;
+    if (next !== undefined) await waits.get(next)!.started;
+  }
+  const reports = await running;
+  assert.deepEqual(starts, [
+    ['early-0', 112], ['early-1', 112], ['early-2', 122], ['queued-0', 132], ['queued-1', 137],
+  ]);
+  assert.deepEqual(reports.map(report => [report.name, report.durationMs]), [
+    ['early', 45], ['slow-selection', 100], ['queued', 17],
+  ]);
+  assert.deepEqual(reports[0]?.evaluations.map(({ subject }) => asScope(subject).id), [
+    'early-0', 'early-1', 'early-2',
+  ]);
+  assert.deepEqual(reports.map(report => report.status), ['pass', 'skipped', 'pass']);
+});
+
+test('disabled, gated, empty and filtered rules retain their measured selection time', async t => {
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  const when = () => { now += 3; return true; };
+  const select = () => {
+    now += 5;
+    return [{ kind: 'scope' as const, filepath: 'a.txt', id: '$', source: 'A' }];
+  };
+  const disabled = new TestRule();
+  disabled.enabled = false;
+  const rules = [
+    loaded('disabled', disabled),
+    loaded('gated', new TestRule({ when: () => { now += 3; return false; } })),
+    loaded('empty', new TestRule({ when, select: () => { now += 5; return []; } })),
+    loaded('filtered', new TestRule({
+      when, select, filter: () => { now += 11; return false; },
+    })),
+  ];
+  const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }));
+  const reports = await executeRules(rules, {
+    ...harness.context,
+    emit: event => {
+      harness.context.emit?.(event);
+      if (event.type === 'gate') now += 2;
+    },
+  });
+  assert.deepEqual(reports.map(report => [report.name, report.durationMs, report.reason]), [
+    ['disabled', 2, 'disabled'],
+    ['gated', 5, 'when returned false'],
+    ['empty', 10, 'no matching subjects'],
+    ['filtered', 21, 'no matching subjects'],
+  ]);
+  assert.ok(reports.every(report => report.status === 'skipped' && report.evaluations.length === 0));
+});
+
+test('grouped rule timing includes its grouping interval without changing subject counts', async t => {
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  const rule = new TestRule({
+    group: 'file',
+    when: () => { now += 3; return true; },
+    select: () => {
+      now += 5;
+      return [
+        { kind: 'scope', filepath: 'a.txt', id: 'one', source: 'A' },
+        { kind: 'scope', filepath: 'a.txt', id: 'two', source: 'A' },
+        { kind: 'scope', filepath: 'b.txt', id: 'one', source: 'B' },
+      ];
+    },
+    filter: () => { now += 11; return true; },
+    check: () => { now += 13; return pass(); },
+  });
+  const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A', 'b.txt': 'B' }), { concurrency: 1 });
+  const [report] = await executeRules([loaded('grouped', rule)], {
+    ...harness.context,
+    emit: event => {
+      harness.context.emit?.(event);
+      if (event.type === 'gate') now += 2;
+      if (event.type === 'group') now += 7;
+    },
+  });
+  assert.ok(report);
+  assert.equal(report.durationMs, 83);
+  assert.deepEqual(report.evaluations.map(({ subject }) => asGroup(subject).members.length), [2, 1]);
+  assert.equal(rule.checkCalls, 2);
+  assert.deepEqual(eventsOfType(harness.events, 'progress').filter(event => event.phase === 'evaluation'), [
+    { type: 'progress', phase: 'evaluation', completed: 0, total: 2 },
+    { type: 'progress', phase: 'evaluation', completed: 1, total: 2 },
+    { type: 'progress', phase: 'evaluation', completed: 2, total: 2 },
+  ]);
+});
+
+test('progress observers do not change execution reports', async () => {
+  const rule = new TestRule({ files: ['a.txt'], check: () => violation('policy detail') });
+  const project = new MemoryProject('/repo', { 'a.txt': 'A' });
+  const observed = new Harness(project);
+  const unobserved = new Harness(project);
+  const { emit: _emit, ...context } = unobserved.context;
+  assert.deepEqual(
+    stableReports(await executeRules([loaded('policy', rule)], context)),
+    stableReports(await executeRules([loaded('policy', rule)], observed.context)),
+  );
 });
 
 test('evaluation concurrency is bounded, ordered, and uses the configured limit', async () => {
@@ -1429,4 +1922,9 @@ test('a failing evaluation stops scheduling and awaits in-flight work', async ()
   assert.equal(errors.length, 1);
   assert.equal(errors[0]?.name, 'stopper');
   assert.match(errors[0]?.message ?? '', /evaluation exploded/);
+  assert.equal(errors[0]?.evaluationId, 1);
+  assertEvaluationLifecycle(harness.events);
+  const progress = eventsOfType(harness.events, 'progress').filter(event => event.phase === 'evaluation');
+  assert.deepEqual(progress.map(event => event.completed), Array.from({ length: started.length }, (_, index) => index));
+  assert.ok(progress.every(event => event.total === 6 && event.completed < event.total));
 });

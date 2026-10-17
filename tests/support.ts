@@ -182,6 +182,7 @@ export interface CheckResultShape {
   readonly status: 'pass' | 'violation';
   readonly message?: string;
   readonly probability?: number;
+  readonly threshold?: number;
   readonly model?: string;
 }
 
@@ -212,6 +213,7 @@ export interface CheckReportShape {
   readonly name: string;
   readonly ruleFile: string;
   readonly status: 'pass' | 'violation' | 'skipped';
+  readonly durationMs: number;
   readonly reason?: string;
   readonly evaluations: readonly CheckEvaluationShape[];
 }
@@ -220,11 +222,18 @@ function toCheckResult(value: unknown, where: string): CheckResultShape {
   const mapping = asMapping(value, where);
   const status = mapping['status'];
   if (status !== 'pass' && status !== 'violation') throw new Error(`${where}.status must be pass or violation`);
-  const result: { status: 'pass' | 'violation'; message?: string; probability?: number; model?: string } = { status };
+  const result: { status: 'pass' | 'violation'; message?: string; probability?: number; threshold?: number; model?: string } = { status };
   const message = mapping['message'];
   if (message !== undefined) result.message = asString(message, `${where}.message`);
   const probability = mapping['probability'];
   if (probability !== undefined) result.probability = asNumber(probability, `${where}.probability`);
+  const threshold = mapping['threshold'];
+  if (threshold !== undefined) {
+    if (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+      throw new Error(`${where}.threshold must be a finite number between 0 and 1`);
+    }
+    result.threshold = threshold;
+  }
   const model = mapping['model'];
   if (model !== undefined) result.model = asString(model, `${where}.model`);
   return result;
@@ -286,15 +295,31 @@ function toEvaluation(value: unknown, where: string): CheckEvaluationShape {
   };
 }
 
-export function parseCheckOutput(result: CliResult, label: string): readonly CheckReportShape[] {
+export function parseCheckOutput(result: CliResult, label: string, mode: '--json' | '--jsonl' = '--json'): readonly CheckReportShape[] {
   assert.ok(
     result.status === 0 || result.status === 1,
     `${label}: expected a completed evaluation, got status ${String(result.status)} (stderr: ${result.stderr})`,
   );
-  const payload: unknown = JSON.parse(result.stdout);
-  assert.ok(Array.isArray(payload), `${label}: the check output must be a bare JSON array`);
-  return payload.map((entry: unknown, index: number): CheckReportShape => {
-    const where = `${label}[${index}]`;
+  let reports: unknown[];
+  if (mode === '--json') {
+    const payload = asMapping(JSON.parse(result.stdout), `${label} output`);
+    const durationMs = payload['durationMs'];
+    assert.ok(
+      typeof durationMs === 'number' && Number.isFinite(durationMs) && durationMs >= 0,
+      `${label}: durationMs must be a finite nonnegative number`,
+    );
+    assert.ok(Array.isArray(payload['reports']), `${label}: reports must be a JSON array`);
+    reports = payload['reports'];
+  } else {
+    reports = result.stdout === '' ? [] : result.stdout.trimEnd().split('\n').map((line, index) => {
+      const record = asMapping(JSON.parse(line), `${label} record ${index}`);
+      assert.equal(record['type'], 'rule', `${label}: JSONL records must be rules`);
+      const { type: _type, ...report } = record;
+      return report;
+    });
+  }
+  return reports.map((entry: unknown, index: number): CheckReportShape => {
+    const where = `${label}.reports[${index}]`;
     const mapping = asMapping(entry, where);
     const status = mapping['status'];
     if (status !== 'pass' && status !== 'violation' && status !== 'skipped') {
@@ -302,18 +327,25 @@ export function parseCheckOutput(result: CliResult, label: string): readonly Che
     }
     const ruleFile = asString(mapping['ruleFile'], `${where}.ruleFile`);
     if (!isAbsolute(ruleFile)) throw new Error(`${where}.ruleFile must be absolute`);
+    const durationMs = mapping['durationMs'];
+    assert.ok(
+      typeof durationMs === 'number' && Number.isFinite(durationMs) && durationMs >= 0,
+      `${where}.durationMs must be a finite nonnegative number`,
+    );
     const evaluations = mapping['evaluations'];
     if (!Array.isArray(evaluations)) throw new Error(`${where}.evaluations must be an array`);
     const report: {
       name: string;
       ruleFile: string;
       status: 'pass' | 'violation' | 'skipped';
+      durationMs: number;
       reason?: string;
       evaluations: readonly CheckEvaluationShape[];
     } = {
       name: asString(mapping['name'], `${where}.name`),
       ruleFile,
       status,
+      durationMs,
       evaluations: evaluations.map((evaluation: unknown, position: number) =>
         toEvaluation(evaluation, `${where}.evaluations[${position}]`),
       ),

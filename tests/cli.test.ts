@@ -54,6 +54,66 @@ function writeHomeRule(target: Sandbox, name: string, source: string): string {
   return writeFile(join(target.home, '.rulekeeper', `${name}.rule.ts`), source);
 }
 
+function walkthroughBlocks(output: string): readonly string[] {
+  return output.trim().split(/\n[ \t]*\n/);
+}
+
+function evaluationCards(output: string): readonly string[] {
+  const plain = output.replace(/\u001b\[[0-9;]*m/g, '');
+  const cards: string[] = [];
+  let lines: string[] | undefined;
+  for (const line of plain.split('\n')) {
+    if (line.startsWith('╭')) {
+      assert.equal(lines, undefined, `evaluation cards must not overlap: ${output}`);
+      lines = [];
+    } else if (line.startsWith('╰')) {
+      assert.ok(lines !== undefined, `card footer needs a header: ${output}`);
+      cards.push(lines.join('\n'));
+      lines = undefined;
+    } else if (lines !== undefined) {
+      assert.match(line, /^│.*│$/, `only card content may appear inside an evaluation: ${output}`);
+      lines.push(line.slice(2, -1).trimEnd());
+    }
+  }
+  assert.equal(lines, undefined, `every evaluation card must close: ${output}`);
+  return cards;
+}
+
+function cardSection(card: string, title: string): string {
+  const lines = card.split('\n');
+  const start = lines.findIndex(line => line === `  ${title}` || line.startsWith(`  ${title} ─`));
+  assert.ok(start >= 0, `missing ${title} section: ${card}`);
+  const next = lines.findIndex((line, index) => index > start && /^  [A-Z]/.test(line));
+  return lines.slice(start + 1, next < 0 ? undefined : next).join('\n').trimEnd();
+}
+
+function assertCardMetadata(card: string, name: string, filepath: string, scope = '$'): void {
+  assert.match(card, new RegExp(`^evaluation ${name}$`, 'm'));
+  assert.equal(card.split('\n').filter(line => line.trim() === `file: ${filepath}`).length, 1, card);
+  assert.equal(card.split('\n').filter(line => line.trim() === `scope: ${scope}`).length, 1, card);
+  const sections = card.slice(card.indexOf('\n  Source'));
+  assert.doesNotMatch(sections, /^\s*(?:file|scope|rule): /m);
+}
+
+function assertWirePayload(section: string, payload: unknown): void {
+  assert.ok(section.replace(/\s/g, '').includes(JSON.stringify(payload).replace(/\s/g, '')), section);
+}
+
+function indentedJsonPayloads(output: string): readonly unknown[] {
+  const lines = output.split('\n');
+  const payloads: unknown[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const start = /^(\s+)\{$/.exec(lines[index]!);
+    if (start === null) continue;
+    const indent = start[1]!;
+    const end = lines.findIndex((line, position) => position > index && line === `${indent}}`);
+    assert.ok(end > index, `JSON payload must have an indented closing brace: ${output}`);
+    payloads.push(JSON.parse(lines.slice(index, end + 1).map(line => line.slice(indent.length)).join('\n')));
+    index = end;
+  }
+  return payloads;
+}
+
 const PASS_RULE = `import { Rule, pass } from 'rulekeeper';
 export default class Pass extends Rule {
   files = ['src/**/*.txt'];
@@ -386,11 +446,11 @@ test('validate fails when no rules are discoverable', async () => {
   assert.match(result.stderr, /no rule files/i);
 });
 
-test('check reports a passing rule as a complete JSON array', async () => {
+test('check reports a passing rule in the complete JSON envelope with --output-all', async () => {
   const target = sandbox.isolated('check-pass');
   writeFiles(target, { 'src/a.txt': 'alpha' });
   writeRule(target, 'ok', PASS_RULE);
-  const result = await runCli(['check', '--json'], target);
+  const result = await runCli(['check', '--json', '--output-all'], target);
   assert.equal(result.status, 0, result.stderr);
   const reports = parseCheckOutput(result, 'check pass');
   assert.deepEqual(reports.map(report => report.name), ['ok']);
@@ -399,6 +459,64 @@ test('check reports a passing rule as a complete JSON array', async () => {
   assert.ok(report.ruleFile.endsWith(join('.rulekeeper', 'ok.rule.ts')), report.ruleFile);
   assert.deepEqual(scopeSubjects(report, 'check pass').map(subject => subject.filepath), ['src/a.txt']);
   assert.deepEqual(report.evaluations.map(evaluation => evaluation.result.status), ['pass']);
+});
+
+test('check JSONL preserves complete ordered reports and machine exit statuses', async () => {
+  const target = sandbox.isolated('check-jsonl');
+  writeFiles(target, { 'src/a.txt': 'alpha\ncafé 中文' });
+  writeRule(target, 'aaa-pass', PASS_RULE);
+  writeRule(target, 'zzz-marker', markerRule('Missing marker\nwith details'));
+  const json = await runCli(['check', '--json', '--output-all'], target);
+  const expected = parseCheckOutput(json, 'JSONL reference');
+  const assertJsonl = (stdout: string, reports: typeof expected): void => {
+    const lines = stdout === '' ? [] : stdout.trimEnd().split('\n');
+    parseCheckOutput({ status: reports.some(report => report.status === 'violation') ? 1 : 0, stdout, stderr: '' }, 'JSONL records', '--jsonl');
+    const records = lines.map((line, index) => asMapping(JSON.parse(line), `JSONL record ${index}`));
+    assert.deepEqual(
+      records.map(({ durationMs: _durationMs, ...report }) => report),
+      reports.map(({ durationMs: _durationMs, ...report }) => ({ type: 'rule', ...report })),
+    );
+    assert.equal(lines.length, reports.length);
+    assert.ok(lines.every(line => line === JSON.stringify(JSON.parse(line))));
+    assert.equal(stdout.includes('\u001b'), false);
+  };
+  for (const diagnostic of [[], ['--debug'], ['--verbose']]) {
+    const result = await runCli(['check', '--jsonl', '--output-all', ...diagnostic], target);
+    assert.equal(result.status, 1, result.stderr);
+    assertJsonl(result.stdout, expected);
+    if (diagnostic.length === 0) assert.equal(result.stderr, '');
+    else assert.ok(result.stderr.length > 0);
+  }
+  const passing = await runCli(['check', '--jsonl', '--output-all', '--rules', '.rulekeeper/aaa-pass.rule.ts'], target);
+  assert.equal(passing.status, 0, passing.stderr);
+  assertJsonl(passing.stdout, [expected[0]!]);
+  const filtered = await runCli(['check', '--jsonl', '--rules', '.rulekeeper/aaa-pass.rule.ts'], target);
+  assert.equal(filtered.status, 0, filtered.stderr);
+  assertJsonl(filtered.stdout, []);
+});
+
+test('check rejects conflicting machine modes before loading rules', async () => {
+  const target = sandbox.isolated('check-json-conflict');
+  for (const options of [['--json', '--jsonl'], ['--jsonl', '--json']]) {
+    const result = await runCli(['check', ...options], target);
+    assert.equal(result.status, 2);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /--json/);
+    assert.match(result.stderr, /--jsonl/);
+    assert.match(result.stderr, /cannot|conflict|exclusive/i);
+  }
+});
+
+test('check JSONL emits no partial reports on execution failure', async () => {
+  const target = sandbox.isolated('check-jsonl-failure');
+  writeFiles(target, { 'src/a.txt': 'alpha' });
+  writeRule(target, 'aaa-pass', PASS_RULE);
+  writeRule(target, 'zzz-throw', THROWING_CHECK);
+  const result = await runCli(['check', '--jsonl'], target);
+  assert.equal(result.status, 2);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /check exploded/);
+  assert.equal(result.stderr.includes('\u001b'), false);
 });
 
 test('check exits 1 with violation messages and root-relative subjects', async () => {
@@ -410,7 +528,7 @@ test('check exits 1 with violation messages and root-relative subjects', async (
   });
   writeRule(target, 'marker', markerRule('Missing marker'));
   const fixture = await decisionFixture();
-  const result = await runCli(['check', '--json'], target, fixture.env);
+  const result = await runCli(['check', '--json', '--output-all'], target, fixture.env);
   assert.equal(result.status, 1, result.stderr);
   const report = reportNamed(parseCheckOutput(result, 'check violation'), 'marker', 'check violation');
   assert.equal(report.status, 'violation');
@@ -420,6 +538,7 @@ test('check exits 1 with violation messages and root-relative subjects', async (
   assert.deepEqual(report.evaluations.map(evaluation => evaluation.result.status), ['violation', 'pass', 'pass']);
   assert.equal(report.evaluations[0]!.result.message, 'Missing marker');
   assert.equal(report.evaluations[0]!.result.probability, undefined);
+  assert.ok(report.evaluations.every(evaluation => !('threshold' in evaluation.result)));
   assert.equal(report.evaluations[0]!.result.model, undefined);
   assert.equal(fixture.requests.length, 0);
 });
@@ -438,7 +557,7 @@ test('check human output counts rules, skips, verifications and violations', asy
   }
   assert.ok(human.stdout.includes('Missing marker'), human.stdout);
   assert.ok(human.stdout.includes('src/a.txt'), human.stdout);
-  const result = await runCli(['check', '--json'], target);
+  const result = await runCli(['check', '--json', '--output-all'], target);
   const reports = parseCheckOutput(result, 'check counts');
   assert.deepEqual(
     reports.map(report => [report.name, report.status]),
@@ -469,7 +588,7 @@ test('check bounds the human violation list and points at --json', async () => {
   assert.ok(!human.stdout.includes('case-11.txt'), human.stdout);
   assert.ok(!human.stdout.includes('case-12.txt'), human.stdout);
   assert.match(human.stdout, /--json/);
-  const result = await runCli(['check', '--json'], target);
+  const result = await runCli(['check', '--json', '--output-all'], target);
   const report = reportNamed(parseCheckOutput(result, 'check bounded'), 'many', 'check bounded');
   assert.equal(report.evaluations.length, 12);
   assert.ok(result.stdout.includes('case-12.txt'), 'json keeps the complete report');
@@ -483,7 +602,7 @@ test('check bounds each human excerpt to five source lines', async () => {
   assert.equal(human.status, 1, human.stderr);
   assert.ok(human.stdout.includes('line-0001'), human.stdout);
   assert.ok(!human.stdout.includes('line-0012'), human.stdout);
-  const result = await runCli(['check', '--json'], target);
+  const result = await runCli(['check', '--json', '--output-all'], target);
   const report = reportNamed(parseCheckOutput(result, 'check lines'), 'long', 'check lines');
   const subject = scopeSubjects(report, 'check lines')[0]!;
   assert.equal(subject.source.trimEnd().split('\n').length, 20);
@@ -534,12 +653,12 @@ export default class Invalid extends Rule {
 test('check distinguishes no-match, disabled and passing rules', async () => {
   const noMatchTarget = sandbox.isolated('check-nomatch');
   writeRule(noMatchTarget, 'nomatch', NO_MATCH);
-  const noMatch = await runCli(['check'], noMatchTarget);
+  const noMatch = await runCli(['check', '--output-all'], noMatchTarget);
   assert.equal(noMatch.status, 0, noMatch.stderr);
   assert.match(noMatch.stdout, /no (?:matching )?(?:subjects?|verifications?|checks?|evaluations?)/i);
   assert.equal(noMatch.stdout.includes('src/'), false, noMatch.stdout);
   const noMatchReport = reportNamed(
-    parseCheckOutput(await runCli(['check', '--json'], noMatchTarget), 'no match'),
+    parseCheckOutput(await runCli(['check', '--json', '--output-all'], noMatchTarget), 'no match'),
     'nomatch',
     'no match',
   );
@@ -548,7 +667,7 @@ test('check distinguishes no-match, disabled and passing rules', async () => {
 
   const disabledTarget = sandbox.isolated('check-disabled');
   writeRule(disabledTarget, 'off', DISABLED);
-  const disabled = await runCli(['check'], disabledTarget);
+  const disabled = await runCli(['check', '--output-all'], disabledTarget);
   assert.equal(disabled.status, 0, disabled.stderr);
   assert.match(disabled.stdout, /disabled/i);
   assert.notEqual(disabled.stdout, noMatch.stdout);
@@ -561,7 +680,7 @@ test('check distinguishes no-match, disabled and passing rules', async () => {
   assert.notEqual(passing.stdout, noMatch.stdout);
   assert.notEqual(passing.stdout, disabled.stdout);
   const passingReport = reportNamed(
-    parseCheckOutput(await runCli(['check', '--json'], passTarget), 'passing'),
+    parseCheckOutput(await runCli(['check', '--json', '--output-all'], passTarget), 'passing'),
     'ok',
     'passing',
   );
@@ -591,7 +710,7 @@ test('check narrows selection to the target while gates see the full root', asyn
   });
   writeRule(target, 'gate-dir', GATE_DIRECTORY);
   const fixture = await decisionFixture();
-  const result = await runCli(['check', 'internal/infra', '--json'], target, fixture.env);
+  const result = await runCli(['check', 'internal/infra', '--json', '--output-all'], target, fixture.env);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(fixture.requests.length, 2);
   const report = reportNamed(parseCheckOutput(result, 'target gate'), 'gate-dir', 'target gate');
@@ -627,7 +746,7 @@ test('check excludes reserved directories and loaded rule files from selection',
     'coverage/note.txt': 'coverage note',
   });
   writeRule(target, 'scan', SCAN_RULE);
-  const result = await runCli(['check', '--json'], target);
+  const result = await runCli(['check', '--json', '--output-all'], target);
   assert.equal(result.status, 0, result.stderr);
   const report = reportNamed(parseCheckOutput(result, 'check reserved'), 'scan', 'check reserved');
   const filepaths = scopeSubjects(report, 'check reserved').map(subject => subject.filepath);
@@ -650,10 +769,10 @@ test('check honors --rules with a file and a directory', async () => {
   const single = await runCli(['check', '--json', '--rules', 'rules/explicit.rule.ts'], target);
   assert.equal(single.status, 1, single.stderr);
   assert.deepEqual(parseCheckOutput(single, 'explicit file').map(report => report.name), ['explicit']);
-  const directory = await runCli(['check', '--json', '--rules', 'rules'], target);
+  const directory = await runCli(['check', '--json', '--output-all', '--rules', 'rules'], target);
   assert.equal(directory.status, 1, directory.stderr);
   assert.deepEqual(parseCheckOutput(directory, 'explicit directory').map(report => report.name), ['explicit', 'scan2']);
-  const scan = await runCli(['check', '--json', '--rules', 'rules/scan2.rule.ts'], target);
+  const scan = await runCli(['check', '--json', '--output-all', '--rules', 'rules/scan2.rule.ts'], target);
   assert.equal(scan.status, 0, scan.stderr);
   const scanReport = reportNamed(parseCheckOutput(scan, 'explicit scan'), 'scan2', 'explicit scan');
   const filepaths = scopeSubjects(scanReport, 'explicit scan').map(subject => subject.filepath);
@@ -668,7 +787,7 @@ test('check skips rules whose gate is false without contacting the backend', asy
   const missingTarget = sandbox.isolated('check-gate-missing');
   writeFiles(missingTarget, { 'internal/infra/store.go': GO_SOURCE });
   writeRule(missingTarget, 'gate-dir', GATE_DIRECTORY);
-  const missing = await runCli(['check', '--json'], missingTarget, fixture.env);
+  const missing = await runCli(['check', '--json', '--output-all'], missingTarget, fixture.env);
   assert.equal(missing.status, 0, missing.stderr);
   const missingReport = reportNamed(parseCheckOutput(missing, 'gate missing'), 'gate-dir', 'gate missing');
   assert.equal(missingReport.status, 'skipped');
@@ -679,7 +798,7 @@ test('check skips rules whose gate is false without contacting the backend', asy
   const fileTarget = sandbox.isolated('check-gate-file');
   writeFiles(fileTarget, { 'internal/infra/store.go': GO_SOURCE, 'internal/adapter': 'not a directory\n' });
   writeRule(fileTarget, 'gate-dir', GATE_DIRECTORY);
-  const asFile = await runCli(['check', '--json'], fileTarget, fixture.env);
+  const asFile = await runCli(['check', '--json', '--output-all'], fileTarget, fixture.env);
   assert.equal(asFile.status, 0, asFile.stderr);
   assert.equal(reportNamed(parseCheckOutput(asFile, 'gate file'), 'gate-dir', 'gate file').status, 'skipped');
   assert.equal(fixture.requests.length, 0);
@@ -691,7 +810,7 @@ test('check evaluates once the gate directory exists and projects function sourc
   makeDirectory(join(target.cwd, 'internal', 'adapter'));
   writeRule(target, 'gate-dir', GATE_DIRECTORY);
   const fixture = await decisionFixture();
-  const result = await runCli(['check', '--json'], target, fixture.env);
+  const result = await runCli(['check', '--json', '--output-all'], target, fixture.env);
   assert.equal(result.status, 0, result.stderr);
   const report = reportNamed(parseCheckOutput(result, 'gate present'), 'gate-dir', 'gate present');
   assert.equal(report.status, 'pass');
@@ -711,7 +830,7 @@ test('check surfaces a structured gate reason', async () => {
   const target = sandbox.isolated('check-gate-reason');
   writeFiles(target, { 'src/a.txt': 'alpha' });
   writeRule(target, 'reasoned', GATE_REASON);
-  const result = await runCli(['check', '--json'], target);
+  const result = await runCli(['check', '--json', '--output-all'], target);
   assert.equal(result.status, 0, result.stderr);
   const report = reportNamed(parseCheckOutput(result, 'gate reason'), 'reasoned', 'gate reason');
   assert.equal(report.status, 'skipped');
@@ -735,7 +854,7 @@ test('check runs custom selectors, filters and checks without credentials', asyn
     'src/skip.txt': 'gamma',
   });
   writeRule(target, 'custom-select', CUSTOM_SELECT);
-  const result = await runCli(['check', '--json'], target, { RK_BACKEND: 'not-a-backend', RK_THRESHOLD: 'nonsense' });
+  const result = await runCli(['check', '--json', '--output-all'], target, { RK_BACKEND: 'not-a-backend', RK_THRESHOLD: 'nonsense' });
   assert.equal(result.status, 1, result.stderr);
   const report = reportNamed(parseCheckOutput(result, 'custom select'), 'custom-select', 'custom select');
   const subjects = scopeSubjects(report, 'custom select');
@@ -744,6 +863,7 @@ test('check runs custom selectors, filters and checks without credentials', asyn
   assert.deepEqual(report.evaluations.map(evaluation => evaluation.result.status), ['violation', 'pass']);
   assert.equal(report.evaluations[0]!.result.message, 'rejected src/drop-b.txt');
   assert.ok(report.evaluations.every(evaluation => evaluation.result.probability === undefined));
+  assert.ok(report.evaluations.every(evaluation => !('threshold' in evaluation.result)));
 });
 
 test('check reads neighbour JSON, YAML and CSV through the project', async () => {
@@ -760,7 +880,7 @@ test('check reads neighbour JSON, YAML and CSV through the project', async () =>
   const strictReport = reportNamed(parseCheckOutput(strict, 'reads strict'), 'custom-reads', 'reads strict');
   assert.equal(strictReport.evaluations[0]!.result.message, 'strict src/only.txt');
   writeFiles(target, { 'settings.json': '{"mode":"lax"}\n' });
-  const lax = await runCli(['check', '--json'], target);
+  const lax = await runCli(['check', '--json', '--output-all'], target);
   assert.equal(lax.status, 0, lax.stderr);
   const laxReport = reportNamed(parseCheckOutput(lax, 'reads lax'), 'custom-reads', 'reads lax');
   assert.deepEqual(laxReport.evaluations.map(evaluation => evaluation.result.status), ['pass']);
@@ -787,7 +907,7 @@ test('check sends the default whole-file projection automatically', async () => 
   writeFiles(target, { 'src/one.txt': 'SOURCE-TEXT-ONE' });
   writeRule(target, 'basic', AI_WHOLE_FILE);
   const fixture = await decisionFixture();
-  const result = await runCli(['check', '--json'], target, fixture.env);
+  const result = await runCli(['check', '--json', '--output-all'], target, fixture.env);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(fixture.requests.length, 1);
   const request = fixture.requests[0]!;
@@ -803,6 +923,7 @@ test('check sends the default whole-file projection automatically', async () => 
   assert.deepEqual(report.evaluations[0]!.result, {
     status: 'pass',
     probability: fixture.probability,
+    threshold: 0.4,
     model: fixture.model,
   });
 });
@@ -844,7 +965,7 @@ test('check projects grouped members per folder', async () => {
   });
   writeRule(target, 'grouped', GROUPED_FOLDERS);
   const fixture = await decisionFixture();
-  const result = await runCli(['check', '--json'], target, fixture.env);
+  const result = await runCli(['check', '--json', '--output-all'], target, fixture.env);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(fixture.requests.length, 2);
   const groups = new Map<string, readonly string[]>();
@@ -899,7 +1020,7 @@ test('check carries examples, model settings and hides the violation message', a
   writeFiles(target, { 'src/one.txt': 'SOURCE-TEXT-ONE' });
   writeRule(target, 'examples', EXAMPLES_RULE);
   const fixture = await decisionFixture({ probability: 0.95 });
-  const result = await runCli(['check', '--json'], target, fixture.env);
+  const result = await runCli(['check', '--json', '--output-all'], target, fixture.env);
   assert.equal(result.status, 0, result.stderr);
   const request = fixture.requests[0]!;
   const body = asMapping(request.body, 'request body');
@@ -914,41 +1035,69 @@ test('check carries examples, model settings and hides the violation message', a
   assert.deepEqual(report.evaluations[0]!.result, {
     status: 'pass',
     probability: 0.95,
+    threshold: 0.9,
     model: fixture.model,
   });
 });
 
-test('check resolves threshold precedence from flag, rule, env and default', async () => {
+test('check and inspect report the effective flag, rule, environment and default AI thresholds', async () => {
   const target = sandbox.isolated('check-thresholds');
   writeFiles(target, { 'src/one.txt': 'SOURCE-TEXT-ONE' });
   writeRule(target, 'examples', EXAMPLES_RULE);
   writeRule(target, 'basic', AI_WHOLE_FILE);
-  const fixture = await decisionFixture({ probability: 0.5 });
+  const fixture = await decisionFixture();
+  const cases = [
+    { label: 'rule over environment', rule: 'examples', env: '0.1', flag: undefined, probability: 0.5, threshold: 0.9, status: 'violation' },
+    { label: 'flag over rule and environment', rule: 'examples', env: '0.1', flag: '0.637', probability: 0.7, threshold: 0.637, status: 'pass' },
+    { label: 'environment', rule: 'basic', env: '0.8', flag: undefined, probability: 0.5, threshold: 0.8, status: 'violation' },
+    { label: 'flag equality', rule: 'basic', env: '0.1', flag: '0.637', probability: 0.637, threshold: 0.637, status: 'violation' },
+    { label: 'default equality', rule: 'basic', env: undefined, flag: undefined, probability: 0.4, threshold: 0.4, status: 'violation' },
+    { label: 'above default', rule: 'basic', env: undefined, flag: undefined, probability: 0.41, threshold: 0.4, status: 'pass' },
+  ] as const;
 
-  const ruleOverEnv = await runCli(['check', '--json', '--rules', '.rulekeeper/examples.rule.ts'], target, {
-    ...fixture.env,
-    RK_THRESHOLD: '0.1',
-  });
-  assert.equal(ruleOverEnv.status, 1, ruleOverEnv.stderr);
-  assert.equal(reportNamed(parseCheckOutput(ruleOverEnv, 'rule threshold'), 'examples', 'rule threshold').status, 'violation');
-
-  const flagOverRule = await runCli(
-    ['check', '--json', '--rules', '.rulekeeper/examples.rule.ts', '--threshold', '0.3'],
-    target,
-    { ...fixture.env, RK_THRESHOLD: '0.1' },
-  );
-  assert.equal(flagOverRule.status, 0, flagOverRule.stderr);
-  assert.equal(reportNamed(parseCheckOutput(flagOverRule, 'flag threshold'), 'examples', 'flag threshold').status, 'pass');
-
-  fixture.probability = 0.4;
-  const equal = await runCli(['check', '--json', '--rules', '.rulekeeper/basic.rule.ts'], target, fixture.env);
-  assert.equal(equal.status, 1, equal.stderr);
-  assert.equal(reportNamed(parseCheckOutput(equal, 'default threshold'), 'basic', 'default threshold').status, 'violation');
-
-  fixture.probability = 0.41;
-  const above = await runCli(['check', '--json', '--rules', '.rulekeeper/basic.rule.ts'], target, fixture.env);
-  assert.equal(above.status, 0, above.stderr);
-  assert.equal(reportNamed(parseCheckOutput(above, 'above threshold'), 'basic', 'above threshold').status, 'pass');
+  for (const entry of cases) {
+    fixture.probability = entry.probability;
+    const env = { ...fixture.env, RK_THRESHOLD: entry.env };
+    const flags = entry.flag === undefined ? [] : ['--threshold', entry.flag];
+    for (const mode of ['--json', '--jsonl'] as const) {
+      const result = await runCli(
+        ['check', mode, '--output-all', '--rules', `.rulekeeper/${entry.rule}.rule.ts`, ...flags],
+        target,
+        env,
+      );
+      assert.equal(result.status, entry.status === 'pass' ? 0 : 1, `${entry.label}: ${result.stderr}`);
+      assert.equal(result.stderr, '');
+      const report = reportNamed(parseCheckOutput(result, entry.label, mode), entry.rule, entry.label);
+      assert.equal(report.status, entry.status, entry.label);
+      assert.deepEqual(report.evaluations[0]!.result, {
+        status: entry.status,
+        ...(entry.status === 'violation' ? { message: entry.rule === 'examples' ? 'LEAK-ME-NOT' : 'Not tidy' } : {}),
+        probability: entry.probability,
+        threshold: entry.threshold,
+        model: fixture.model,
+      }, entry.label);
+    }
+    const inspected = await runCli(
+      entry.flag === undefined
+        ? ['inspect', entry.rule]
+        : ['check', '--verbose', '--output-all', '--rules', `.rulekeeper/${entry.rule}.rule.ts`, ...flags],
+      target,
+      env,
+    );
+    assert.equal(inspected.status, entry.status === 'pass' ? 0 : 1, `${entry.label}: ${inspected.stderr}`);
+    if (entry.flag === undefined) assert.equal(inspected.stderr, '');
+    const walkthrough = entry.flag === undefined ? inspected.stdout : inspected.stderr;
+    const cards = evaluationCards(walkthrough);
+    assert.equal(cards.length, 1, walkthrough);
+    const result = cardSection(cards[0]!, 'Result');
+    assert.ok(result.split('\n').some(line => line.trim() === `status: ${entry.status}`), result);
+    assert.ok(result.split('\n').some(line => line.trim() === `probability: ${entry.probability}`), result);
+    assert.ok(result.split('\n').some(line => line.trim() === `threshold: ${entry.threshold}`), result);
+    assertWirePayload(cardSection(cards[0]!, 'Request'), fixture.requests.at(-1)!.body);
+    assertWirePayload(cardSection(cards[0]!, 'Response'), decisionPayload(entry.probability, fixture.model));
+  }
+  assert.equal(fixture.requests.length, cases.length * 3);
+  for (const request of fixture.requests) assert.equal(request.raw.includes('"threshold"'), false, request.raw);
 });
 
 test('check loads .env without overriding exported variables', async () => {
@@ -1004,7 +1153,7 @@ test('check fails without an API key, with an unknown backend and on transport e
   assert.match(invalid.stderr, /probability/i);
 
   fixture.answer = () => ({ status: 200, body: JSON.stringify(decisionPayload(0.9, 'other-model')) });
-  const otherModel = await runCli(['check', '--json'], target, fixture.env);
+  const otherModel = await runCli(['check', '--json', '--output-all'], target, fixture.env);
   assert.equal(otherModel.status, 0, otherModel.stderr);
   assert.equal(
     reportNamed(parseCheckOutput(otherModel, 'reported model'), 'basic', 'reported model').evaluations[0]!.result.model,
@@ -1034,6 +1183,24 @@ test('check keeps stdout empty when a later rule stage fails', async () => {
   const result = await runCli(['check', '--json'], target);
   expectFailure(result, 'late error');
   assert.ok(result.stderr.includes('check exploded'), result.stderr);
+});
+
+test('check verbose preserves earlier rule blocks on stderr when a later rule fails', async () => {
+  const target = sandbox.isolated('check-verbose-late-error');
+  writeFiles(target, { 'src/a.txt': 'nothing to see' });
+  writeRule(target, 'aaa', markerRule('first violation'));
+  writeRule(target, 'zzz', THROWING_CHECK);
+  const result = await runCli(['check', '--json', '--verbose', '--concurrency', '1'], target);
+  assert.equal(result.status, 2, result.stderr);
+  assert.equal(result.stdout, '');
+  const cards = evaluationCards(result.stderr);
+  assert.equal(cards.length, 2, result.stderr);
+  assertCardMetadata(cards[0]!, 'aaa', 'src/a.txt:1-1');
+  assert.match(cardSection(cards[0]!, 'Result'), /^\s+status: violation$/m);
+  assertCardMetadata(cards[1]!, 'zzz', 'src/a.txt:1-1');
+  assert.match(cardSection(cards[1]!, 'Error'), /^\s+stage: check$/m);
+  assert.match(cards[0]!, /nothing to see/);
+  assert.match(result.stderr, /^rulekeeper: .*check exploded/m);
 });
 
 test('check debug output carries metadata without bodies or credentials', async () => {
@@ -1098,7 +1265,7 @@ test('check bounds evaluation concurrency and keeps result order', async () => {
   writeRule(target, 'basic', AI_WHOLE_FILE);
   const fixture = await decisionFixture({ hold: true });
   fixture.limit = 2;
-  const run = runCli(['check', '--json', '--verbose', '--concurrency', '2'], target, fixture.env);
+  const run = runCli(['check', '--json', '--output-all', '--verbose', '--concurrency', '2'], target, fixture.env);
   await fixture.waitForRequests(2);
   await fixture.waitForSilence();
   assert.equal(fixture.requests.length, 2);
@@ -1110,6 +1277,18 @@ test('check bounds evaluation concurrency and keeps result order', async () => {
   assert.ok(fixture.peak <= 2, String(fixture.peak));
   const report = reportNamed(parseCheckOutput(result, 'bounded concurrency'), 'basic', 'bounded concurrency');
   assert.deepEqual(scopeSubjects(report, 'bounded concurrency').map(subject => subject.filepath), filepaths);
+  const cards = evaluationCards(result.stderr);
+  assert.equal(cards.length, filepaths.length, result.stderr);
+  for (const filepath of filepaths) {
+    const card = cards.find(block => block.includes(`file: ${filepath}`));
+    assert.ok(card !== undefined, result.stderr);
+    assertCardMetadata(card, 'basic', `${filepath}:1-1`);
+    assert.match(cardSection(card, 'Source'), /\b1 \| alpha/);
+    assert.match(cardSection(card, 'Request'), /"state"/);
+    assert.match(cardSection(card, 'Response'), /status: HTTP 200/);
+    assert.match(cardSection(card, 'Result'), /status: pass/);
+    for (const other of filepaths.filter(path => path !== filepath)) assert.equal(card.includes(other), false, card);
+  }
 });
 
 test('inspect resolves explicit paths, names and home rules', async () => {
@@ -1150,6 +1329,9 @@ test('inspect explains skipped rules without contacting the backend', async () =
   const gated = await runCli(['inspect', 'gate-dir'], target, fixture.env);
   assert.equal(gated.status, 0, gated.stderr);
   assert.match(gated.stdout, /\bskip(ped)?\b/i, gated.stdout);
+  const gate = walkthroughBlocks(gated.stdout).find(block => block.startsWith('gate gate-dir\n'));
+  assert.ok(gate !== undefined, gated.stdout);
+  assert.match(gate, /^ {2}status: skipped$/m);
   const disabled = await runCli(['inspect', 'off'], target, fixture.env);
   assert.equal(disabled.status, 0, disabled.stderr);
   assert.match(disabled.stdout, /disabled/i);
@@ -1163,9 +1345,20 @@ test('inspect shows the regex pattern, inputs and results', async () => {
   const result = await runCli(['inspect', 'marker'], target);
   assert.equal(result.status, 0, result.stderr);
   assert.ok(result.stdout.includes('alpha MARKER-OK beta'), result.stdout);
-  assert.match(result.stdout, /"pattern":"MARKER-OK"/, result.stdout);
-  assert.match(result.stdout, /"input":"alpha MARKER-OK beta"/, result.stdout);
-  assert.match(result.stdout, /"matched":true/, result.stdout);
+  const cards = evaluationCards(result.stdout);
+  assert.equal(cards.length, 1, result.stdout);
+  const trace = indentedJsonPayloads(cardSection(cards[0]!, 'Trace')).find(payload =>
+    typeof payload === 'object' && payload !== null && 'pattern' in payload,
+  );
+  assert.ok(trace !== undefined, result.stdout);
+  const details = asMapping(trace, 'regex trace');
+  assert.equal(details['pattern'], 'MARKER-OK');
+  assert.deepEqual(details['evaluations'], [{
+    filepath: 'src/a.txt',
+    scopeId: '$',
+    input: 'alpha MARKER-OK beta',
+    matched: true,
+  }]);
 });
 
 test('inspect exits 1 after a completed violation', async () => {
@@ -1192,18 +1385,152 @@ test('inspect shows custom trace messages', async () => {
   assert.equal(result.status, 0, result.stderr);
   assert.ok(result.stdout.includes('custom-check'), result.stdout);
   assert.ok(result.stdout.includes('generated file'), result.stdout);
+  const cards = evaluationCards(result.stdout);
+  assert.equal(cards.length, 1, result.stdout);
+  const trace = cardSection(cards[0]!, 'Trace');
+  assert.match(trace, /custom-check/);
+  assertWirePayload(trace, { filepath: 'src/keep-a.txt', id: 'custom:$' });
+  const blocks = walkthroughBlocks(result.stdout);
+  const filtered = blocks.find(block => block.startsWith('scope custom-select\n') && block.includes('src/skip.txt'));
+  assert.ok(filtered !== undefined, result.stdout);
+  assert.match(filtered, /^ {2}status: filtered$/m);
+  assert.match(filtered, /^ {2}reason: generated file$/m);
 });
 
-test('inspect shows the AI exchange', async () => {
+test('inspect separates rule stages and nests source and complete JSON exchanges', async () => {
   const target = sandbox.isolated('inspect-ai');
-  writeFiles(target, { 'src/one.txt': 'SECRET-SOURCE-TEXT' });
+  const source = 'FIRST-LINE\n\tSECOND-LINE\nLAST-LINE';
+  writeFiles(target, { 'src/one.txt': source });
   writeRule(target, 'basic', AI_WHOLE_FILE);
   const fixture = await decisionFixture();
   const result = await runCli(['inspect', 'basic'], target, fixture.env);
   assert.equal(result.status, 0, result.stderr);
-  assert.ok(result.stdout.includes('Files must be tidy.'), result.stdout);
-  assert.ok(result.stdout.includes('SECRET-SOURCE-TEXT'), result.stdout);
-  assert.ok(result.stdout.includes('follows_instructions'), result.stdout);
+  assert.equal(result.stderr, '');
+  assert.equal(result.stdout.includes('\u001b'), false);
+  const blocks = walkthroughBlocks(result.stdout);
+  for (const kind of ['rule', 'file']) {
+    assert.ok(blocks.some(block => block.split('\n')[0] === `${kind} basic`), `missing ${kind} block: ${result.stdout}`);
+  }
+  const cards = evaluationCards(result.stdout);
+  assert.equal(cards.length, 1, result.stdout);
+  const card = cards[0]!;
+  assertCardMetadata(card, 'basic', 'src/one.txt:1-3');
+  const sourceSection = cardSection(card, 'Source');
+  assert.match(sourceSection, /^\s*1 \| FIRST-LINE$/m);
+  assert.match(sourceSection, /^\s*2 \| +SECOND-LINE$/m);
+  assert.match(sourceSection, /^\s*3 \| LAST-LINE$/m);
+  assert.equal(sourceSection.includes('\t'), false);
+  assert.ok(card.includes('Files must be tidy.'), card);
+  assert.equal(fixture.requests.length, 1);
+  const request = cardSection(card, 'Request');
+  const response = cardSection(card, 'Response');
+  assertWirePayload(request, fixture.requests[0]!.body);
+  assertWirePayload(response, decisionPayload(fixture.probability, fixture.model));
+  assert.match(response, /status: HTTP 200/);
+  assert.match(cardSection(card, 'Result'), /^\s+status: pass$/m);
+});
+
+test('inspect groups each scoped HTTP evaluation with one metadata header and faithful payloads', async () => {
+  const target = sandbox.isolated('inspect-scoped-cards');
+  writeFiles(target, { 'src/slice.go': 'package main\n\nfunc Alpha() {}\n\nfunc Beta() {}\n' });
+  writeRule(target, 'functions', `import { Rule, ai, scopes } from 'rulekeeper';
+export default class Functions extends Rule {
+  files = ['src/*.go'];
+  scope = scopes.astGrep({ language: 'go', rule: { kind: 'function_declaration' } });
+  check = ai({ rule: 'Functions must be tidy.' });
+}
+`);
+  const fixture = await decisionFixture({ hold: true });
+  fixture.limit = 1;
+  const run = runCli(['inspect', 'functions'], target, fixture.env);
+  await fixture.waitForRequests(1);
+  await fixture.waitForSilence();
+  assert.equal(fixture.active, 1);
+  assert.equal(fixture.peak, 1);
+  const result = await releaseUntilDone(fixture, run);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  const cards = evaluationCards(result.stdout);
+  assert.equal(cards.length, 2, result.stdout);
+  assert.equal(fixture.requests.length, 2);
+  assert.doesNotMatch(result.stdout, /^scope functions$/m);
+  for (const [index, name] of ['Alpha', 'Beta'].entries()) {
+    const card = cards[index]!;
+    const line = index === 0 ? 3 : 5;
+    assertCardMetadata(card, 'functions', `src/slice.go:${line}-${line}`, `function_declaration:${name}`);
+    assert.match(cardSection(card, 'Source'), new RegExp(`\\b${line} \\| func ${name}\\(\\) \\{\\}`));
+    assertWirePayload(cardSection(card, 'Request'), fixture.requests[index]!.body);
+    assertWirePayload(cardSection(card, 'Response'), decisionPayload(fixture.probability, fixture.model));
+    assert.match(cardSection(card, 'Result'), /status: pass/);
+    assert.ok(card.includes('"filepath"'), 'wire filepath must remain present inside Request');
+    const other = name === 'Alpha' ? 'Beta' : 'Alpha';
+    assert.equal(card.includes(`func ${other}`), false, card);
+  }
+});
+
+test('inspect honors terminal colors while redirected and NO_COLOR output remains readable and plain', async () => {
+  const target = sandbox.isolated('inspect-color');
+  writeFiles(target, {
+    'src/pass.txt': 'MARKER-OK',
+    'src/fail.txt': 'missing marker',
+  });
+  writeRule(target, 'marker', markerRule('Missing marker'));
+  writeRule(target, 'off', DISABLED);
+  const forced = { FORCE_COLOR: '1', NO_COLOR: undefined };
+  const colored = await runCli(['inspect', 'marker'], target, forced);
+  assert.equal(colored.status, 1, colored.stderr);
+  assert.equal(colored.stderr, '');
+  for (const code of [1, 31, 32, 36]) {
+    assert.ok(colored.stdout.includes(`\u001b[${code}m`), `missing ANSI style ${code}: ${colored.stdout}`);
+  }
+  const skipped = await runCli(['inspect', 'off'], target, forced);
+  assert.equal(skipped.status, 0, skipped.stderr);
+  assert.ok(skipped.stdout.includes('\u001b[33m'), skipped.stdout);
+  for (const env of [
+    { FORCE_COLOR: undefined, NO_COLOR: '1' },
+    { FORCE_COLOR: undefined, NO_COLOR: undefined },
+  ]) {
+    const plain = await runCli(['inspect', 'marker'], target, env);
+    assert.equal(plain.status, 1, plain.stderr);
+    assert.equal(plain.stderr, '');
+    assert.equal(plain.stdout.includes('\u001b'), false);
+    const cards = evaluationCards(plain.stdout);
+    assert.equal(cards.length, 2, plain.stdout);
+    for (const status of ['pass', 'violation']) {
+      assert.ok(cards.some(card => cardSection(card, 'Result').includes(`status: ${status}`)), plain.stdout);
+    }
+    for (const card of cards) assert.match(cardSection(card, 'Source'), /\b1 \|/);
+  }
+  for (const mode of ['--json', '--jsonl'] as const) {
+    const machine = await runCli(['check', mode, '--output-all', '--verbose'], target, forced);
+    assert.equal(machine.status, 1, machine.stderr);
+    assert.equal(machine.stdout.includes('\u001b'), false);
+    assert.equal(machine.stderr.includes('\u001b'), false, 'stdout color capability must not color verbose stderr');
+    assert.equal(parseCheckOutput(machine, 'colored machine output', mode).length, 2);
+    assert.equal(evaluationCards(machine.stderr).length, 2, machine.stderr);
+  }
+});
+
+test('inspect keeps non-JSON backend failures readable and streams the exchange before exit 2', async () => {
+  const target = sandbox.isolated('inspect-http-error');
+  writeFiles(target, { 'src/one.txt': 'SOURCE-TEXT-ONE' });
+  writeRule(target, 'basic', AI_WHOLE_FILE);
+  const fixture = await decisionFixture();
+  fixture.answer = () => ({ status: 503, body: 'upstream refused\ntry later' });
+  const result = await runCli(['inspect', 'basic'], target, fixture.env);
+  expectStreamingFailure(result, 'inspect HTTP failure');
+  const cards = evaluationCards(result.stdout);
+  assert.equal(cards.length, 1, result.stdout);
+  const card = cards[0]!;
+  assertCardMetadata(card, 'basic', 'src/one.txt:1-1');
+  const sections = card.split('\n')
+    .map(line => /^  (Request|Response|Error)(?: ─+)?$/.exec(line)?.[1])
+    .filter(title => title !== undefined);
+  assert.deepEqual(sections, ['Request', 'Response', 'Error'], card);
+  assert.match(cardSection(card, 'Response'), /^\s+status: HTTP 503$/m);
+  assertWirePayload(cardSection(card, 'Response'), 'upstream refused\ntry later');
+  assert.match(cardSection(card, 'Error'), /^\s+stage: check$/m);
+  assert.match(result.stderr, /503/);
   assert.equal(fixture.requests.length, 1);
 });
 
@@ -1218,13 +1545,10 @@ test('inspect keeps streamed output and reports the failing stage', async () => 
     result.stdout.includes('gate-throw'),
     `already-streamed rule output must survive the failure: ${result.stdout}`,
   );
-  const failureLine = result.stdout.split('\n').find(line => line.includes('gate exploded'));
-  assert.ok(failureLine !== undefined, `inspect must stream the failure itself: ${result.stdout}`);
-  assert.match(
-    failureLine.replace('gate exploded', ''),
-    /\bwhen\b/,
-    `the streamed failure must name the failing stage separately from the error message: ${failureLine}`,
-  );
+  const failure = walkthroughBlocks(result.stdout).find(block => block.includes('gate exploded'));
+  assert.ok(failure !== undefined, `inspect must stream the failure itself: ${result.stdout}`);
+  assert.match(failure, /^\s+stage:\s+when$/m);
+  assert.match(failure, /^\s+message:\s+gate exploded$/m);
 });
 
 test('usage errors exit 2 while removed commands and options stay unknown', async () => {
@@ -1295,7 +1619,7 @@ test('check accepts an absolute target whose root spelling differs only in case'
   const varied = join(dirname(target.cwd), basename(target.cwd).toUpperCase());
   for (const rootSpelling of [target.cwd, varied]) {
     const result = await runCli(
-      ['check', '--json', join(rootSpelling, 'SRC', 'A.TXT')], target);
+      ['check', '--json', '--output-all', join(rootSpelling, 'SRC', 'A.TXT')], target);
     assert.equal(result.status, 0, result.stderr);
     const report = reportNamed(parseCheckOutput(result, 'case-varied target'), 'ok', 'case-varied target');
     assert.equal(report.status, 'pass');
@@ -1324,7 +1648,7 @@ test('numeric options reject invalid values', async () => {
   ]) {
     expectFailure(await runCli(args, target), `numeric ${args.join(' ')}`);
   }
-  const accepted = await runCli(['check', '--json', '--concurrency', '1', '--threshold', '0'], target);
+  const accepted = await runCli(['check', '--json', '--output-all', '--concurrency', '1', '--threshold', '0'], target);
   assert.equal(accepted.status, 0, accepted.stderr);
   assert.equal(reportNamed(parseCheckOutput(accepted, 'numbers'), 'ok', 'numbers').status, 'pass');
 });
@@ -1355,7 +1679,7 @@ export default class Bad extends Rule {
 `,
   });
   writeRule(target, 'ok', PASS_RULE);
-  const result = await runCli(['check', '--json'], target);
+  const result = await runCli(['check', '--json', '--output-all'], target);
   assert.equal(result.status, 0, result.stderr);
   const reports = parseCheckOutput(result, 'archived');
   assert.deepEqual(reports.map(report => report.name), ['ok']);
@@ -1407,7 +1731,7 @@ test('plain helper modules are ignored while .rule.mjs modules load', async () =
     '.rulekeeper/helper.ts': "throw new Error('helper module must not be imported');\n",
     '.rulekeeper/mjs.rule.mjs': MJS_RULE,
   });
-  const result = await runCli(['check', '--json'], target);
+  const result = await runCli(['check', '--json', '--output-all'], target);
   assert.equal(result.status, 0, result.stderr);
   assert.ok(!(result.stdout + result.stderr).includes('helper module must not be imported'));
   assert.deepEqual(parseCheckOutput(result, 'helpers').map(report => report.name), ['mjs']);
@@ -1495,10 +1819,10 @@ test('inspect streams selected files before a malformed JSON parser failure', as
   assert.ok(selected !== -1, `the selected file event must be streamed: ${result.stdout}`);
   assert.ok(failure !== -1, `the parser failure must be streamed: ${result.stdout}`);
   assert.ok(selected < failure, `the file event must precede the parser failure: ${result.stdout}`);
-  const failureLine = result.stdout.split('\n').find(line => line.includes('could not be parsed'));
+  const failureBlock = walkthroughBlocks(result.stdout).find(block => block.includes('could not be parsed'));
   assert.match(
-    failureLine ?? '',
-    /\bselect\b|\bscope\b/,
+    failureBlock ?? '',
+    /^\s+stage:\s+(?:select|scope)$/m,
     `the streamed failure must name its stage: ${result.stdout}`,
   );
 });
@@ -1588,18 +1912,23 @@ test('check verbose associates each streamed event with its rule name', async ()
   writeFiles(target, { 'src/one.txt': 'SOURCE-TEXT-ONE' });
   writeRule(target, 'alpha', AI_ALPHA);
   writeRule(target, 'beta', AI_BETA);
-  const fixture = await decisionFixture();
-  const result = await runCli(['check', '--verbose'], target, fixture.env);
+  const fixture = await decisionFixture({ hold: true });
+  const run = runCli(['check', '--verbose', '--concurrency', '2'], target, fixture.env);
+  await fixture.waitForRequests(2);
+  assert.equal(fixture.active, 2, 'both rules must be in flight before responses are released');
+  const result = await releaseUntilDone(fixture, run);
   assert.equal(result.status, 0, result.stderr);
-  const diagnostics = result.stdout + result.stderr;
+  const cards = evaluationCards(result.stderr);
+  assert.equal(cards.length, 2, result.stderr);
   for (const name of ['alpha', 'beta']) {
-    for (const kind of ['request', 'response', 'result']) {
-      assert.match(
-        diagnostics,
-        new RegExp(`^${kind} ${name} `, 'm'),
-        `a ${kind} event must name its rule: ${diagnostics}`,
-      );
-    }
+    const associated = cards.filter(card => card.startsWith(`evaluation ${name}\n`));
+    assert.equal(associated.length, 1, result.stderr);
+    const card = associated[0]!;
+    assertCardMetadata(card, name, 'src/one.txt:1-1');
+    for (const title of ['Request', 'Response', 'Result']) cardSection(card, title);
+    assert.match(cardSection(card, 'Result'), /^\s+status:\s+pass$/m);
+    const other = name === 'alpha' ? 'Beta' : 'Alpha';
+    assert.equal(card.includes(`${other} must hold.`), false, card);
   }
   assert.equal(fixture.requests.length, 2);
 });
@@ -1647,7 +1976,7 @@ test('check redacts configured credentials from diagnostics but not the machine 
   assert.equal(inspected.stdout.includes(credential), false, inspected.stdout);
   assert.equal(inspected.stdout.includes(escaped), false, inspected.stdout);
 
-  const machine = await runCli(['check', '--json'], target, fixture.env);
+  const machine = await runCli(['check', '--json', '--output-all'], target, fixture.env);
   assert.equal(machine.status, 0, machine.stderr);
   assert.ok(machine.stdout.includes(escaped), 'the machine report keeps complete subject data');
 

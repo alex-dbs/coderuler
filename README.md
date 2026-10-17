@@ -267,7 +267,7 @@ import { ai, regex, pass, violation } from 'rulekeeper';
   otherwise; an `input` callback (`(subject, context) => Awaitable<string>`) replaces it per member. A
   group passes only when **all** members match. The pattern is cloned at construction and `lastIndex` is
   reset before each test, so `/g` and `/y` flags stay deterministic. The result carries no fake
-  probability/model.
+  probability/model/threshold.
 
 - **`pass()` / `violation(message)`** — helpers for custom checks.
 
@@ -275,9 +275,15 @@ A **custom check** is any `Evaluator`-shaped value (`(subject, context) => Await
 assigned to the function-valued `check` property, for example
 `check = async (subject, context) => { ... }`. `subject` is a `Subject<T>`, so `subject.kind === 'scope'`
 narrows it to `ScopeSubject<T>` (with `id`, `source`, `data`, `captures`, and `filepath`). The check
-returns `{ status: 'pass' | 'violation', message?, probability?, model? }` or throws; the result is
-validated and a violation without a message is normalized to `Rule "<name>" was violated`. A violation
-may use any external library/provider directly — there is no backend-registration framework.
+returns `{ status: 'pass' | 'violation', message?, probability?, threshold?, model? }` or throws; the result is
+validated and supplied messages are preserved. A violation without a message is reported by rule name
+and location, without generated message text. Checks may use any external library/provider directly —
+there is no backend-registration framework.
+
+AI results include the actual effective `threshold` used for the decision. Returning `context.ai(...)`
+preserves that metadata; a custom check that replaces the AI result does not inherit it automatically.
+Deterministic checks do not gain an invented threshold. When supplied, threshold metadata must be a
+finite number in `[0, 1]`.
 
 ## Settings and environment
 
@@ -316,12 +322,14 @@ AI calls `POST v1/systemone` with `Authorization: Bearer <key>` and a body of
 `{ model, state, questions: { follows_instructions: { type: 'noul', instructions: { rule, question: 'Is
 the rule respected?', examples? } } } }`. `examples` is omitted entirely when both good and bad are
 empty; `violationMessage` is reporting-only and never sent. The call passes iff the returned probability
-is **strictly greater** than the threshold (equality violates). The client uses a 30-second timeout, no
+is **strictly greater** than the threshold (equality violates). The effective threshold is reported
+with the result, not sent in the upstream instructions. The client uses a 30-second timeout, no
 redirects, no retries, and validates the model/answers/type and a finite probability in `[0, 1]`;
 timeout/network/HTTP/malformed/unsafe-URL errors are sanitized. Debug metadata never contains bodies or
 credentials, while `inspect`/`--verbose` show the actual serialized request and parsed response after
 redacting the key (including on failures); the same redaction covers the streamed source excerpts and
-`trace` details, so the key never reaches a diagnostic, while `--json` keeps complete subject data.
+`trace` details, so the key never reaches a diagnostic. Machine reports retain complete subject data for
+included verifications; use `--output-all` to include passing verifications and skipped rules too.
 Headers and `Authorization` are never logged.
 
 AI `examples.good` and `examples.bad` must be dense arrays of non-empty strings. Sparse arrays and
@@ -349,7 +357,9 @@ evaluates them.
 | Flag | Meaning |
 |---|---|
 | `--rules <path>` | Explicit rule file or recursive directory instead of discovery. |
-| `--json` | Full machine-readable report on stdout (a 2-space-indented array with complete subject data). |
+| `--json` | JSON object on stdout: `{ "durationMs": number, "reports": [...] }`; violations only by default. |
+| `--jsonl` | Compact `{ "type": "rule", ...report }` records with each rule's `durationMs`; violations only by default, with no summary record. |
+| `--output-all` | Include every verification and skipped rule in human, JSON, or JSONL output. |
 | `--debug` | Stream framework metadata (no bodies) and force concurrency 1. |
 | `--verbose` | Stream the walkthrough (request/response bodies, source excerpts) at the configured concurrency. |
 | `--concurrency <number>` | Bounded in-flight selection/evaluation tasks; default 8; must be a positive safe integer. |
@@ -357,31 +367,102 @@ evaluates them.
 
 `--debug` and `--verbose` combine: the verbose walkthrough is preserved and concurrency stays 1.
 
+`--json` and `--jsonl` are mutually exclusive. By default they omit passing/skipped rules and passing
+evaluations inside mixed-result rules. `--output-all` preserves every report and evaluation. Included
+reports retain their complete subject data; neither format adds colors or automatic progress animation.
+JSONL contains only rule records and emits nothing when no rules are included. These formats are
+emitted only after execution completes; they never contain a partial report after a runtime error.
+
+Human output shows the total elapsed rule-execution time using two decimal places and scaled units:
+`23.49ms`, `23.49s`, `1.25min`, `1.25h`, or `1.25d`. JSON retains the total as the envelope's numeric
+`durationMs`. This monotonic total includes selection, gates, filtering, and awaited checks across all
+rules, regardless of output filtering; it excludes target/rule loading and final report rendering.
+
+Every `RuleReport`, including skipped rules, also has its own numeric `durationMs` in milliseconds.
+JSON report items and JSONL rule records preserve this value. It measures that rule's active selection,
+grouping, and evaluation phases, excluding unrelated rules' selection and waiting before its first
+evaluation starts. Concurrent subjects use the interval from the first start to the last completion,
+not the sum of their individual times. Rule durations can overlap and must not be added to obtain the
+total. JSONL has no separate total-duration item.
+
 `[path]` may be relative or absolute within the working root. On a case-insensitive filesystem,
 alternate-case root and target spellings resolve to their actual filesystem names before selection
 and reserved-directory checks; reported paths remain root-relative. This does not relax symlink
 boundaries or the relative-only contract of project readers.
 
 `[path]` **narrows selection only** — gates and project readers still see the full working root. Human
-output shows counts for rules/skips/verifications/violations, file/line and message per violation, and
-an explicit "no verifications" message rather than claiming compliance. A grouped violation lists its
-members with file/line and source excerpts. It lists at most 10 violations, with at most 5 members and
-5 source lines each, followed by a truncation count and a pointer to `--json` for full data. Every
-diagnostic redacts the configured `TYPESAFE_API_KEY` in its literal, trimmed and JSON-escaped forms, so
-walkthrough source excerpts and custom `trace` details never carry it; `--json` still prints complete
-subject data. The `rulekeeper:` prefix is fixed and is never redacted, even for a very short key. Exit `0`
-(clean or skipped), `1` when evaluation completes with a violation (the full result prints first), `2` on
-usage/config/runtime error. Runtime failures write nothing to stdout; diagnostics go to stderr prefixed
+output always counts the full run's rules/skips/verifications/violations, but defaults to violation
+details only. The section title is `🚓 Violations:`; individual violations have a bold red rule name,
+file/line, and any supplied message, without a police-car prefix. `--output-all` lists every verification,
+with a green ✓ and bold green rule name for passing checks, plus skipped-rule reasons. It reports
+explicitly when no verifications ran rather than
+claiming compliance. Source excerpts preserve Unicode and expand tabs to four-column stops. Grouped
+results list their members with file/line and source excerpts.
+
+Default human output lists at most 10 violations; `--output-all` does not limit verification entries.
+Both views show at most 5 group members and 5 source lines each, with truncation notices. Use `--json`
+or `--jsonl` for complete included subject data, adding `--output-all` for all verifications.
+
+Interactive human checks show an animated progress bar on stderr: loading rules, scanning rules, then
+evaluating subjects with completed/total counts. The progress line clears on success or failure. It is
+disabled for redirected output, `--json`, `--jsonl`, `--debug`, and `--verbose`. Colors are automatic on
+capable terminals; `NO_COLOR` or `TERM=dumb` disables automatic colors. `FORCE_COLOR` overrides detection
+(`0` or `false` disables colors) but never forces animation.
+
+Every diagnostic redacts the configured `TYPESAFE_API_KEY` in its literal, trimmed and JSON-escaped
+forms, so walkthrough source excerpts and custom `trace` details never carry it; machine reports retain
+complete, unredacted subject data for included verifications. The `rulekeeper:` prefix is fixed and is
+never redacted, even for a very short key. Exit `0` (clean or skipped), `1` when evaluation completes with
+a violation (the selected result prints first), `2` on usage/config/runtime error. Output filtering never
+changes the exit code. Runtime failures write nothing to stdout; diagnostics go to stderr prefixed
 `rulekeeper:`.
 
 ### `inspect <rule> [folder]`
 
-`[folder]` defaults to `.`, and the same engine runs with concurrency 1 and an event renderer: it shows
-the rule and settings, its gate, selected/excluded files, accepted/filtered scopes and groups, then the
-exact AI request/response or the deterministic check input/result. File decisions stream as they are
-made — there is no trailing full-project inventory — and a disabled rule, a false gate, or a selection
-with no matching subjects is explained without contacting Jev. Preserves its already-streamed walkthrough
-on error (exit `2`) and returns `1` on a completed violation.
+Cards are the default. These output options are mutually exclusive:
+
+| Flag | Output |
+|---|---|
+| `--json` | One JSON document: `{ "events": [...], "reports": [...], "error"?: string }`. |
+| `--jsonl` | Streamed `{ "type": "event", "event": ... }` records, followed by `{ "type": "report", "report": ... }` records on completion. |
+| `--raw` | Plain labels, indentation, source excerpts, and serialized payload text without cards, colors, dividers, terminal wrapping, or JSON prettification. |
+
+Inspect machine output includes the complete diagnostic walk and all final evaluations, including
+passes and skipped rules. Request/response bodies remain strings; `evaluationId` correlates events.
+`--json` buffers events until completion and includes collected events, empty reports, and `error` on
+preparation/evaluation failure. `--jsonl` streams events immediately and ends failures with a
+`{ "type": "error", "message": ... }` record instead of completion reports. There is no generic summary
+record. Exit codes remain `0` for clean/skipped, `1` for completed violations, and `2` for errors;
+usage errors keep standard CLI diagnostics rather than producing a machine document.
+
+Every inspect format redacts configured credentials, including JSON event data and reports. This
+differs from `check --json`/`check --jsonl`, which retain unredacted subject data as documented above.
+`--raw` overrides forced colors but still masks credentials and escapes unsafe terminal controls;
+basic source gutters and tab expansion remain.
+
+`[folder]` defaults to `.`, and the same engine runs with concurrency 1. Rule settings, gates, candidate
+file decisions, and filtered scopes appear outside evaluation cards. Each evaluation gets one bordered
+card with its rule, file/range, and scope metadata shown once in the header. Source excerpts (or grouped
+member sources), traces, requests, responses, and the result stay together inside that card. Accepted
+scope and group details move into their evaluation card rather than being repeated during selection.
+
+Inspect streams the card as evaluation proceeds. Errors close the card and preserve its already-written
+content; unfinished evaluations are marked incomplete rather than reported as passing or violating.
+Disabled rules, false gates, and selections with no subjects are explained without contacting Jev.
+Inspect exits `1` on a completed violation and `2` on error.
+
+Cards use the available terminal width, wrapping long paths and payload lines without truncating data.
+Section titles extend into muted horizontal dividers. Request and Response body labels and payloads
+are grey; source and result styling remain unchanged. AI results show `threshold` beside `probability`.
+Bold information headings, green successful states, red violations/errors, and yellow skipped/filtered
+states follow the color settings above. Card output without colors keeps the dividers, borders, and
+layout. Source line numbers, original Unicode, and credential redaction are preserved; JSON
+formatting retains original keys and numeric literals.
+
+`check --verbose` uses the same cards without enabling colors by default and preserves its configured
+concurrency. Concurrent evaluations are buffered separately by evaluation ID, then each completed card
+is emitted together so exchanges cannot interleave. Setup/file decisions still stream immediately;
+unfinished cards are flushed on failure. `--debug` remains compact event metadata.
 
 `[folder]` may be an absolute path or a sibling directory outside the invocation cwd, in which case it
 becomes an independent project root (the rule may live beside it). A `[folder]` inside the invocation cwd
@@ -391,8 +472,8 @@ still obeys the reserved-source boundary: `old/`, `node_modules/`, `.rulekeeper/
 `help`, `help <command>`, and `--help` exit `0`; an unknown help target, unknown commands/options,
 and argument errors exit `2` (Commander `exitOverride`).
 Removed surfaces are **unknown, not ignored**: `stats`, `stats reset`, `--diff-only`, and `--base` all
-exit `2`. Color uses standard Node support only; piped output is deterministic and control characters in
-untrusted paths/source/messages are escaped.
+exit `2`. Piped output is plain unless color is explicitly forced; unsafe control characters in untrusted
+paths/source/messages are escaped.
 
 ## Boundaries and isolation
 
@@ -516,8 +597,8 @@ check and never contacts the provider.
 - Scope data arrays and capture arrays must be dense: holes are rejected instead of becoming `null`
   entries in reports, including holes nested inside scope data.
 - Every `CheckResult` is projected to its plain declared fields (`status`, `message`, `probability`,
-  `model`); accessor-backed values are materialized, and adding the fallback violation message never
-  drops `probability` or `model`.
+  `threshold`, `model`); accessor-backed values are materialized, and message-free violations retain
+  their probability, threshold, and model without adding generated message text.
 - Custom `select` subjects are projected to validated declared fields; `captures` become a plain object
   of strings or string arrays, and `lines` are materialized. Extra fields returned by a scope selector
   cannot overwrite framework-owned `kind` or `filepath`.

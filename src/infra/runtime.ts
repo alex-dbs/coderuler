@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 
 import { escapeDiagnostic, runProgram, type CliServices } from '../adapter/cli/program.js';
+import { terminalCapabilities } from '../adapter/cli/progress.js';
 import { createRedactor } from '../adapter/cli/reports.js';
 import { createProject, resolveTarget } from '../adapter/filesystem/project.js';
 import { createRuleLoader, resolveRuleSelector } from '../adapter/filesystem/rules.js';
@@ -27,6 +28,12 @@ export function createServices(
   return {
     cwd,
     redact,
+    terminal: terminalCapabilities({
+      stdoutIsTTY: process.stdout.isTTY === true,
+      stderrIsTTY: process.stderr.isTTY === true,
+      get columns() { return process.stderr.columns; },
+      get stdoutColumns() { return process.stdout.columns; },
+    }, env),
 
     async loadRules(selection) {
       return validateRules(loader, selection);

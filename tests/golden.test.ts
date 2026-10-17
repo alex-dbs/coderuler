@@ -92,6 +92,13 @@ function loaded(name: string, rule: Rule): LoadedRule {
   return { name, ruleFile: `${RULE_DIR}/${name}.rule.ts`, rule: rule as unknown as Rule<unknown> };
 }
 
+function stableReports(reports: readonly RuleReport[]) {
+  return reports.map(({ durationMs, ...report }) => {
+    assert.ok(Number.isFinite(durationMs) && durationMs >= 0);
+    return report;
+  });
+}
+
 test('golden: wholeFileScope spans across empty, LF, CRLF, and lone-CR sources', () => {
   assert.deepEqual(wholeFileScope({ filepath: 'empty.txt', source: '' }), [
     { id: '$', source: '', lines: { start: 1, end: 1 } },
@@ -128,7 +135,7 @@ test('golden: whole-file selection report for a mixed pass/violation run', async
 
   const reports = await executeRules([loaded('file-polarity', new FilePolarityRule())], goldenContext(project));
 
-  assert.deepEqual(reports, [
+  assert.deepEqual(stableReports(reports), [
     {
       name: 'file-polarity',
       ruleFile: '/repo/.rulekeeper/file-polarity.rule.ts',
@@ -164,7 +171,7 @@ test('golden: negative-level folder grouping lifts files to their ancestor folde
 
   const reports = await executeRules([loaded('negative-folder', new NegativeLevelFolderRule())], goldenContext(project));
 
-  assert.deepEqual(reports, [
+  assert.deepEqual(stableReports(reports), [
     {
       name: 'negative-folder',
       ruleFile: '/repo/.rulekeeper/negative-folder.rule.ts',
@@ -225,7 +232,7 @@ test('golden: a custom data scope preserves id, data, captures, and lines', asyn
 
   const reports = await executeRules([loaded('data-scope', new DataScopeRule())], goldenContext(project));
 
-  assert.deepEqual(reports, [
+  assert.deepEqual(stableReports(reports), [
     {
       name: 'data-scope',
       ruleFile: '/repo/.rulekeeper/data-scope.rule.ts',
@@ -354,7 +361,7 @@ for (const golden of GOLDEN_CASES) {
       golden.status === 'skipped'
         ? { status: 'skipped', reason: golden.reason, evaluations: [] }
         : { status: 'pass', evaluations: golden.evaluations };
-    assert.deepEqual(reports, [
+    assert.deepEqual(stableReports(reports), [
       { name: golden.group, ruleFile: `${RULE_DIR}/${golden.group}.rule.ts`, ...outcome },
     ]);
   });
@@ -365,7 +372,7 @@ async function loadFeatureRules(): Promise<readonly LoadedRule[]> {
 }
 
 function summarizeReports(reports: readonly RuleReport[]) {
-  return reports.map(report => ({
+  return stableReports(reports).map(report => ({
     name: report.name,
     status: report.status,
     ...(report.reason === undefined ? {} : { reason: report.reason }),
@@ -514,6 +521,43 @@ test('fixture: when, JSON, CSV, file, custom selection, and custom checks drive 
       ],
     },
   ]);
+  assert.deepEqual(
+    events.filter(event => event.type === 'progress'),
+    [
+      ...Array.from({ length: 7 }, (_, completed) => ({
+        type: 'progress', phase: 'selection', completed, total: 6,
+      })),
+      ...Array.from({ length: 12 }, (_, completed) => ({
+        type: 'progress', phase: 'evaluation', completed, total: 11,
+      })),
+    ],
+  );
+  const starts = events.filter(event => event.type === 'evaluation');
+  const expectedEvaluations = reports.flatMap(report =>
+    report.evaluations.map(evaluation => ({ name: report.name, ...evaluation })),
+  );
+  assert.deepEqual(starts.map(({ evaluationId, name, subject }) =>
+    ({ evaluationId, name, subject }),
+  ), expectedEvaluations.map(({ name, subject }, index) =>
+    ({ evaluationId: index + 1, name, subject }),
+  ));
+  const terminals = events.filter(event => event.type === 'result' || event.type === 'error');
+  assert.equal(terminals.length, expectedEvaluations.length);
+  for (const event of terminals) {
+    assert.equal(event.type, 'result');
+    if (event.type !== 'result') continue;
+    const start = starts[event.evaluationId - 1];
+    const expected = expectedEvaluations[event.evaluationId - 1];
+    assert.ok(start && expected);
+    assert.ok(events.indexOf(start) < events.indexOf(event));
+    assert.deepEqual(
+      { name: event.name, subject: event.subject, result: event.result },
+      expected,
+    );
+  }
+  assert.deepEqual(terminals.map(event => event.evaluationId).sort((a, b) => a! - b!), [
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+  ]);
 
   assert.ok(
     events.some(
@@ -573,6 +617,7 @@ test('fixture: when, JSON, CSV, file, custom selection, and custom checks drive 
       event =>
         event.type === 'trace'
         && event.name === 'custom-check'
+        && event.evaluationId === 4
         && event.message === 'cross-referenced project data',
     ),
   );
@@ -580,7 +625,7 @@ test('fixture: when, JSON, CSV, file, custom selection, and custom checks drive 
   const selectorEntry = featureRules.find(entry => entry.name === 'custom-selector');
   assert.ok(selectorEntry !== undefined);
   assert.deepEqual(
-    reports.filter(report => report.name === 'custom-selector'),
+    stableReports(reports).filter(report => report.name === 'custom-selector'),
     [
       {
         name: 'custom-selector',
@@ -644,7 +689,7 @@ test('fixture: a strict policy reaches the backend while a relaxed one never res
         {
           id: 'secrets',
           data: { id: 'secrets', strict: true },
-          result: { status: 'pass', probability: 1, model: 'fixture-stub' },
+          result: { status: 'pass', probability: 1, threshold: 0.4, model: 'fixture-stub' },
         },
       ],
     },
@@ -708,7 +753,7 @@ test('fixture: the approved ai example is skipped when its directory gate fails'
     emit: () => {},
   });
 
-  assert.deepEqual(reports, [
+  assert.deepEqual(stableReports(reports), [
     {
       name: 'infra-placement',
       ruleFile: entry.ruleFile,
@@ -824,7 +869,7 @@ test('golden: duplicated-env skips scopes whose env values are all empty', async
   );
   assert.equal(events.filter(event => event.type === 'group').length, 0);
   assert.equal(decisions, 0, 'an all-empty env mapping must never reach the decision backend');
-  assert.deepEqual(reports, [
+  assert.deepEqual(stableReports(reports), [
     {
       name: 'duplicated-env',
       ruleFile: entry.ruleFile,
@@ -885,7 +930,7 @@ test('golden: duplicated-env keeps zero, false, and nonempty env values in one f
   });
 
   assert.deepEqual(
-    reports.map(report => ({
+    stableReports(reports).map(report => ({
       name: report.name,
       status: report.status,
       evaluations: report.evaluations.map(({ subject, result }) => ({ subject: subjectShape(subject), result })),
@@ -909,7 +954,7 @@ test('golden: duplicated-env keeps zero, false, and nonempty env values in one f
                 { filepath: 'tests/manual/timeouts.yml', id: '0:/global/env/text', data: { TIMEOUT_SECONDS: 0 } },
               ],
             },
-            result: { status: 'pass', probability: 1, model: 'filter-stub' },
+            result: { status: 'pass', probability: 1, threshold: 0.4, model: 'filter-stub' },
           },
         ],
       },

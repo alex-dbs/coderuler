@@ -896,7 +896,7 @@ export default class Custom extends Rule {
   check = pass;
 }
 `);
-  const result = await runCli(['check', '--json'], target);
+  const result = await runCli(['check', '--json', '--output-all'], target);
   assert.equal(result.status, 0, result.stderr);
   const reports = parseCheckOutput(result, 'custom uppercase alias');
   assert.equal(reports[0]?.status, 'pass');

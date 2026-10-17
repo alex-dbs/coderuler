@@ -8,8 +8,9 @@ import type {
   RuleReport,
   RuleSelection,
   RunContext,
-  RunEvent,
 } from '../../app/ports.js';
+import { createInspectJsonRenderer } from './inspect-json.js';
+import { createProgress, type TerminalCapabilities } from './progress.js';
 import {
   countViolations,
   createInspectRenderer,
@@ -18,9 +19,12 @@ import {
   createWalkthroughRenderer,
   escapeText,
   renderCheckJson,
+  renderCheckJsonl,
   renderCheckSummary,
+  type InspectRenderer,
   type TextRedactor,
   type TextWriter,
+  type WalkthroughRenderer,
 } from './reports.js';
 
 const EXIT_OK = 0;
@@ -67,15 +71,24 @@ export interface CliServices {
   readonly redact: TextRedactor;
   readonly write: TextWriter;
   readonly writeError: TextWriter;
+  readonly terminal?: TerminalCapabilities;
 }
 
 interface CheckOptions {
   readonly rules?: string;
   readonly json?: boolean;
+  readonly jsonl?: boolean;
+  readonly outputAll?: boolean;
   readonly debug?: boolean;
   readonly verbose?: boolean;
   readonly concurrency: number;
   readonly threshold?: number;
+}
+
+interface InspectOptions {
+  readonly json?: boolean;
+  readonly jsonl?: boolean;
+  readonly raw?: boolean;
 }
 
 interface RuleChoice {
@@ -182,7 +195,9 @@ export function createProgram(services: CliServices): Command {
     .description('Evaluate every selected rule against the working tree')
     .argument('[path]', 'target file or folder that narrows selection', '.')
     .option('--rules <path>', 'explicit rule module or directory instead of discovery')
-    .option('--json', 'print the complete report as a JSON array on stdout')
+    .option('--json', 'print violations as {durationMs, reports} JSON on stdout')
+    .option('--jsonl', 'print violation rule records as JSON Lines')
+    .option('--output-all', 'include passing and skipped rules and every verification in the output')
     .option('--debug', 'stream framework metadata and force concurrency 1')
     .option('--verbose', 'stream the redacted walkthrough at the configured concurrency')
     .option(
@@ -193,35 +208,64 @@ export function createProgram(services: CliServices): Command {
     )
     .option('--threshold <number>', `decision threshold override (${THRESHOLD_HINT})`, parseThreshold)
     .action(async (target: string, options: CheckOptions) => {
+      if (options.json === true && options.jsonl === true) {
+        throw new Error('--json and --jsonl are mutually exclusive');
+      }
       const debug = options.debug === true;
       const verbose = options.verbose === true;
-      const area = await services.resolveTarget(services.cwd, target);
-      const prepared = await planWalk(
-        services,
-        area.root,
-        filepath => area.contains(filepath),
-        options.rules === undefined ? {} : { rulesPath: options.rules },
-      );
-      const render = (rules: readonly LoadedRule[]): ((event: RunEvent) => void) => {
-        if (!verbose) return createMetadataRenderer(services.writeError, services.redact);
-        return createWalkthroughRenderer(
-          services.writeError,
-          createRuleHeadings(rules),
-          services.redact,
+      const machine = options.json === true || options.jsonl === true;
+      const progress = services.terminal?.interactive === true && !machine && !debug && !verbose
+        ? createProgress(services.writeError, () => services.terminal?.columns ?? 80)
+        : undefined;
+      let reports: readonly RuleReport[];
+      let durationMs: number;
+      let walkthrough: WalkthroughRenderer | undefined;
+      try {
+        const area = await services.resolveTarget(services.cwd, target);
+        const prepared = await planWalk(
+          services,
+          area.root,
+          filepath => area.contains(filepath),
+          options.rules === undefined ? {} : { rulesPath: options.rules },
         );
+        const concurrency = debug ? 1 : options.concurrency;
+        walkthrough = verbose
+          ? createWalkthroughRenderer({
+            write: services.writeError,
+            headings: createRuleHeadings(prepared.rules),
+            redact: services.redact,
+            columns: () => services.terminal?.columns ?? 80,
+            concurrency,
+          })
+          : undefined;
+        const emit = walkthrough?.emit ?? (debug
+          ? createMetadataRenderer(services.writeError, services.redact)
+          : progress?.emit);
+        const context: RunContext = {
+          project: prepared.project,
+          isTarget: prepared.isTarget,
+          concurrency,
+          resolveDecision: services.decisionResolver(options.threshold),
+          ...(emit === undefined ? {} : { emit }),
+        };
+        const startedAt = performance.now();
+        reports = await services.runRules(prepared.rules, context);
+        durationMs = performance.now() - startedAt;
+      } finally {
+        walkthrough?.finish();
+        progress?.stop();
+      }
+      const reportOptions = {
+        durationMs,
+        outputAll: options.outputAll === true,
+        color: services.terminal?.color === true,
       };
-      const emit = debug || verbose ? render(prepared.rules) : undefined;
-      const reports = await services.runRules(prepared.rules, {
-        project: prepared.project,
-        isTarget: prepared.isTarget,
-        concurrency: debug ? 1 : options.concurrency,
-        resolveDecision: services.decisionResolver(options.threshold),
-        ...(emit === undefined ? {} : { emit }),
-      });
       services.write(
         options.json === true
-          ? renderCheckJson(reports)
-          : renderCheckSummary(reports, services.redact),
+          ? renderCheckJson(reports, reportOptions)
+          : options.jsonl === true
+            ? renderCheckJsonl(reports, reportOptions)
+            : renderCheckSummary(reports, services.redact, reportOptions),
       );
       if (countViolations(reports) > 0) throw new CliExit(EXIT_VIOLATION);
     });
@@ -231,43 +275,73 @@ export function createProgram(services: CliServices): Command {
     .description('Walk one rule through selection, filtering, grouping and evaluation')
     .argument('<rule>', 'rule module path or exact rule name')
     .argument('[folder]', 'folder to inspect', '.')
-    .action(async (rule: string, folder: string) => {
-      const resolved = await services.resolveRuleSelector(rule, services.cwd);
-      const folderPath = resolve(services.cwd, folder);
-      const relativeFolder = relative(services.cwd, folderPath);
-      const insideInvocationRoot =
-        relativeFolder !== '..' &&
-        !relativeFolder.startsWith(`..${sep}`) &&
-        !isAbsolute(relativeFolder);
-      const area = await services.resolveTarget(
-        insideInvocationRoot ? services.cwd : folderPath,
-        insideInvocationRoot ? (relativeFolder === '' ? '.' : relativeFolder) : '.',
-      );
-      if (area.kind !== 'directory') {
-        throw new Error(`Inspect folder ${escapeText(folder)} is not a directory`);
+    .option('--json', 'print the complete redacted inspection as one JSON document')
+    .option('--jsonl', 'stream redacted inspection events and reports as JSON Lines')
+    .option('--raw', 'print the complete redacted inspection as undecorated text')
+    .action(async (rule: string, folder: string, options: InspectOptions) => {
+      const formats = [
+        ...(options.json === true ? ['--json'] : []),
+        ...(options.jsonl === true ? ['--jsonl'] : []),
+        ...(options.raw === true ? ['--raw'] : []),
+      ];
+      if (formats.length > 1) {
+        throw new Error(`${formats.join(', ')} are mutually exclusive`);
       }
-      const prepared = await planWalk(
-        services,
-        join(area.root, area.path),
-        () => true,
-        resolved.explicit === undefined
-          ? { name: resolved.name ?? rule }
-          : { rulesPath: resolved.explicit },
-      );
-      const inspect = createInspectRenderer({
-        write: services.write,
-        headings: createRuleHeadings(prepared.rules),
-        redact: services.redact,
-      });
-      const reports = await services.runRules(prepared.rules, {
-        project: prepared.project,
-        isTarget: prepared.isTarget,
-        concurrency: 1,
-        resolveDecision: services.decisionResolver(),
-        emit: inspect.emit,
-      });
-      inspect.finish(reports);
-      if (countViolations(reports) > 0) throw new CliExit(EXIT_VIOLATION);
+      let inspect: InspectRenderer | undefined = options.json === true || options.jsonl === true
+        ? createInspectJsonRenderer({
+          write: services.write,
+          redact: services.redact,
+          format: options.json === true ? 'json' : 'jsonl',
+        })
+        : undefined;
+      try {
+        const resolved = await services.resolveRuleSelector(rule, services.cwd);
+        const folderPath = resolve(services.cwd, folder);
+        const relativeFolder = relative(services.cwd, folderPath);
+        const insideInvocationRoot =
+          relativeFolder !== '..' &&
+          !relativeFolder.startsWith(`..${sep}`) &&
+          !isAbsolute(relativeFolder);
+        const area = await services.resolveTarget(
+          insideInvocationRoot ? services.cwd : folderPath,
+          insideInvocationRoot ? (relativeFolder === '' ? '.' : relativeFolder) : '.',
+        );
+        if (area.kind !== 'directory') {
+          throw new Error(`Inspect folder ${escapeText(folder)} is not a directory`);
+        }
+        const prepared = await planWalk(
+          services,
+          join(area.root, area.path),
+          () => true,
+          resolved.explicit === undefined
+            ? { name: resolved.name ?? rule }
+            : { rulesPath: resolved.explicit },
+        );
+        inspect ??= createInspectRenderer({
+          write: services.write,
+          headings: createRuleHeadings(prepared.rules),
+          redact: services.redact,
+          color: options.raw !== true && services.terminal?.color === true,
+          columns: () => services.terminal?.stdoutColumns ?? services.terminal?.columns ?? 80,
+          raw: options.raw === true,
+        });
+        const reports = await services.runRules(prepared.rules, {
+          project: prepared.project,
+          isTarget: prepared.isTarget,
+          concurrency: 1,
+          resolveDecision: services.decisionResolver(),
+          emit: inspect.emit,
+        });
+        inspect.finish(reports);
+        if (countViolations(reports) > 0) throw new CliExit(EXIT_VIOLATION);
+      } catch (error) {
+        if (!(error instanceof CliExit)) {
+          inspect?.finish([], error instanceof Error ? error.message : String(error));
+        }
+        throw error;
+      } finally {
+        inspect?.finish([]);
+      }
     });
 
   return program;

@@ -259,5 +259,16 @@ export function validateCheckResult(value: unknown, label: string): CheckResult 
     invalid(label, 'check probability must be a finite number between 0 and 1');
   }
 
+  const threshold = value['threshold'];
+  if (
+    threshold !== undefined &&
+    (typeof threshold !== 'number' ||
+      !Number.isFinite(threshold) ||
+      threshold < 0 ||
+      threshold > 1)
+  ) {
+    invalid(label, 'check threshold must be a finite number between 0 and 1');
+  }
+
   return value as unknown as CheckResult;
 }

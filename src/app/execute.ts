@@ -65,6 +65,9 @@ interface Plan {
   evaluations: RuleEvaluation[];
   skipped: string | undefined;
   runtime: DecisionRuntime | undefined;
+  durationMs: number;
+  evaluationStartedAt: number | undefined;
+  evaluationFinishedAt: number;
 }
 
 export async function validateRules(
@@ -78,14 +81,22 @@ export async function executeRules(
   rules: readonly LoadedRule[],
   context: RunContext,
 ): Promise<readonly RuleReport[]> {
+  let completedSelections = 0;
+  let completedEvaluations = 0;
   const emit = (event: RunEvent): void => {
     context.emit?.(event);
   };
 
   const traceFor =
-    (name: string) =>
+    (name: string, evaluationId?: number) =>
     (message: string, details?: JsonValue): void => {
-      emit(details === undefined ? { type: 'trace', name, message } : { type: 'trace', name, message, details });
+      emit({
+        type: 'trace',
+        name,
+        message,
+        ...(evaluationId === undefined ? {} : { evaluationId }),
+        ...(details === undefined ? {} : { details }),
+      });
     };
 
   const projectContextFor = (name: string): ProjectContext => ({
@@ -93,9 +104,15 @@ export async function executeRules(
     trace: traceFor(name),
   });
 
-  const fail = (name: string | undefined, stage: string, error: unknown): Error => {
+  const fail = (name: string | undefined, stage: string, error: unknown, evaluationId?: number): Error => {
     const message = error instanceof Error ? error.message : String(error);
-    emit(name === undefined ? { type: 'error', stage, message } : { type: 'error', name, stage, message });
+    emit({
+      type: 'error',
+      stage,
+      message,
+      ...(name === undefined ? {} : { name }),
+      ...(evaluationId === undefined ? {} : { evaluationId }),
+    });
     return error instanceof Error ? error : new Error(message);
   };
 
@@ -128,6 +145,7 @@ export async function executeRules(
   const selectFromRule = async <T>(
     name: string,
     selection: Selection<T>,
+    evaluationId?: number,
   ): Promise<readonly ScopeSubject<T>[]> => {
     const exclude = selection.exclude ?? [];
     const candidates = await context.project.glob(selection.files);
@@ -137,11 +155,14 @@ export async function executeRules(
       const targeted = context.isTarget(filepath);
       const selected = !excluded && targeted;
       const reason = excluded ? 'excluded' : targeted ? undefined : 'outside target';
-      emit(
-        reason === undefined
-          ? { type: 'file', name, filepath, selected }
-          : { type: 'file', name, filepath, selected, reason },
-      );
+      emit({
+        type: 'file',
+        name,
+        filepath,
+        selected,
+        ...(evaluationId === undefined ? {} : { evaluationId }),
+        ...(reason === undefined ? {} : { reason }),
+      });
       if (selected) chosen.push(filepath);
     }
 
@@ -183,21 +204,27 @@ export async function executeRules(
     return runtime;
   };
 
-  const evaluateSubject = async (plan: Plan, subject: Subject<JsonValue>): Promise<CheckResult> => {
+  const evaluateSubject = async (
+    plan: Plan,
+    subject: Subject<JsonValue>,
+    evaluationId: number,
+  ): Promise<CheckResult> => {
+    plan.evaluationStartedAt ??= performance.now();
     const { name, rule } = plan;
-    const trace = traceFor(name);
+    emit({ type: 'evaluation', evaluationId, name, subject });
+    const trace = traceFor(name, evaluationId);
     const observer: DecisionObserver = exchange => {
       if (exchange.type === 'request') {
-        emit({ type: 'request', name, subject, body: exchange.body });
+        emit({ type: 'request', evaluationId, name, subject, body: exchange.body });
       } else {
-        emit({ type: 'response', name, subject, status: exchange.status, body: exchange.body });
+        emit({ type: 'response', evaluationId, name, subject, status: exchange.status, body: exchange.body });
       }
     };
     const checkContext: CheckContext<JsonValue> = {
       project: context.project,
       ruleName: name,
       trace,
-      select: selection => selectFromRule(name, selection),
+      select: selection => selectFromRule(name, selection, evaluationId),
       ai: options =>
         evaluateAi(subject, options, { project: context.project, ruleName: name, trace }, runtimeOf(plan), observer),
     };
@@ -206,31 +233,37 @@ export async function executeRules(
     try {
       raw = await rule.check.call(rule, subject, checkContext);
     } catch (error) {
-      throw fail(name, 'check', error);
+      throw fail(name, 'check', error, evaluationId);
     }
 
     let result: CheckResult;
     try {
       result = validateCheckResult(raw, `Rule "${name}" check result`);
     } catch (error) {
-      throw fail(name, 'check', error);
+      throw fail(name, 'check', error, evaluationId);
     }
 
-    const { status, model, probability } = result;
-    const message = result.message ?? (status === 'violation' ? `Rule "${name}" was violated` : undefined);
+    const { status, message, model, probability, threshold } = result;
     const normalized: CheckResult = {
       status,
       ...(message === undefined ? {} : { message }),
       ...(probability === undefined ? {} : { probability }),
+      ...(threshold === undefined ? {} : { threshold }),
       ...(model === undefined ? {} : { model }),
     };
-    emit({ type: 'result', name, subject, result: normalized });
+    emit({ type: 'result', evaluationId, name, subject, result: normalized });
+    context.emit?.({
+      type: 'progress', phase: 'evaluation', completed: ++completedEvaluations, total: tasks.length,
+    });
+    plan.evaluationFinishedAt = performance.now();
     return normalized;
   };
 
   const plans: Plan[] = [];
+  context.emit?.({ type: 'progress', phase: 'selection', completed: 0, total: rules.length });
 
   for (const entry of rules) {
+    const selectionStartedAt = performance.now();
     const rule = entry.rule as Rule<JsonValue>;
     const { name, ruleFile } = entry;
     emit({ type: 'rule', name, ruleFile });
@@ -244,12 +277,19 @@ export async function executeRules(
       evaluations: [],
       skipped: undefined,
       runtime: undefined,
+      durationMs: 0,
+      evaluationStartedAt: undefined,
+      evaluationFinishedAt: 0,
     };
     plans.push(plan);
 
     if (!rule.enabled) {
       emit({ type: 'gate', name, enabled: false, applies: false, reason: 'disabled' });
       plan.skipped = 'disabled';
+      context.emit?.({
+        type: 'progress', phase: 'selection', completed: ++completedSelections, total: rules.length,
+      });
+      plan.durationMs = performance.now() - selectionStartedAt;
       continue;
     }
 
@@ -270,6 +310,10 @@ export async function executeRules(
         ...(gateReason === undefined ? {} : { reason: gateReason }),
       });
       plan.skipped = gateReason ?? 'when returned false';
+      context.emit?.({
+        type: 'progress', phase: 'selection', completed: ++completedSelections, total: rules.length,
+      });
+      plan.durationMs = performance.now() - selectionStartedAt;
       continue;
     }
     emit({
@@ -311,10 +355,15 @@ export async function executeRules(
 
     plan.subjects = kept;
     if (kept.length === 0) plan.skipped = 'no matching subjects';
+    context.emit?.({
+      type: 'progress', phase: 'selection', completed: ++completedSelections, total: rules.length,
+    });
+    plan.durationMs = performance.now() - selectionStartedAt;
   }
 
   for (const plan of plans) {
     if (plan.skipped !== undefined) continue;
+    const groupingStartedAt = performance.now();
     const grouping: Grouping = plan.rule.group;
     try {
       plan.evaluationSubjects = groupSubjects(
@@ -325,15 +374,19 @@ export async function executeRules(
     } catch (error) {
       throw fail(plan.name, 'group', error);
     }
+    plan.durationMs += performance.now() - groupingStartedAt;
   }
 
-  const tasks: { plan: Plan; subject: Subject<JsonValue> }[] = [];
+  const tasks: { plan: Plan; subject: Subject<JsonValue>; evaluationId: number }[] = [];
   for (const plan of plans) {
-    for (const subject of plan.evaluationSubjects) tasks.push({ plan, subject });
+    for (const subject of plan.evaluationSubjects) {
+      tasks.push({ plan, subject, evaluationId: tasks.length + 1 });
+    }
   }
+  context.emit?.({ type: 'progress', phase: 'evaluation', completed: 0, total: tasks.length });
 
   const results = await mapConcurrent(tasks, context.concurrency, task =>
-    evaluateSubject(task.plan, task.subject),
+    evaluateSubject(task.plan, task.subject, task.evaluationId),
   );
   for (let index = 0; index < tasks.length; index += 1) {
     const task = tasks[index]!;
@@ -341,11 +394,15 @@ export async function executeRules(
   }
 
   return plans.map(plan => {
+    const durationMs = plan.durationMs + (plan.evaluationStartedAt === undefined
+      ? 0
+      : plan.evaluationFinishedAt - plan.evaluationStartedAt);
     if (plan.skipped !== undefined) {
       return {
         name: plan.name,
         ruleFile: plan.ruleFile,
         status: 'skipped',
+        durationMs,
         reason: plan.skipped,
         evaluations: [],
       };
@@ -353,7 +410,7 @@ export async function executeRules(
     const status = plan.evaluations.some(evaluation => evaluation.result.status === 'violation')
       ? 'violation'
       : 'pass';
-    return { name: plan.name, ruleFile: plan.ruleFile, status, evaluations: plan.evaluations };
+    return { name: plan.name, ruleFile: plan.ruleFile, status, durationMs, evaluations: plan.evaluations };
   });
 }
 

@@ -51,6 +51,7 @@ interface ReportEntry {
   readonly name: string;
   readonly ruleFile: string;
   readonly status: string;
+  readonly durationMs: number;
   readonly reason?: string;
   readonly evaluations: readonly EvaluationShape[];
 }
@@ -314,8 +315,20 @@ function firstPackEntry(stdout: string): PackedEntry {
 
 function parseReport(stdout: string): readonly ReportEntry[] {
   const parsed: unknown = JSON.parse(stdout);
-  assert.ok(Array.isArray(parsed), `check --json must print a bare array: ${stdout}`);
-  return parsed as readonly ReportEntry[];
+  assert.ok(parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed), `check --json must print an envelope: ${stdout}`);
+  const envelope = parsed as Record<string, unknown>;
+  const durationMs = envelope['durationMs'];
+  assert.ok(typeof durationMs === 'number' && Number.isFinite(durationMs) && durationMs >= 0);
+  assert.ok(Array.isArray(envelope['reports']), `check --json reports must be an array: ${stdout}`);
+  for (const [index, entry] of envelope['reports'].entries()) {
+    assert.ok(entry !== null && typeof entry === 'object' && !Array.isArray(entry), `report ${index} must be an object`);
+    const ruleDurationMs = (entry as Record<string, unknown>)['durationMs'];
+    assert.ok(
+      typeof ruleDurationMs === 'number' && Number.isFinite(ruleDurationMs) && ruleDurationMs >= 0,
+      `report ${index}.durationMs must be a finite nonnegative number`,
+    );
+  }
+  return envelope['reports'] as readonly ReportEntry[];
 }
 
 function reportFor(report: readonly ReportEntry[], name: string): ReportEntry {
@@ -504,7 +517,7 @@ test('the installed package carries only executable dist declarations and a runn
 });
 
 test('the installed CLI runs a TypeScript rule on real files and reports pass by exit 0', () => {
-  const runResult = runCli(consumer.app, ['check', 'src/clean.ts', '--rules', '.rulekeeper/license.rule.ts', '--json'], {
+  const runResult = runCli(consumer.app, ['check', 'src/clean.ts', '--rules', '.rulekeeper/license.rule.ts', '--json', '--output-all'], {
     cwd: consumer.app,
     home: consumer.cleanHome,
     extra: { RK_BACKEND: 'not-a-real-backend', TYPESAFE_DEFAULT_MODEL: '' },
@@ -556,7 +569,7 @@ test('the installed CLI loads a plain JavaScript rule through a bare package imp
   assert.equal(entry.evaluations[0]?.subject.filepath, 'src/no-export.ts');
   assert.equal(entry.evaluations[0]?.result.message, 'Source files must export a const or function');
 
-  const passing = runCli(consumer.app, ['check', 'src/clean.ts', '--rules', '.rulekeeper/contract.rule.js', '--json'], {
+  const passing = runCli(consumer.app, ['check', 'src/clean.ts', '--rules', '.rulekeeper/contract.rule.js', '--json', '--output-all'], {
     cwd: consumer.app,
     home: consumer.cleanHome,
   });
@@ -565,7 +578,7 @@ test('the installed CLI loads a plain JavaScript rule through a bare package imp
 });
 
 test('the installed CLI discovers both rules, ignores the helper module, and validates them', () => {
-  const check = runCli(consumer.app, ['check', '.', '--json'], { cwd: consumer.app, home: consumer.cleanHome });
+  const check = runCli(consumer.app, ['check', '.', '--json', '--output-all'], { cwd: consumer.app, home: consumer.cleanHome });
   assert.equal(check.status, 1, check.stderr);
   const report = parseReport(check.stdout);
   assert.deepEqual(

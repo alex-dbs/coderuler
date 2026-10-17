@@ -92,11 +92,18 @@ export interface RuleReport {
   readonly name: string;
   readonly ruleFile: string;
   readonly status: 'pass' | 'violation' | 'skipped';
+  readonly durationMs: number;
   readonly reason?: string;
   readonly evaluations: readonly RuleEvaluation[];
 }
 
 export type RunEvent =
+  | {
+      readonly type: 'progress';
+      readonly phase: 'selection' | 'evaluation';
+      readonly completed: number;
+      readonly total: number;
+    }
   | { readonly type: 'rule'; readonly name: string; readonly ruleFile: string }
   | {
       readonly type: 'gate';
@@ -107,6 +114,7 @@ export type RunEvent =
     }
   | {
       readonly type: 'file';
+      readonly evaluationId?: number;
       readonly name: string;
       readonly filepath: string;
       readonly selected: boolean;
@@ -120,14 +128,40 @@ export type RunEvent =
       readonly reason?: string;
     }
   | { readonly type: 'group'; readonly name: string; readonly subject: GroupSubject }
-  | { readonly type: 'request'; readonly name: string; readonly subject: Subject; readonly body: string }
+  | { readonly type: 'evaluation'; readonly evaluationId: number; readonly name: string; readonly subject: Subject }
+  | {
+      readonly type: 'request';
+      readonly evaluationId: number;
+      readonly name: string;
+      readonly subject: Subject;
+      readonly body: string;
+    }
   | {
       readonly type: 'response';
+      readonly evaluationId: number;
       readonly name: string;
       readonly subject: Subject;
       readonly status: number;
       readonly body: string;
     }
-  | { readonly type: 'result'; readonly name: string; readonly subject: Subject; readonly result: CheckResult }
-  | { readonly type: 'trace'; readonly name: string; readonly message: string; readonly details?: JsonValue }
-  | { readonly type: 'error'; readonly name?: string; readonly stage: string; readonly message: string };
+  | {
+      readonly type: 'result';
+      readonly evaluationId: number;
+      readonly name: string;
+      readonly subject: Subject;
+      readonly result: CheckResult;
+    }
+  | {
+      readonly type: 'trace';
+      readonly evaluationId?: number;
+      readonly name: string;
+      readonly message: string;
+      readonly details?: JsonValue;
+    }
+  | {
+      readonly type: 'error';
+      readonly evaluationId?: number;
+      readonly name?: string;
+      readonly stage: string;
+      readonly message: string;
+    };

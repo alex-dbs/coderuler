@@ -643,6 +643,23 @@ test('validateCheckResult rejects a blank model and preserves an empty message',
   expectThrows('non-object result', () => validateCheckResult('pass', 'check'));
 });
 
+test('validateCheckResult accepts only finite thresholds within the inclusive unit interval', () => {
+  for (const status of ['pass', 'violation'] as const) {
+    for (const threshold of [0, 0.37, 1]) {
+      const result = { status, threshold };
+      assert.equal(validateCheckResult(result, 'check'), result);
+    }
+    assert.doesNotThrow(() => validateCheckResult({ status, threshold: undefined }, 'check'));
+    for (const threshold of [null, '0.4', true, -0.01, 1.01, NaN, Infinity, -Infinity]) {
+      assert.throws(
+        () => validateCheckResult({ status, threshold }, 'check'),
+        /check threshold must be a finite number between 0 and 1/,
+        `${status}: ${String(threshold)}`,
+      );
+    }
+  }
+});
+
 test('ai validates its options eagerly', () => {
   assert.throws(() => ai({ rule: '' }));
   assert.throws(() => ai({ rule: 42 as unknown as string }));
@@ -899,11 +916,12 @@ test('an input callback accepts plain and null-prototype JSON records', async ()
   assert.equal(backend.requests.length, 2);
 });
 
-test('AI decisions compare the probability strictly against the threshold', async () => {
+test('AI decisions retain the exact runtime threshold and compare probability strictly against it', async () => {
+  const threshold = 0.637;
   const cases: readonly (readonly [number, 'pass' | 'violation'])[] = [
-    [0.4, 'violation'],
-    [0.41, 'pass'],
-    [0.39, 'violation'],
+    [threshold, 'violation'],
+    [0.638, 'pass'],
+    [0.636, 'violation'],
     [1, 'pass'],
     [0, 'violation'],
   ];
@@ -911,11 +929,9 @@ test('AI decisions compare the probability strictly against the threshold', asyn
   for (const [probability, status] of cases) {
     const backend = new RecordingBackend(probability);
     const subject = scopeSubject({ filepath: 'a', id: '$', source: 's' });
-    const result = await evaluateAi(subject, { rule: 'r' }, projectContext(), runtimeFor(backend, 0.4));
+    const result = await evaluateAi(subject, { rule: 'r' }, projectContext(), runtimeFor(backend, threshold));
 
-    assert.equal(result.status, status, String(probability));
-    assert.equal(result.probability, probability);
-    assert.equal(result.model, 'test-model');
+    assert.deepEqual(result, { status, probability, threshold, model: 'test-model' });
   }
 });
 
@@ -950,18 +966,18 @@ test('AI instructions carry the rule, question, and normalized examples', async 
   });
 });
 
-test('AI violations carry the fallback or supplied message without leaking it upstream', async () => {
+test('AI violations preserve metadata and only supplied messages without leaking them upstream', async () => {
   const subject = scopeSubject({ filepath: 'a', id: '$', source: 's' });
 
-  const fallback = new RecordingBackend(0.1);
-  const fallbackResult = await evaluateAi(
+  const backend = new RecordingBackend(0.1);
+  const result = await evaluateAi(
     subject,
     { rule: 'r' },
     projectContext('infra-placement'),
-    runtimeFor(fallback),
+    runtimeFor(backend),
   );
-  assert.equal(fallbackResult.status, 'violation');
-  assert.equal(fallbackResult.message, 'Rule "infra-placement" was violated');
+  assert.deepStrictEqual(result, { status: 'violation', probability: 0.1, threshold: 0.4, model: 'test-model' });
+  assert.deepStrictEqual(requestAt(backend).instructions, { rule: 'r', question: 'Is the rule respected?' });
 
   const custom = new RecordingBackend(0.1);
   const customResult = await evaluateAi(
@@ -970,7 +986,13 @@ test('AI violations carry the fallback or supplied message without leaking it up
     projectContext('infra-placement'),
     runtimeFor(custom),
   );
-  assert.equal(customResult.message, 'This belongs outside infrastructure');
+  assert.deepStrictEqual(customResult, {
+    status: 'violation',
+    message: 'This belongs outside infrastructure',
+    probability: 0.1,
+    threshold: 0.4,
+    model: 'test-model',
+  });
   assert.equal(JSON.stringify(requestAt(custom)).includes('This belongs outside infrastructure'), false);
 });
 
@@ -1055,7 +1077,6 @@ test('regex requires every group member to match and traces members after a mism
   ]);
   assert.deepStrictEqual(await evaluator(failing, failingContext), {
     status: 'violation',
-    message: 'Rule "contract-rule" was violated',
   });
   assert.deepStrictEqual(failingContext.traces, [
     {
@@ -1100,7 +1121,7 @@ test('regex traces the evaluated inputs and results', async () => {
 
   const result = await regex({ pattern: /b/ })(subject, context);
 
-  assert.deepStrictEqual(result, { status: 'violation', message: 'Rule "contract-rule" was violated' });
+  assert.deepStrictEqual(result, { status: 'violation' });
   assert.deepStrictEqual(context.traces, [
     {
       message: 'regex',
@@ -1126,7 +1147,6 @@ test('regex honours an asynchronous input override per group member and a custom
   assert.deepStrictEqual(await evaluator(first, context), { status: 'pass' });
   assert.deepStrictEqual(await evaluator(groupSubject([first, second]), context), {
     status: 'violation',
-    message: 'Rule "contract-rule" was violated',
   });
   assert.deepStrictEqual(context.traces, [
     {
