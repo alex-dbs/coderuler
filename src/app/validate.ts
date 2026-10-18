@@ -1,11 +1,14 @@
 import { RULE_BRAND } from './rule.js';
 import type {
+  AiUsage,
   CheckResult,
   JsonValue,
   PredicateResult,
   Rule,
   ScopeMatch,
   ScopeSubject,
+  Subject,
+  ViolationLocation,
 } from './rule.js';
 
 function invalid(label: string, detail: string): never {
@@ -17,7 +20,7 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isLineNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 1;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
 }
 
 function isPatternList(value: unknown, allowEmpty: boolean): boolean {
@@ -46,6 +49,13 @@ function validateSettings(settings: Record<string, unknown>, at: string): void {
     (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold < 0 || threshold > 1)
   ) {
     invalid(at, 'settings.threshold must be a finite number between 0 and 1');
+  }
+
+  for (const key of ['inputCostPerMillion', 'outputCostPerMillion']) {
+    const value = settings[key];
+    if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < 0)) {
+      invalid(at, `settings.${key} must be a finite nonnegative number`);
+    }
   }
 }
 
@@ -230,7 +240,152 @@ export function validatePredicateResult(value: unknown, label: string): Predicat
   invalid(label, 'predicate must return a boolean or { applies, reason? }');
 }
 
-export function validateCheckResult(value: unknown, label: string): CheckResult {
+export function validateAiUsage(value: unknown, label: string): AiUsage {
+  if (!isRecord(value)) invalid(label, 'usage must be an object');
+  for (const key of ['calls', 'unreportedCalls', 'inputTokens', 'outputTokens']) {
+    const count = value[key];
+    if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
+      invalid(label, `usage.${key} must be a nonnegative safe integer`);
+    }
+  }
+  if ((value['unreportedCalls'] as number) > (value['calls'] as number)) {
+    invalid(label, 'usage.unreportedCalls must not exceed usage.calls');
+  }
+  for (const key of ['inputCost', 'outputCost']) {
+    const cost = value[key];
+    if (typeof cost !== 'number' || !Number.isFinite(cost) || cost < 0) {
+      invalid(label, `usage.${key} must be a finite nonnegative number`);
+    }
+  }
+  return value as unknown as AiUsage;
+}
+
+type LocationRangeIndex = {
+  readonly unbounded: boolean;
+  readonly ranges: readonly { readonly start: number; readonly maxEnd: number }[];
+};
+
+type LocationMembers = {
+  readonly all: ScopeSubject<unknown>[];
+  readonly byId: Map<string, ScopeSubject<unknown>[]>;
+  rangeIndex?: LocationRangeIndex;
+};
+
+function indexLocationMembers(subject: Subject<unknown>): Map<string, LocationMembers> {
+  const byFilepath = new Map<string, LocationMembers>();
+  const members = subject.kind === 'group' ? subject.members : [subject];
+  for (const member of members) {
+    const { filepath, id } = member;
+    let file = byFilepath.get(filepath);
+    if (file === undefined) {
+      file = { all: [], byId: new Map() };
+      byFilepath.set(filepath, file);
+    }
+    file.all.push(member);
+    const matches = file.byId.get(id);
+    if (matches === undefined) file.byId.set(id, [member]);
+    else matches.push(member);
+  }
+  return byFilepath;
+}
+
+function indexLocationRanges(members: readonly ScopeSubject<unknown>[]): LocationRangeIndex {
+  const ranges: { start: number; maxEnd: number }[] = [];
+  for (const member of members) {
+    const lines = member.lines;
+    if (lines === undefined) return { unbounded: true, ranges };
+    ranges.push({ start: lines.start, maxEnd: lines.end });
+  }
+  ranges.sort((left, right) => left.start - right.start);
+  let maxEnd = 0;
+  for (const range of ranges) {
+    maxEnd = Math.max(maxEnd, range.maxEnd);
+    range.maxEnd = maxEnd;
+  }
+  return { unbounded: false, ranges };
+}
+
+function containsLocationRange(
+  file: LocationMembers,
+  lines: { readonly start: number; readonly end: number },
+): boolean {
+  const { unbounded, ranges } = file.rangeIndex ??= indexLocationRanges(file.all);
+  if (unbounded) return true;
+  let low = 0;
+  let high = ranges.length;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    if (ranges[middle]!.start <= lines.start) low = middle + 1;
+    else high = middle;
+  }
+  return low > 0 && ranges[low - 1]!.maxEnd >= lines.end;
+}
+
+function plainViolationLocations(
+  value: unknown,
+  label: string,
+  subject?: Subject<unknown>,
+): readonly ViolationLocation[] {
+  if (!Array.isArray(value)) invalid(label, 'check locations must be an array');
+  const locations: ViolationLocation[] = [];
+  let membersByFilepath: Map<string, LocationMembers> | undefined;
+  for (let index = 0; index < value.length; index += 1) {
+    const at = `${label} locations[${index}]`;
+    if (!Object.hasOwn(value, index)) invalid(at, 'missing location entry');
+    const location: unknown = value[index];
+    if (!isRecord(location)) invalid(at, 'location must be an object');
+    const { filepath, scopeId, lines: rawLines } = location;
+    if (typeof filepath !== 'string' || filepath === '') {
+      invalid(at, 'location filepath must be a non-empty string');
+    }
+    if (scopeId !== undefined && (typeof scopeId !== 'string' || scopeId === '')) {
+      invalid(at, 'location scopeId must be a non-empty string');
+    }
+    let lines = rawLines === undefined ? undefined : plainLines(rawLines, at);
+    if (scopeId === undefined && lines === undefined) {
+      invalid(at, 'location must specify scopeId or lines');
+    }
+    if (subject !== undefined) {
+      const file = (membersByFilepath ??= indexLocationMembers(subject)).get(filepath);
+      if (file === undefined) invalid(at, 'location must reference an evaluated scope or group member');
+      const members = scopeId === undefined ? file.all : file.byId.get(scopeId);
+      if (members === undefined) invalid(at, 'location must reference an evaluated scope or group member');
+      let contained = false;
+      let resolvedLines: ViolationLocation['lines'];
+      if (scopeId === undefined && lines !== undefined) {
+        contained = containsLocationRange(file, lines);
+      } else {
+        for (const member of members) {
+          const memberLines = member.lines;
+          if (lines !== undefined) {
+            if (memberLines === undefined ||
+                (lines.start >= memberLines.start && lines.end <= memberLines.end)) {
+              contained = true;
+            }
+          } else if (memberLines !== undefined) {
+            if (resolvedLines !== undefined &&
+                (resolvedLines.start !== memberLines.start || resolvedLines.end !== memberLines.end)) {
+              invalid(at, 'location scopeId identifies multiple line ranges');
+            }
+            resolvedLines = { start: memberLines.start, end: memberLines.end };
+          }
+        }
+      }
+      if (lines !== undefined && !contained) {
+        invalid(at, 'location lines must be contained in an evaluated scope or group member');
+      }
+      lines ??= resolvedLines;
+    }
+    locations.push({
+      filepath,
+      ...(scopeId === undefined ? {} : { scopeId }),
+      ...(lines === undefined ? {} : { lines }),
+    });
+  }
+  return locations;
+}
+
+export function validateCheckResult(value: unknown, label: string, subject?: Subject<unknown>): CheckResult {
   if (!isRecord(value)) invalid(label, 'check must return a check result object');
 
   const status = value['status'];
@@ -270,5 +425,21 @@ export function validateCheckResult(value: unknown, label: string): CheckResult 
     invalid(label, 'check threshold must be a finite number between 0 and 1');
   }
 
-  return value as unknown as CheckResult;
+  const rawUsage = value['usage'];
+  const usage = rawUsage === undefined ? undefined : validateAiUsage(rawUsage, label);
+  const rawLocations = value['locations'];
+  if (rawLocations !== undefined && status !== 'violation') {
+    invalid(label, 'check locations are only allowed on violation results');
+  }
+  const locations = rawLocations === undefined ? undefined : plainViolationLocations(rawLocations, label, subject);
+
+  return {
+    status,
+    ...(message === undefined ? {} : { message }),
+    ...(probability === undefined ? {} : { probability }),
+    ...(threshold === undefined ? {} : { threshold }),
+    ...(model === undefined ? {} : { model }),
+    ...(usage === undefined ? {} : { usage }),
+    ...(locations === undefined ? {} : { locations }),
+  };
 }

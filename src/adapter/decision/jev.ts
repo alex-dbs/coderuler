@@ -93,7 +93,18 @@ function readDecision(data: unknown): DecisionOutcome {
   if (typeof probability !== 'number' || !Number.isFinite(probability) || probability < 0 || probability > 1) {
     throw new Error(`Decision response '${QUESTION_ID}' answer is not a probability between 0 and 1`);
   }
-  return { probability, model };
+  const rawUsage = data.usage;
+  if (rawUsage === undefined) return { probability, model };
+  if (!isMapping(rawUsage)) throw new Error('Decision response usage must be an object');
+  const inputTokens = rawUsage.input_tokens;
+  const outputTokens = rawUsage.output_tokens;
+  if (
+    typeof inputTokens !== 'number' || !Number.isSafeInteger(inputTokens) || inputTokens < 0 ||
+    typeof outputTokens !== 'number' || !Number.isSafeInteger(outputTokens) || outputTokens < 0
+  ) {
+    throw new Error('Decision response usage must carry nonnegative safe integer input_tokens and output_tokens');
+  }
+  return { probability, model, usage: { inputTokens, outputTokens } };
 }
 
 export class JevAdapter implements DecisionBackend {

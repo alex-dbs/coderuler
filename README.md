@@ -1,613 +1,229 @@
-# rulekeeper
+# Rulekeeper
+<p align="center">
+  <img src="rulekeeper-icon.webp" alt="Rulekeeper shield logo" width="144">
+</p>
 
-**One rule = one TypeScript/JS class.** rulekeeper selects *scopes* (named, source-located slices of
-files), filters their applicability, groups them if needed, and evaluates each subject — with a remote
-AI decision (Jev), with a deterministic local check, or with any code you write. It runs against the
-**current working tree**: no Git, no revisions, no diffs.
+Do your AI  agents keep missing rules from your prompts / AGENTS.md? If repeated agent reviews are eating time and tokens, move those policies into executable code. Rulekeeper runs the same rules against your working tree whenever you need them. It will never miss one! You can see it as linter on steroid.
 
-A rule is a normal ES module that default-exports a class extending `Rule`. The framework provides the
-shared mechanics (file selection, scope extraction, filtering, grouping, concurrency, reporting);
-authors supply policy through ordinary methods and evaluators. Rules are **trusted code** with full
-Node access — this is an authoring framework, not a sandbox.
+Write deterministic rules in TypeScript (or JavaScript). When a policy needs judgment, send it to an AI decision API. AI rules use the selected scope as context by default, rather than sending the whole repository. You choose what each rule selects, so each AI request can stay focused.
 
-| Command | Purpose |
-|---|---|
-| `rulekeeper validate [rule-path]` | Load and structurally validate rules offline. |
-| `rulekeeper check [path]` | Run every selected rule and report violations (exit 1 when any). |
-| `rulekeeper inspect <rule> [folder]` | Walk one rule through selection/filter/group/evaluate, printing each step and the exact request/result. |
+## Install
 
-## Requirements and build
+Rulekeeper requires Node.js 24 or later. Git is required only when you use `check --diff`.
 
-- **Node.js 24 or later** (ESM, `node:path.matchesGlob`, and native TypeScript type stripping).
-- No Git, and no revision/diff integration of any kind.
-
-Install and build the package:
+Install the CLI globally:
 
 ```sh
-npm ci           # install pinned dependencies
-npm run build    # tsc -p tsconfig.build.json -> dist/ (JS + .d.ts)
-npm run typecheck
-npm test         # build, then run the test suite
+npm install -g @alex-dbs/rulekeeper
+rulekeeper --help
 ```
 
-Run the CLI from the build output or through the package binary:
+The npm package is scoped; the command is simply `rulekeeper`. Rules import the package API, so also install it in each project where you write rules. This provides TypeScript editor support too:
 
 ```sh
-node dist/cli.js --help
-npm start -- validate .rulekeeper
-# once installed in a consumer project: node_modules/.bin/rulekeeper check .
+npm install --save-dev @alex-dbs/rulekeeper
+npx rulekeeper --help
 ```
 
-## Using the SDK in another project
+The global installation is optional: with only the project-local dependency, run commands through `npx rulekeeper`.
 
-The package builds to JavaScript plus declarations (`dist/`), so consumers never strip TypeScript from
-`node_modules`. Install it into your own dependency graph and import the **bare package name**:
+The npm install commands require the first release to be published. To run an unreleased checkout, use `npm ci`, `npm run build`, then `npm start -- --help`.
 
-```ts
-import { Rule, ai, regex, pass, violation, scopes, createAstGrepLanguageRegistrations } from 'rulekeeper';
-import type { CheckContext, CheckResult, Project, ProjectContext, ScopeSelector, Subject } from 'rulekeeper';
-```
+## Write a rule
 
-Rules are ES modules. Node ≥24 executes your `.rule.ts` / `.rule.mts` directly (type stripping), so
-authoring needs no build step; `.rule.js` / `.rule.mjs` rules are plain JavaScript. Helper imports must
-name the helper's **actual file and extension**, because Node resolves them at runtime and nothing
-rewrites specifiers: a TypeScript rule imports a TypeScript helper as
-`import { helper } from './helpers/limits.ts'` (or `.mts`), while a `.rule.js` / `.rule.mjs` rule — or a
-TypeScript rule importing a JavaScript helper — uses `import { helper } from './helpers/limits.js'` (or
-`.mjs`). The `.js`-for-a-`.ts`-file convention (`import './limits.js'` resolving to `limits.ts`) belongs
-to **compiled** NodeNext builds, which is how this package's own `src/` is written; it does not apply to
-rules Node executes straight from source, and no build step makes it apply.
+Save rules in `.rulekeeper` (or any subfolders) with a name that ends in `.rule.ts`, `.rule.mts`, `.rule.js`, or `.rule.mjs`. A rule is a class that extends `Rule` and is the module's default export. Save the example below as `.rulekeeper/no-any.rule.ts`.
 
-Rules import the SDK normally; the framework never rewrites imports or manipulates module resolution, and
-a missing dependency reports its normal module-load error with the rule's path (no auto-install).
-
-The published package ships only `dist/`, with `types`/`exports` resolving to `dist/index.d.ts` and
-`dist/index.js`; the `rulekeeper` binary is `dist/cli.js`.
-
-## Writing a rule
-
-Create a module whose **basename** uses a rule suffix — `.rule.ts`, `.rule.mts`, `.rule.js`, or
-`.rule.mjs` — and default-export a class extending `Rule`. The rule name is the basename with the
-suffix stripped (`infra-placement.rule.ts` → `infra-placement`).
+This rule reports explicit `any` types in TypeScript files. It also tests a violating case and a passing case:
 
 ```ts
-import { Rule, ai, scopes, type ProjectContext } from 'rulekeeper';
+import { Rule, scopes, test, violation } from '@alex-dbs/rulekeeper';
 
-export default class InfraPlacement extends Rule {
-  files = ['internal/infra/**/*.go'];
+export default class NoAny extends Rule {
+  files = ['src/**/*.{ts,tsx}'];
+
   scope = scopes.astGrep({
-    language: 'go',
-    rule: { any: [{ kind: 'function_declaration' }, { kind: 'method_declaration' }] },
+    language: 'typescript',
+    rule: {
+      kind: 'predefined_type',
+      pattern: { context: 'type ExplicitAny = any;', selector: 'predefined_type' },
+    },
   });
 
-  async when({ project }: ProjectContext) {
-    return (await project.stat('internal/adapter'))?.kind === 'directory';
-  }
+  check = () => violation('Replace explicit any with a specific type or unknown and narrow it.');
+}
 
+export const tests = [
+  test('explicit any violates').withFiles({
+    'src/example.ts': 'let value: any;',
+  }).violates(),
+  test('a specific type passes').withFiles({
+    'src/example.ts': 'let value: string;',
+  }).passes(),
+];
+```
+
+### Regular-expression rule
+
+Use a regular expression for a pattern with a clear pass or fail condition. This rule selects HTTP binding URLs from protobuf files and requires versioned lowercase plural paths, such as `/v1/invoices`.
+
+```ts
+import { Rule, regex, scopes } from '@alex-dbs/rulekeeper';
+
+export default class PublicApiPaths extends Rule {
+  files = ['api/**/*.proto'];
+  scope = scopes.protobuf({ path: '$.rpcs[*].http.bindings[*].url' });
+  check = regex({
+    pattern: /^\/v\d+\/[a-z][a-z0-9_]*s(?:\/.*)?$/,
+    violationMessage: 'Use a versioned lowercase plural path.',
+  });
+}
+```
+
+Add inline tests for paths that match and do not match the pattern.
+
+### AI rule
+
+Use an AI rule when a policy needs meaning or context that a fixed pattern cannot capture. This rule sends one selected function to the AI decision API, Jev from [Typesafe](https://typesafe.ai/).
+
+```ts
+import { Rule, ai, scopes } from '@alex-dbs/rulekeeper';
+import type { ScopeSubject } from '@alex-dbs/rulekeeper';
+
+export default class SafeResponseHeaders extends Rule {
+  files = ['src/**/*.js'];
+  scope = scopes.astGrep({
+    language: 'javascript',
+    rule: { kind: 'function_declaration' },
+  });
   check = ai({
-    rule: 'Infrastructure functions implement technical concerns, not business policy or application orchestration.',
-    violationMessage: 'This function belongs outside infrastructure',
+    rule: 'Report a violation only when this function writes request data into an HTTP response header without rejecting CR and LF first. Judge only this function. Do not assume unseen callers or helpers validate the data.',
+    input: subject => (subject as ScopeSubject).source,
+    violationMessage: 'Reject CR and LF in request data before writing a response header.',
   });
 }
 ```
 
-### `Rule` contract
+This example shows an AI check for CWE-113. The call cost depends on the configured model, input size, and token prices.
 
-| Member | Default | Role |
-|---|---|---|
-| `enabled` | `true` | `false` skips the rule (reported with reason `disabled`). |
-| `files` | `['**/*']` | Root-relative globs; **non-empty**. |
-| `exclude` | `[]` | Root-relative globs; exclusion wins over `files`. |
-| `scope` | absent | `ScopeSelector`; absent selects one whole-file scope per file. |
-| `settings` | `{}` | `{ backend?: 'jev'; model?: string; threshold?: number }` overrides for this rule. |
-| `group` | `'scope'` | `'scope' \| 'file' \| 'folder' \| 'project' \| { by: 'folder', level }`. |
-| `when(context)` | `true` | Whole-rule gate; `boolean` or `{ applies, reason? }`. |
-| `select(context)` | delegates | Override to build subjects yourself (default uses `files`/`exclude`/`scope`). |
-| `filter(subject, context)` | `true` | Per-scope applicability; `boolean` or `{ applies, reason? }`. |
-| `check` | *(abstract)* | Required `Evaluator`, assigned as a **function-valued property**: `check = ai({...})`, `check = regex({...})`, or `check = async (subject, context) => ...`. It is read as a function value, not overridden as a method. |
+AI rules require a configured service and can incur charges.
 
-All hooks and `check` are invoked with `this` bound to the rule instance, so extra fields and methods
-on your class are available and allowed. `Rule.prototype` carries a non-enumerable
-`Symbol.for('rulekeeper.Rule')` brand; the loader accepts any default-exported constructible class with
-that brand plus a valid structural contract (not `instanceof` against its own copy of `Rule`), so a rule
-may extend a separately installed copy of the SDK. `construct(this)` still runs — imports and
-constructors are trusted code.
+> [!TIP]
+> Keep the selected scope as small as the rule allows. A smaller input can reduce token costs and help the model focus on relevant code. Include enough context for the policy to make a sound decision.
 
-`files` and `exclude` must be dense arrays of non-empty strings: missing or inherited-only entries are
-invalid, including on disabled rules. Structural validation runs before any hook.
+Run validation, tests, and the rule against your project (use `npx rulekeeper` for a project-local installation):
 
-### Discovery and selection
-
-- Standard discovery reads `<working-root>/.rulekeeper` and then `~/.rulekeeper`, recursively and
-  lexically, importing only `*.rule.{ts,mts,js,mjs}`. Helper `.ts`/`.js` files are imported by rules but
-  never auto-discovered.
-- Symlinked roots/entries and any `old/` subdirectory are skipped; physical rule paths are deduplicated.
-  Only missing roots are tolerated — permission/type errors propagate, and finding no rules is an error.
-- `--rules <path>` (and `validate [rule-path]`) replaces discovery with one explicit file or a
-  recursively scanned directory, resolved relative to the **invocation cwd**. An explicit file must use a
-  rule suffix and must not be a symlink; pointing at `old/` is rejected. Duplicate rule names across the
-  selected roots are errors listing every path.
-- `inspect <rule>` resolves its selector relative to the invocation cwd first: an existing file is used
-  as given, while an existing **directory** is rejected, because inspecting needs one rule module or an
-  exact name. Anything else counts as an exact rule name, looked up under the **selected `[folder]`
-  root** and then home — so an inspected rule can live outside the inspected folder.
-
-Each load constructs a **fresh** rule instance. Modules are imported once per process (the CLI is
-one-shot); there is no cache-busting or hot reload.
-
-### Execution order and concurrency
-
-`load/validate all` → `enabled` → `when` → `select` → validate scopes → `filter` → `group` → evaluate →
-report.
-
-- Gates run **once per enabled rule, before parsing its target sources**. A `false`/non-applying gate
-  becomes a *skipped* rule with its reason — not a pass.
-- Filters run once per selected scope, before grouping, and may return a structured reason.
-- Only an explicit `false` (or `{ applies: false }`) skips. A malformed return value or thrown error is
-  a runtime error, not a skip.
-- Selection tasks and evaluations are bounded by `--concurrency` (default 8), one rule's selection at a
-  time, then all surviving rules' evaluations in one ordered bounded map. Rule hooks that read project
-  files or call helpers cannot deadlock the limiter. Shared rule instances must not depend on
-  per-subject mutation ordering; use `--concurrency 1` when a rule needs serial checks.
-
-### Custom selectors
-
-Adding `scope`, overriding `select`, or using `context.select` lets you produce your own subjects. A
-custom `select` returns flattened scope subjects and still respects the CLI target and reserved-path
-boundary; it may call `context.select(...)` to reuse built-in selection and transform the result.
-Synthetic subjects must be attributed to a real eligible filepath (use grouping for multi-file
-decisions). Validation enforces correct strings/ranges, JSON-compatible data, valid captures, a
-root-relative eligible `filepath`, and unique `(filepath, id)` per rule, with no hidden subjects,
-fallback passes, or silent dedup.
-
-## Selectors
-
-Every selector is a `ScopeSelector<T> = (file: { filepath, source }) => Awaitable<readonly ScopeMatch<T>[]>`
-and is re-exported as `scopes.*`. A `ScopeMatch` is `{ id, source, data?, captures?, lines? }`, where
-`lines` is a 1-based inclusive range and `data` must be finite, acyclic, JSON-compatible data.
-Selector results must be dense arrays with an own scope at every index; holes are errors, not empty
-selections. A genuine `[]` remains a valid no-match result, and dense results retain their order.
-
-| Factory | Options | Selection |
-|---|---|---|
-| `scopes.file()` | — | One data-free `$` scope per eligible file, including empty files (`lines` 1–1). |
-| `scopes.json<T>({ path?, key? })` | `path` default `$` | Strict JSON only (no comments, trailing commas, or empty input); duplicate keys and non-finite numbers are rejected. `id` is the RFC 6901 pointer (`$` at root) or the `key` value. |
-| `scopes.yaml<T>({ path?, key? })` | `path` default `$` | Every nonempty YAML document, in order, with aliases/merge keys resolved and a bounded alias count. `id` is `<doc-index>:<pointer-or-key>`; empty/comment-only documents are skipped without renumbering. |
-| `scopes.csv({ headers?, delimiter?, key? })` | `headers` default `true`, `delimiter` default `,` | One scope per data record; ids are `row:<n>` (1-based) or a `key` column value. Handles quoting, multiline fields, BOM, LF/CRLF/CR, and blank lines; strict record widths. |
-| `scopes.astGrep({ language, rule, constraints?, utils? })` | — | Native ast-grep matches with captures (pattern metavariables plus named-declaration/Go-receiver identities) and line spans. The native query is compiled and validated at factory construction. |
-| `scopes.protobuf<T>({ path? })` | `path` default `$.rpcs[*]` | RPC records or their `google.api.http` subtrees. Data is `{ id, package, service, name, http: { bindings: [{ method, url }] } }`. |
-
-JSONPath-derived selectors (`json`, `yaml`, `protobuf`, and custom paths) require a non-empty `$`-rooted
-string, reject executable expressions, and surface library-reported evaluation errors. Protobuf may
-select RPC records or their `http`/`bindings`/`method`/`url` subtrees only; a matched forbidden pointer
-errors even when the file has no RPCs. `key` selectors must resolve to exactly one string or finite
-number.
-
-Omitted or `undefined` options retain their defaults; explicit `null` is invalid for structured selector
-`path` and CSV `headers`/`delimiter`. CSV delimiters must be exactly one Unicode code point (including
-supplementary characters such as `😀`), other than CR, LF, or a quote. `scopes.csv` and `project.readCsv`
-apply the same option rules and preserve exact source slices for multibyte delimiters.
-
-**ast-grep languages.** Built-in: `css`, `html`, `javascript`, `tsx`, `typescript`. Bundled grammars:
-`angular`, `bash`, `bicep`, `c`, `cpp`, `csharp`, `dart`, `elixir`, `glimmer-javascript`,
-`glimmer-typescript`, `go`, `haskell`, `java`, `json`, `kotlin`, `lua`, `markdown`, `php`, `python`,
-`ruby`, `rust`, `scala`, `sql`, `swift`, `toml`, `yaml`. Aliases include `js`/`jsx`/`ts`/`py`/`rb`/`rs`/
-`cs`/`kt`/`md`/`yml`/`golang`/`hs`/`ex`/`cc`/`c++`/`cxx`. Names are case-insensitive; bundled grammars
-register lazily on first use, and a host composing custom grammars can merge
-`createAstGrepLanguageRegistrations()` into its own single `registerDynamicLanguage` call.
-
-### Grouping
-
-`group` collects the surviving scopes into subjects:
-
-- `'scope'` — one subject per scope (default).
-- `'file'` — one group per filepath.
-- `'folder'` — one group per containing folder at level 0.
-- `'project'` — one group for the whole `.` root.
-- `{ by: 'folder', level }` — negative levels climb the folder tree and clamp at `.`.
-
-Member order is preserved, empty groups are never evaluated, and one group is exactly one `check`
-invocation. Declare an override with the `Grouping` type (`group: Grouping = 'folder'`, as the dogfood
-rules do) rather than leaving a bare string literal to inference.
-
-## Project readers
-
-Hooks and checks receive a `Project` rooted at the working root:
-
-```ts
-import type { Project } from 'rulekeeper';
-
-async function readProject(project: Project) {
-  const files = await project.glob(['config/**/*.json']);  // existing eligible files, lexical order, [] when none
-  const hasGo = await project.hasFiles('**/*.go');         // boolean convenience over glob
-  const adapter = await project.stat('internal/adapter');  // { kind: 'file' | 'directory' } | undefined (ENOENT only)
-  const text = await project.readText('README.md');        // strict UTF-8 text
-  const json = await project.readJson('config/app.json');  // strict JSON (same parser as scopes.json)
-  const docs = await project.readYaml('config/app.yaml');  // one value per nonempty YAML document
-  const rows = await project.readCsv('env/main.csv');      // header records or string arrays
-  return { files, hasGo, adapter, text, json, docs, rows };
-}
+```sh
+rulekeeper validate .rulekeeper/no-any.rule.ts
+rulekeeper test .rulekeeper/no-any.rule.ts
+rulekeeper check . --rules .rulekeeper/no-any.rule.ts
 ```
 
-Paths are root-relative with `/` separators; absolute paths, `..` escapes, and symlink traversal are
-rejected. `glob`/`hasFiles` use `node:path.matchesGlob` semantics with exclusion winning. The root is
-the invocation cwd for `check`/`validate` and the resolved `[folder]` for `inspect` — an absolute or
-sibling folder is its own root. Reads require real files, decode UTF-8 strictly, and error on
-missing/unreadable/invalid input — a read error never masquerades as a missing value or empty selection.
-Source text is cached once per run; parsed values are per-use so one rule cannot mutate another's view.
+## Rule pipeline
 
-## Evaluators
+A scope is a file or selected part of a file. Rulekeeper validates selected rules, then applies this pipeline to each rule:
 
-```ts
-import { ai, regex, pass, violation } from 'rulekeeper';
-```
+`enabled → when → files and excludes → scope or select → filter → group → check → report`
 
-- **`ai(options): Evaluator`** — the recommended remote check. `options` is `{ rule, examples?,
-  violationMessage?, input? }`. The framework builds the default input from the subject (no manual
-  subject passing):
+- `enabled` defaults to `true`. Set it to `false` to disable a rule.
+- `when(context)` runs once for each enabled rule before file selection. It defaults to `true`. Return `false` to skip the rule, or return `{ applies: false, reason: '...' }` to explain why. An example: apply a rule based on some conditions, for instance, the Go version of the project.
+- `files` is a nonempty list of root-relative globs. It defaults to `['**/*']`. `exclude` is a list of root-relative globs that removes matching files. It defaults to `[]`.
+- `scope` selects the parts of each file to evaluate. Without it, Rulekeeper uses one whole-file scope. Use `scopes.file()`, `scopes.json()`, `scopes.yaml()`, `scopes.csv()`, `scopes.protobuf()`, or `scopes.astGrep()` to choose the source or data.
+- Override `select(context)` when you need custom file or scope selection. Call `context.select({ files, exclude, scope })` to reuse built-in selection.
+- `filter(subject, context)` runs once per selected scope, before grouping. It defaults to `true`. Return `false` or `{ applies: false, reason: '...' }` to skip a scope. Put applicability and required-data checks here (null check for instance).
+- `group` controls which scopes the evaluator sees together. It defaults to `'scope'`, which evaluates each scope separately. Set it to `'file'`, `'folder'`, `'project'`, or `{ by: 'folder', level }`. `folder` groups scopes within each containing folder. `project` groups all selected scopes together. `level` is a nonpositive integer.
+- `check` is the required evaluator. Assign `regex(...)`, `ai(...)`, or a function as a property. Return `pass()` or `violation(message)` from a custom function.
 
-  ```jsonc
-  // single scope with data
-  { "filepath": "...", "scope": { "id": "...", "data": ..., "captures": ... } }
-  // single scope without data
-  { "filepath": "...", "scope": { "id": "...", "source": "...", "captures": ... } }
-  // group
-  { "files": [ { "filepath": "...", "scopes": [ ... ] } ] }
-  ```
+The `settings` field sets AI options for one rule, such as its model, decision threshold, and input or output token prices.
 
-  Presence is not truthiness: `null`, `false`, `0`, and `""` data are real inputs. An `input` callback
-  replaces the projection and its returned value is validated. `ai({...})` only validates its options at
-  construction — no network I/O while loading.
-
-- **`context.ai(options)`** — the same implementation, available inside a custom `check` for
-  conditional or multi-step logic, already bound to the current subject and rule settings.
-
-- **`regex({ pattern, violationMessage?, input? }): Evaluator`** — deterministic, no provider, no key,
-  no network. The default input is `String(data)` for scalar/null data and the scope source text
-  otherwise; an `input` callback (`(subject, context) => Awaitable<string>`) replaces it per member. A
-  group passes only when **all** members match. The pattern is cloned at construction and `lastIndex` is
-  reset before each test, so `/g` and `/y` flags stay deterministic. The result carries no fake
-  probability/model/threshold.
-
-- **`pass()` / `violation(message)`** — helpers for custom checks.
-
-A **custom check** is any `Evaluator`-shaped value (`(subject, context) => Awaitable<CheckResult>`)
-assigned to the function-valued `check` property, for example
-`check = async (subject, context) => { ... }`. `subject` is a `Subject<T>`, so `subject.kind === 'scope'`
-narrows it to `ScopeSubject<T>` (with `id`, `source`, `data`, `captures`, and `filepath`). The check
-returns `{ status: 'pass' | 'violation', message?, probability?, threshold?, model? }` or throws; the result is
-validated and supplied messages are preserved. A violation without a message is reported by rule name
-and location, without generated message text. Checks may use any external library/provider directly —
-there is no backend-registration framework.
-
-AI results include the actual effective `threshold` used for the decision. Returning `context.ai(...)`
-preserves that metadata; a custom check that replaces the AI result does not inherit it automatically.
-Deterministic checks do not gain an invented threshold. When supplied, threshold metadata must be a
-finite number in `[0, 1]`.
-
-## Settings and environment
-
-Rule `settings` override environment defaults per rule:
-
-```ts
-import { Rule, ai, type RuleSettings } from 'rulekeeper';
-
-export default class StrictLimits extends Rule {
-  files = ['docs/**/*.md'];
-  settings: RuleSettings = { model: 'jev-latest', threshold: 0.5 }; // backend is always 'jev'
-  check = ai({ rule: 'The document states explicit resource limits.' });
-}
-```
-
-| Setting | Environment | Default | Precedence |
-|---|---|---|---|
-| threshold | `RK_THRESHOLD` | `0.4` | `--threshold` > `rule.settings.threshold` > `RK_THRESHOLD` > default |
-| backend | `RK_BACKEND` | `jev` | rule setting > env > default |
-| model | `TYPESAFE_DEFAULT_MODEL` | `jev-latest` | rule setting > env > default |
-| base URL | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | env only |
-| API key | `TYPESAFE_API_KEY` | — | env only (required for AI calls) |
-
-Settings resolution is **lazy**: no provider-specific environment is read or validated until a rule's
-first actual AI call. A skipped, filtered, regex-only, or otherwise deterministic run needs no key and
-works even with unused invalid AI environment values. A *set-but-blank* used value is an error; values
-shadowed by a higher-precedence setting are not consulted. Rule and flag values validate eagerly.
-
-The CLI loads `.env` from the invocation cwd via `process.loadEnvFile()` **without overriding exported
-shell variables**; a missing `.env` is ignored. There is no other configuration system and no statistics
-directory or database.
-
-### The Jev transport
-
-AI calls `POST v1/systemone` with `Authorization: Bearer <key>` and a body of
-`{ model, state, questions: { follows_instructions: { type: 'noul', instructions: { rule, question: 'Is
-the rule respected?', examples? } } } }`. `examples` is omitted entirely when both good and bad are
-empty; `violationMessage` is reporting-only and never sent. The call passes iff the returned probability
-is **strictly greater** than the threshold (equality violates). The effective threshold is reported
-with the result, not sent in the upstream instructions. The client uses a 30-second timeout, no
-redirects, no retries, and validates the model/answers/type and a finite probability in `[0, 1]`;
-timeout/network/HTTP/malformed/unsafe-URL errors are sanitized. Debug metadata never contains bodies or
-credentials, while `inspect`/`--verbose` show the actual serialized request and parsed response after
-redacting the key (including on failures); the same redaction covers the streamed source excerpts and
-`trace` details, so the key never reaches a diagnostic. Machine reports retain complete subject data for
-included verifications; use `--output-all` to include passing verifications and skipped rules too.
-Headers and `Authorization` are never logged.
-
-AI `examples.good` and `examples.bad` must be dense arrays of non-empty strings. Sparse arrays and
-inherited-only entries fail during evaluator construction and runtime `context.ai` validation, before
-a decision request. Empty or omitted lists remain valid; dense example order is preserved on the wire.
-
-> AI-backed rules require `TYPESAFE_API_KEY`. Without it, `validate`, deterministic and regex rules, and
-> all skipped/no-subject rules run fully offline. This document describes behavior only; it does not
-> assert that a live provider was contacted.
+> [!TIP]
+> Browse the [`.rulekeeper` folder](.rulekeeper) for rule examples.
 
 ## Commands
 
-### `validate [rule-path]`
+- `validate [rule-path]` loads rules and validates their structure without running them.
+- `test [rule-path]` runs the inline tests declared by selected rules.
+- `check [path]` runs selected rules against a file or folder. It exits with status 1 when a rule reports a violation.
+- `inspect <rule> [folder]` shows how one rule selects and evaluates subjects.
+- `skill install` and `skill update` install or refresh Rulekeeper's rule-writing skill for coding agents.
 
-Loads and structurally validates all selected rules (discovery, or the explicit file/directory, resolved
-relative to the invocation cwd). Prints `Valid rule: <name>` per rule. It does **not** run gates, read
-target sources, contact Jev, or act as a type checker — use `tsc` for semantic checking. Exit `0`, or `2`
-on error.
+Without an explicit rule path, Rulekeeper discovers rules under `.rulekeeper` in the project and `~/.rulekeeper` in the user home directory. Use `--help` after a command for its options.
 
-### `check [path]`
+## AI decisions
 
-Target defaults to `.`. Selects rules from `.rulekeeper` in the working root and home (or `--rules`), then
-evaluates them.
+AI rules use Jev through Typesafe. Set `TYPESAFE_API_KEY` before running a rule that uses `ai()`. You can set `TYPESAFE_BASE_URL` and `TYPESAFE_DEFAULT_MODEL` to choose the service URL and model. See [`.env.example`](.env.example) for the available environment variables and pricing defaults.
 
-| Flag | Meaning |
-|---|---|
-| `--rules <path>` | Explicit rule file or recursive directory instead of discovery. |
-| `--json` | JSON object on stdout: `{ "durationMs": number, "reports": [...] }`; violations only by default. |
-| `--jsonl` | Compact `{ "type": "rule", ...report }` records with each rule's `durationMs`; violations only by default, with no summary record. |
-| `--output-all` | Include every verification and skipped rule in human, JSON, or JSONL output. |
-| `--debug` | Stream framework metadata (no bodies) and force concurrency 1. |
-| `--verbose` | Stream the walkthrough (request/response bodies, source excerpts) at the configured concurrency. |
-| `--concurrency <number>` | Bounded in-flight selection/evaluation tasks; default 8; must be a positive safe integer. |
-| `--threshold <number>` | Decision threshold override; finite decimal in `0–1`; no implicit default. |
+AI calls can send rule input to the configured service and can incur charges. The normal `test` command runs offline. Use `test --ai` to run cases declared as `aiTests`.
 
-`--debug` and `--verbose` combine: the verbose walkthrough is preserved and concurrency stays 1.
+## FAQ
 
-`--json` and `--jsonl` are mutually exclusive. By default they omit passing/skipped rules and passing
-evaluations inside mixed-result rules. `--output-all` preserves every report and evaluation. Included
-reports retain their complete subject data; neither format adds colors or automatic progress animation.
-JSONL contains only rule records and emits nothing when no rules are included. These formats are
-emitted only after execution completes; they never contain a partial report after a runtime error.
+### Why not use a linter?
 
-Human output shows the total elapsed rule-execution time using two decimal places and scaled units:
-`23.49ms`, `23.49s`, `1.25min`, `1.25h`, or `1.25d`. JSON retains the total as the envelope's numeric
-`durationMs`. This monotonic total includes selection, gates, filtering, and awaited checks across all
-rules, regardless of output filtering; it excludes target/rule loading and final report rendering.
+Use a linter for common syntax and style rules. Use Rulekeeper for project policies that need custom code, structured scopes, or AI judgment. The tools work well together.
 
-Every `RuleReport`, including skipped rules, also has its own numeric `durationMs` in milliseconds.
-JSON report items and JSONL rule records preserve this value. It measures that rule's active selection,
-grouping, and evaluation phases, excluding unrelated rules' selection and waiting before its first
-evaluation starts. Concurrent subjects use the interval from the first start to the last completion,
-not the sum of their individual times. Rule durations can overlap and must not be added to obtain the
-total. JSONL has no separate total-duration item.
+### Why not use `AGENTS.md`?
 
-`[path]` may be relative or absolute within the working root. On a case-insensitive filesystem,
-alternate-case root and target spellings resolve to their actual filesystem names before selection
-and reserved-directory checks; reported paths remain root-relative. This does not relax symlink
-boundaries or the relative-only contract of project readers.
+`AGENTS.md` guides coding agents, but it does not enforce the instructions by itself. Rulekeeper runs executable rules against project files and reports violations. Use both when you need instructions and enforcement.
 
-`[path]` **narrows selection only** — gates and project readers still see the full working root. Human
-output always counts the full run's rules/skips/verifications/violations, but defaults to violation
-details only. The section title is `🚓 Violations:`; individual violations have a bold red rule name,
-file/line, and any supplied message, without a police-car prefix. `--output-all` lists every verification,
-with a green ✓ and bold green rule name for passing checks, plus skipped-rule reasons. It reports
-explicitly when no verifications ran rather than
-claiming compliance. Source excerpts preserve Unicode and expand tabs to four-column stops. Grouped
-results list their members with file/line and source excerpts.
+### Why not use a subagent?
 
-Default human output lists at most 10 violations; `--output-all` does not limit verification entries.
-Both views show at most 5 group members and 5 source lines each, with truncation notices. Use `--json`
-or `--jsonl` for complete included subject data, adding `--output-all` for all verifications.
+A subagent can review code, but each review uses time and tokens. Rulekeeper lets you save recurring policies as rules and run them when needed. Use a subagent for broad reviews or questions that do not fit a rule.
 
-Interactive human checks show an animated progress bar on stderr: loading rules, scanning rules, then
-evaluating subjects with completed/total counts. The progress line clears on success or failure. It is
-disabled for redirected output, `--json`, `--jsonl`, `--debug`, and `--verbose`. Colors are automatic on
-capable terminals; `NO_COLOR` or `TERM=dumb` disables automatic colors. `FORCE_COLOR` overrides detection
-(`0` or `false` disables colors) but never forces animation.
+### Why TypeScript or JavaScript?
 
-Every diagnostic redacts the configured `TYPESAFE_API_KEY` in its literal, trimmed and JSON-escaped
-forms, so walkthrough source excerpts and custom `trace` details never carry it; machine reports retain
-complete, unredacted subject data for included verifications. The `rulekeeper:` prefix is fixed and is
-never redacted, even for a very short key. Exit `0` (clean or skipped), `1` when evaluation completes with
-a violation (the selected result prints first), `2` on usage/config/runtime error. Output filtering never
-changes the exit code. Runtime failures write nothing to stdout; diagnostics go to stderr prefixed
-`rulekeeper:`.
+Neither language is chosen for raw execution speed. Many developers already know one of them, and a rule can live in a single module. Rulekeeper keeps work focused with file and scope selection, and it bounds concurrency. We replace LONG and COSTLY AI Agent verification checks by predictable code, running at the speed of less than 1ms per verification; way faster than any LLM.
 
-### `inspect <rule> [folder]`
+### Does Rulekeeper support every language?
 
-Cards are the default. These output options are mutually exclusive:
+Rules are TypeScript or JavaScript modules, but they can inspect text files in any language. AST rules use the built-in and bundled ast-grep grammars. If a language has no grammar, write a custom selector or evaluator that reads its source text.
 
-| Flag | Output |
-|---|---|
-| `--json` | One JSON document: `{ "events": [...], "reports": [...], "error"?: string }`. |
-| `--jsonl` | Streamed `{ "type": "event", "event": ... }` records, followed by `{ "type": "report", "report": ... }` records on completion. |
-| `--raw` | Plain labels, indentation, source excerpts, and serialized payload text without cards, colors, dividers, terminal wrapping, or JSON prettification. |
+### Can I do anything with a rule?
 
-Inspect machine output includes the complete diagnostic walk and all final evaluations, including
-passes and skipped rules. Request/response bodies remain strings; `evaluationId` correlates events.
-`--json` buffers events until completion and includes collected events, empty reports, and `error` on
-preparation/evaluation failure. `--jsonl` streams events immediately and ends failures with a
-`{ "type": "error", "message": ... }` record instead of completion reports. There is no generic summary
-record. Exit codes remain `0` for clean/skipped, `1` for completed violations, and `2` for errors;
-usage errors keep standard CLI diagnostics rather than producing a machine document.
+Rule modules are trusted Node.js code. You can write custom selectors, filters, and evaluators, and choose how Rulekeeper groups scopes. Rulekeeper does not sandbox rules, so run only code you trust.
 
-Every inspect format redacts configured credentials, including JSON event data and reports. This
-differs from `check --json`/`check --jsonl`, which retain unredacted subject data as documented above.
-`--raw` overrides forced colors but still masks credentials and escapes unsafe terminal controls;
-basic source gutters and tab expansion remain.
+## Contributing
 
-`[folder]` defaults to `.`, and the same engine runs with concurrency 1. Rule settings, gates, candidate
-file decisions, and filtered scopes appear outside evaluation cards. Each evaluation gets one bordered
-card with its rule, file/range, and scope metadata shown once in the header. Source excerpts (or grouped
-member sources), traces, requests, responses, and the result stay together inside that card. Accepted
-scope and group details move into their evaluation card rather than being repeated during selection.
+Before you contribute, install dependencies and run the project checks from the repository root:
 
-Inspect streams the card as evaluation proceeds. Errors close the card and preserve its already-written
-content; unfinished evaluations are marked incomplete rather than reported as passing or violating.
-Disabled rules, false gates, and selections with no subjects are explained without contacting Jev.
-Inspect exits `1` on a completed violation and `2` on error.
-
-Cards use the available terminal width, wrapping long paths and payload lines without truncating data.
-Section titles extend into muted horizontal dividers. Request and Response body labels and payloads
-are grey; source and result styling remain unchanged. AI results show `threshold` beside `probability`.
-Bold information headings, green successful states, red violations/errors, and yellow skipped/filtered
-states follow the color settings above. Card output without colors keeps the dividers, borders, and
-layout. Source line numbers, original Unicode, and credential redaction are preserved; JSON
-formatting retains original keys and numeric literals.
-
-`check --verbose` uses the same cards without enabling colors by default and preserves its configured
-concurrency. Concurrent evaluations are buffered separately by evaluation ID, then each completed card
-is emitted together so exchanges cannot interleave. Setup/file decisions still stream immediately;
-unfinished cards are flushed on failure. `--debug` remains compact event metadata.
-
-`[folder]` may be an absolute path or a sibling directory outside the invocation cwd, in which case it
-becomes an independent project root (the rule may live beside it). A `[folder]` inside the invocation cwd
-still obeys the reserved-source boundary: `old/`, `node_modules/`, `.rulekeeper/`, `.git/`, and a root
-`dist/`/`coverage/` are rejected as targets. The folder must exist as a directory.
-
-`help`, `help <command>`, and `--help` exit `0`; an unknown help target, unknown commands/options,
-and argument errors exit `2` (Commander `exitOverride`).
-Removed surfaces are **unknown, not ignored**: `stats`, `stats reset`, `--diff-only`, and `--base` all
-exit `2`. Piped output is plain unless color is explicitly forced; unsafe control characters in untrusted
-paths/source/messages are escaped.
-
-## Boundaries and isolation
-
-- **Current tree only.** There is no Git integration or revision/diff abstraction; no snapshot ports, and
-  no `.gitignore` inference.
-- **Traversal exclusions.** Selection and the file inventory skip symlinks and the directories `.git`,
-  `node_modules`, `.rulekeeper`, and `old`, plus a root-level `dist/` and `coverage/`. Explicit source
-  targets inside an excluded directory are errors, not overrides.
-  Exclusions use actual directory spelling and identity, not the caller's casing: on a case-insensitive
-  filesystem `OLD/...` cannot bypass an actual `old/`, while an actual uppercase `OLD/` remains eligible
-  even through a lowercase reader/custom-selector alias. Regular files with reserved directory names
-  remain eligible; glob matching itself remains case-sensitive.
-  Literal glob prefixes use physical descendant depth: leading `./` cannot bypass root `dist/` or
-  `coverage/` checks, and the project root itself is not classified by its own basename. Glob patterns
-  are not rewritten: `./`-prefixed patterns retain their existing matching behavior, while nested
-  generated directories remain eligible.
-- **Path boundary.** Helper paths must be root-relative and stay within the physical root; absolute
-  paths, `..` escapes, and symlink traversal are rejected. This is API consistency, not a security
-  boundary — trusted rule code can use `node:fs` itself.
-- **Archived implementation.** The previous YAML-rule implementation and its tests, Git/statistics code,
-  schema, benchmark tooling, and docs live under `old/`. Nothing in the active build, package, tests,
-  rule discovery, or default source traversal imports or enters it, and `old/` rules are rejected.
-- **Not rebuilt.** Statistics storage, Git/diff behavior, the `stats` command, and a benchmark CLI are
-  intentionally absent; benchmarking is not a command.
-
-## More examples
-
-**JSON scope with a key id, plus a custom check that reads a neighboring Project file:**
-
-```ts
-import {
-  Rule,
-  pass,
-  violation,
-  scopes,
-  type CheckResult,
-  type ProjectContext,
-  type Subject,
-} from 'rulekeeper';
-
-type Endpoint = { host: string; port: number };
-
-export default class EndpointInventory extends Rule<Endpoint> {
-  files = ['config/**/*.json'];
-  scope = scopes.json<Endpoint>({ path: '$.services[*]', key: '$.name' });
-
-  check = async (
-    subject: Subject<Endpoint>,
-    { project }: ProjectContext,
-  ): Promise<CheckResult> => {
-    if (subject.kind !== 'scope') return pass();
-    const allowed = await project.readYaml('config/allow.yaml');
-    return allowed.includes(subject.id)
-      ? pass()
-      : violation(`Unknown service "${subject.id}" at ${subject.filepath}`);
-  };
-}
+```sh
+npm ci
+npm test
+npm run typecheck
 ```
 
-**CSV source, folder grouping, and a conditional AI call inside a custom check:**
+Add or update tests for changes to rule behavior. The [rule-writing skill](skills/rulekeeper-new-rule/SKILL.md) explains how to create rules, add inline tests, and inspect rule behavior.
 
-```ts
-import {
-  Rule,
-  pass,
-  scopes,
-  type CheckContext,
-  type CheckResult,
-  type Grouping,
-  type Subject,
-} from 'rulekeeper';
+To reproduce CI's test scheduling, run `npm test -- --test-concurrency=4`. Test files stay isolated, with up to four running concurrently.
 
-export default class EnvMatrix extends Rule {
-  files = ['env/*.csv'];
-  scope = scopes.csv({ key: 'name' });
-  group: Grouping = 'folder';
+### Publishing to npm
 
-  check = async (subject: Subject, context: CheckContext): Promise<CheckResult> => {
-    // Contacts the provider only when this folder has an override file; otherwise stays offline.
-    if (!(await context.project.hasFiles('env/overrides.yaml'))) return pass();
-    const overrides = await context.project.readYaml('env/overrides.yaml');
-    const members = subject.kind === 'group' ? subject.members : [subject];
-    return context.ai({
-      rule: 'Every service in the matrix is documented in overrides.yaml.',
-      input: () => ({ overrides, services: members.map(member => member.id) }),
-      violationMessage: 'Undocumented service in the environment matrix',
-    });
-  };
-}
+CI runs typechecking and the complete test suite, including installing and exercising the packed CLI, on pushes to `main` and on pull requests. Feature-branch pushes do not trigger a separate run. Pushing a `v*` tag runs the same checks before publishing to npm. The tag must match `package.json` exactly, for example `v0.1.0` for version `0.1.0`. Stable versions use npm's `latest` tag; prereleases use `next`.
+
+One-time setup:
+
+1. Own the `alex-dbs` account or organization scope on npm. npm scope ownership is separate from the GitHub account `alex-dbs`.
+2. Publish the first version from a checked-out, tested release:
+
+   ```sh
+   npm login
+   npm ci
+   npm version 0.1.0 --no-git-tag-version
+   npm test
+   npm run typecheck
+   npm publish --access public
+   ```
+
+   Commit the updated `package.json` and `package-lock.json`. The first manual publish creates the package so its trusted publisher can be configured.
+3. In the npm package settings, add a [GitHub Actions trusted publisher](https://docs.npmjs.com/trusted-publishers/) for owner `alex-dbs`, repository `rulekeeper`, workflow filename `publish.yml`, with no environment name. Allow direct `npm publish`. The workflow uses OIDC; no `NPM_TOKEN` secret is needed.
+
+For subsequent releases, start from a clean checkout with the version changes on your release branch:
+
+```sh
+npm version patch
+git push --follow-tags
 ```
 
-The second example supplies its own `AiOptions.input`: the parsed override documents (`readYaml` yields one
-value per document) and the collected service names both travel with the request, so editing
-`overrides.yaml` changes what the provider sees. Without an explicit input the framework projects the
-grouped scopes alone, and the documented services are never sent. The first example is a deterministic
-check and never contacts the provider.
+If the GitHub repository is renamed or transferred, update both `repository.url` in `package.json` and the npm trusted publisher configuration.
 
-## Release notes
+## License
 
-- Scope-selector results and rule `files`/`exclude` lists reject missing or inherited-only array
-  entries; an empty scope result still skips normally, and disabled rules still validate fully.
-- Project readers, stat, literal glob prefixes, targets, and custom selection enforce reserved-directory
-  identity using actual filesystem spelling without rejecting aliases of eligible uppercase entries.
-- Literal-prefix validation ignores the project root itself and uses physical directory depth, so
-  leading `./` cannot bypass root-generated exclusions or reject an independent root by its basename.
-  Glob matching remains unchanged.
-- AI good/bad example arrays reject missing or inherited-only entries eagerly and at runtime before
-  requesting a decision; empty and omitted lists remain valid.
-- Structured selector paths and CSV headers/delimiters reject explicit `null` instead of silently
-  defaulting. CSV delimiters accept one Unicode code point, including supplementary characters, with
-  exact keyed/multiline UTF-8 source locations.
-- Successful implicit help commands now exit `0`, matching `--help`; invalid help targets remain errors.
-- `check` identifies alternate-case root spellings by filesystem identity and canonicalizes target
-  spelling before selection and reserved-directory checks. Root-ancestor aliases are allowed only
-  when traversal reaches the project root; aliases jumping into a subdirectory and in-root symlinks
-  remain rejected. Actual uppercase entry names are preserved rather than lowercased.
-- Valid wildcard and recursive JSON/YAML queries retain exact RFC 6901 pointer IDs and source text
-  for data keys such as `~`, `^`, and `@name()` (`/~0`, `/^`, and `/@name()`; YAML prefixes the document
-  index). Distinct YAML alias occurrences keep distinct paths, including recursive scalar queries
-  such as `$..v`. This does not change JSONPath operator syntax.
-- Scope data arrays and capture arrays must be dense: holes are rejected instead of becoming `null`
-  entries in reports, including holes nested inside scope data.
-- Every `CheckResult` is projected to its plain declared fields (`status`, `message`, `probability`,
-  `threshold`, `model`); accessor-backed values are materialized, and message-free violations retain
-  their probability, threshold, and model without adding generated message text.
-- Custom `select` subjects are projected to validated declared fields; `captures` become a plain object
-  of strings or string arrays, and `lines` are materialized. Extra fields returned by a scope selector
-  cannot overwrite framework-owned `kind` or `filepath`.
-- Protobuf scope parsing skips prototype-named unknown fields (for example `constructor`) instead of
-  matching an inherited standard verb.
-- Diagnostics redact the configured `TYPESAFE_API_KEY` in its literal, trimmed, and JSON-escaped forms.
-  Short keys over-redact dynamic text on purpose; the `rulekeeper:` prefix itself is never redacted.
-- JSON values must be finite and plain: a value carrying a `toJSON` serialization hook is rejected
-  instead of being silently serialized.
-- Source fidelity: CSV fields are located by byte offset, so multibyte text keeps its exact `source`, and
-  a YAML document whose root is a tagged scalar is preserved rather than treated as empty.
-- Rule discovery and explicit rule paths reject anything under an archived `old/` directory.
+This project is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).

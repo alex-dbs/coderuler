@@ -20,19 +20,19 @@ import {
 const sandbox = createSandbox('rulekeeper-cli-output-');
 after(() => sandbox.cleanup());
 
-const MIXED_RULE = `import { Rule, pass, violation } from 'rulekeeper';
+const MIXED_RULE = `import { Rule, pass, violation } from '@alex-dbs/rulekeeper';
 export default class Mixed extends Rule {
   files = ['items/*.txt'];
   check = subject => subject.source.includes('BAD') ? violation('custom rejection') : pass();
 }
 `;
-const CLEAN_RULE = `import { Rule, pass } from 'rulekeeper';
+const CLEAN_RULE = `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class Clean extends Rule {
   files = ['src/clean.txt'];
   check = pass;
 }
 `;
-const SKIPPED_RULE = `import { Rule, pass } from 'rulekeeper';
+const SKIPPED_RULE = `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class Skipped extends Rule {
   enabled = false;
   files = ['src/clean.txt'];
@@ -149,7 +149,7 @@ Object.defineProperty(performance, 'now', { configurable: true, value: () => ela
 export function advance(durationMs) { elapsed += durationMs; }
 `);
   for (const [name, selectionMs, evaluationMs] of [['first', 7, 11], ['second', 19, 23]] as const) {
-    writeFile(join(target.cwd, '.rulekeeper', `${name}.rule.ts`), `import { Rule, pass } from 'rulekeeper';
+    writeFile(join(target.cwd, '.rulekeeper', `${name}.rule.ts`), `import { Rule, pass } from '@alex-dbs/rulekeeper';
 import { advance } from './timing-clock.mjs';
 export default class Timed extends Rule {
   files = ['src/clean.txt'];

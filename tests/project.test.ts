@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { lstat, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join } from 'node:path';
+import { chmod, lstat, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, matchesGlob } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -167,6 +167,41 @@ test('glob returns existing eligible files in lexical order and skips excluded t
     'nested/b.txt',
     'nested/deep/c.txt',
   ]);
+});
+
+test('literal-prefix globs leave unrelated unreadable directories alone', async (t) => {
+  if (process.getuid?.() === 0) return t.skip('root can read directories without permission');
+  const root = await makeProjectRoot('glob-prefix');
+  const unrelated = join(root, 'unreadable');
+  await mkdir(unrelated);
+  await chmod(unrelated, 0);
+  try {
+    assert.deepEqual(await createProject(root).glob('nested/**/*.txt'), [
+      'nested/b.txt',
+      'nested/deep/c.txt',
+    ]);
+  } finally {
+    await chmod(unrelated, 0o700);
+  }
+});
+
+test('scoped glob discovery preserves matching, overlap, and lexical ordering', async () => {
+  const root = await makeProjectRoot('glob-patterns');
+  const eligible = ['a.txt', 'external/excluded.txt', 'nested/b.txt', 'nested/deep/c.txt'];
+  const patterns = [
+    ['nested/**/*.txt'],
+    ['nested/b.txt'],
+    ['nested/{b,deep/c}.txt'],
+    ['@(nested|external)/**/*.txt'],
+    ['n?sted/**/*.txt'],
+    ['nested/**/*.txt', 'nested/deep/*.txt', 'a.txt'],
+    ['missing/**/*.txt', 'external/*.txt'],
+    ['./nested/**/*.txt'],
+  ];
+  for (const list of patterns) {
+    const expected = eligible.filter(file => list.some(pattern => matchesGlob(file, pattern)));
+    assert.deepEqual(await createProject(root).glob(list), expected, JSON.stringify(list));
+  }
 });
 
 test('skips generated directories only at the project root', async () => {
@@ -388,14 +423,9 @@ test('readCsv reports malformed records and invalid options', async () => {
   await expectReject('quote delimiter', () => project.readCsv('rows.csv', { delimiter: '"' }));
 });
 
-test('reuses one lazy file inventory and one source text cache per run', async () => {
+test('caches source text per run', async () => {
   const root = await makeProjectRoot('cache');
   const project = createProject(root);
-  const expected = ['a.txt', 'external/excluded.txt', 'nested/b.txt', 'nested/deep/c.txt'];
-
-  assert.deepStrictEqual(await project.glob('**/*.txt'), expected);
-  await writeFile(join(root, 'late.txt'), 'late');
-  assert.deepStrictEqual(await project.glob('**/*.txt'), expected);
 
   assert.equal(await project.readText('a.txt'), 'alpha');
   await writeFile(join(root, 'a.txt'), 'changed');
@@ -871,7 +901,7 @@ test('CLI custom selection rejects a casefold alias into the archived tree', asy
   }
   writeSandboxFile(join(target.cwd, 'old/legacy.txt'), 'legacy');
   for (const filepath of ['old/legacy.txt', 'OLD/legacy.txt']) {
-    writeSandboxFile(join(target.cwd, '.rulekeeper/custom.rule.ts'), `import { Rule, pass } from 'rulekeeper';
+    writeSandboxFile(join(target.cwd, '.rulekeeper/custom.rule.ts'), `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class Custom extends Rule {
   select = () => [{ kind: 'scope' as const, filepath: '${filepath}', id: '$', source: 'legacy' }];
   check = pass;
@@ -890,7 +920,7 @@ test('CLI custom selection accepts a casefold alias into an actual uppercase eli
     return;
   }
   writeSandboxFile(join(target.cwd, 'OLD/file.txt'), 'eligible');
-  writeSandboxFile(join(target.cwd, '.rulekeeper/custom.rule.ts'), `import { Rule, pass } from 'rulekeeper';
+  writeSandboxFile(join(target.cwd, '.rulekeeper/custom.rule.ts'), `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class Custom extends Rule {
   select = () => [{ kind: 'scope' as const, filepath: 'old/file.txt', id: '$', source: 'eligible' }];
   check = pass;

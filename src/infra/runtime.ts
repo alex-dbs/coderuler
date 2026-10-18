@@ -4,8 +4,12 @@ import { escapeDiagnostic, runProgram, type CliServices } from '../adapter/cli/p
 import { terminalCapabilities } from '../adapter/cli/progress.js';
 import { createRedactor } from '../adapter/cli/reports.js';
 import { createProject, resolveTarget } from '../adapter/filesystem/project.js';
+import { runRuleTests } from '../adapter/filesystem/rule-tests.js';
 import { createRuleLoader, resolveRuleSelector } from '../adapter/filesystem/rules.js';
-import { executeRules, validateRules } from '../app/execute.js';
+import { changedFiles } from '../adapter/git/changes.js';
+import { createGithubCommenter } from '../adapter/github/comments.js';
+import { createSkillManager } from '../adapter/skills/cli.js';
+import { executeRules } from '../app/execute.js';
 import { createDecisionResolver } from './settings.js';
 
 const EXIT_FAILURE = 2;
@@ -24,7 +28,7 @@ export function createServices(
   env: Readonly<Record<string, string | undefined>>,
 ): CliServices {
   const loader = createRuleLoader();
-  const redact = createRedactor([env.TYPESAFE_API_KEY]);
+  const redact = createRedactor([env.TYPESAFE_API_KEY, env.GITHUB_TOKEN]);
   return {
     cwd,
     redact,
@@ -35,20 +39,27 @@ export function createServices(
       get stdoutColumns() { return process.stdout.columns; },
     }, env),
 
-    async loadRules(selection) {
-      return validateRules(loader, selection);
-    },
+    loadRules: selection => loader.load(selection),
 
     runRules: executeRules,
+
+    testRules: (rules, onResult, timeoutMs, concurrency, includeAI) =>
+      runRuleTests(rules, onResult, timeoutMs, concurrency, includeAI),
 
     createProject,
 
     resolveTarget,
 
+    changedFiles,
+
+    commentOnPullRequest: createGithubCommenter(env),
+
     resolveRuleSelector,
 
-    decisionResolver(thresholdOverride) {
-      return createDecisionResolver(env, thresholdOverride);
+    manageSkill: createSkillManager(cwd, env),
+
+    decisionResolver(thresholdOverride, pricingOverrides) {
+      return createDecisionResolver(env, thresholdOverride, pricingOverrides);
     },
 
     write(text) {
@@ -67,7 +78,7 @@ export async function runCli(argv: readonly string[]): Promise<number> {
     loadEnvironment(cwd);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const redact = createRedactor([process.env.TYPESAFE_API_KEY]);
+    const redact = createRedactor([process.env.TYPESAFE_API_KEY, process.env.GITHUB_TOKEN]);
     process.stderr.write(`rulekeeper: ${redact(escapeDiagnostic(message))}\n`);
     return EXIT_FAILURE;
   }

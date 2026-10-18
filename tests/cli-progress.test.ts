@@ -4,10 +4,12 @@ import { test } from 'node:test';
 import { runProgram, type CliServices } from '../dist/adapter/cli/program.js';
 import { createProgress, terminalCapabilities } from '../dist/adapter/cli/progress.js';
 import type { RuleReport } from '../dist/app/ports.js';
+import type { RuleTestResult } from '../dist/app/rule-tests.js';
 import { createServices } from '../dist/infra/runtime.js';
 
 const TTY = { stdoutIsTTY: true, stderrIsTTY: true, columns: 80 };
 const REPORT: RuleReport = { name: 'example', ruleFile: '/rules/example.rule.ts', status: 'pass', durationMs: 4.25, evaluations: [] };
+const TEST_RESULT: RuleTestResult = { ruleName: 'example', name: 'first case', expected: 'pass', actual: 'pass', durationMs: 12.5 };
 
 function fixture(overrides: Partial<CliServices> = {}) {
   const stdout: string[] = [];
@@ -92,6 +94,33 @@ test('progress fits narrow terminals and adapts to resizing', () => {
   } finally {
     progress.stop();
   }
+});
+
+test('progress messages reset phase rendering and clearing preserves the animation timer', context => {
+  context.mock.timers.enable({ apis: ['setInterval'] });
+  const chunks: string[] = [];
+  const progress = createProgress(text => { chunks.push(text); });
+  try {
+    progress.emit({ type: 'progress', phase: 'selection', completed: 1, total: 3 });
+    progress.message('Running tests');
+    assert.match(chunks.at(-1)!, /Running tests/);
+    assert.doesNotMatch(chunks.at(-1)!, /1\/3|\[[#-]+\]/);
+    progress.clear();
+    assert.equal(chunks.at(-1), '\r\u001b[2K');
+    const count = chunks.length;
+    progress.clear();
+    assert.equal(chunks.length, count);
+    context.mock.timers.tick(80);
+    assert.equal(chunks.length, count + 1);
+    assert.match(chunks.at(-1)!, /Running tests/);
+  } finally {
+    progress.stop();
+  }
+  const count = chunks.length;
+  progress.message('Too late');
+  progress.clear();
+  context.mock.timers.tick(1000);
+  assert.equal(chunks.length, count);
 });
 
 test('interactive check starts feedback before target and rule loading and clears before its summary', async context => {
@@ -190,6 +219,187 @@ test('check enables summary colors only when injected terminal capabilities allo
   assert.equal(plain.stdout.join('').includes('\u001b'), false);
   assert.equal(colored.stdout.join('').includes('\u001b'), true);
   assert.equal(colored.stdout.join('').replace(/\u001b\[[0-9;]*m/g, ''), plain.stdout.join(''));
+});
+
+test('interactive tests animate while pending and clear each result before resuming on the same timer', async context => {
+  context.mock.timers.enable({ apis: ['setInterval'] });
+  const intervals = context.mock.method(globalThis, 'setInterval');
+  const pending = Promise.withResolvers<void>();
+  const entered = Promise.withResolvers<void>();
+  const second = { ...TEST_RESULT, name: 'second case' };
+  const third = { ...TEST_RESULT, ruleName: 'another-rule', name: 'third case' };
+  const target = fixture();
+  const services: CliServices = {
+    ...target.services,
+    loadRules: async () => {
+      assert.ok(target.stderr.length > 0);
+      assert.equal(target.stdout.length, 0);
+      context.mock.timers.tick(160);
+      assert.ok(target.stderr.length > 1);
+      return [];
+    },
+    testRules: async (_rules, onResult) => {
+      assert.notEqual(target.stderr.at(-1), '\r\u001b[2K');
+      onResult(TEST_RESULT, false);
+      const firstOutput = target.stdout.join('');
+      assert.equal(firstOutput.split('\n')[0], TEST_RESULT.ruleName);
+      assert.match(firstOutput, /^├─ PASS /m);
+      assert.ok(firstOutput.includes(TEST_RESULT.name));
+      assert.equal(firstOutput.includes(second.name), false);
+      assert.equal(firstOutput.includes(third.ruleName), false);
+      assert.notEqual(target.stderr.at(-1), '\r\u001b[2K');
+      entered.resolve();
+      await pending.promise;
+      onResult(second, true);
+      const secondOutput = target.stdout.join('');
+      assert.match(secondOutput, /^└─ PASS /m);
+      assert.ok(secondOutput.includes(second.name));
+      assert.equal(secondOutput.split('\n').filter(line => line === TEST_RESULT.ruleName).length, 1);
+      assert.notEqual(target.stderr.at(-1), '\r\u001b[2K');
+      onResult(third, true);
+      const thirdOutput = target.stdout.join('');
+      assert.ok(thirdOutput.includes(`\n\n${third.ruleName}\n`));
+      assert.ok(thirdOutput.includes(`└─ PASS ${third.name}`));
+      assert.notEqual(target.stderr.at(-1), '\r\u001b[2K');
+      return [TEST_RESULT, second, third];
+    },
+    write: text => {
+      assert.equal(target.stderr.at(-1), '\r\u001b[2K');
+      target.stdout.push(text);
+    },
+  };
+  const running = runProgram(['test'], services);
+  await entered.promise;
+  const firstFrame = target.stderr.at(-1);
+  const frames = target.stderr.length;
+  context.mock.timers.tick(80);
+  assert.equal(target.stderr.length, frames + 1);
+  assert.notEqual(target.stderr.at(-1), firstFrame);
+  assert.equal(target.stdout.join('').includes(second.name), false);
+  pending.resolve();
+  assert.equal(await running, 0);
+  const sections = target.stdout.join('').trimEnd().split('\n\n');
+  assert.equal(sections.length, 3);
+  assert.equal(sections[2]!.includes('─'), false);
+  assert.equal(target.stderr.at(-1), '\r\u001b[2K');
+  assert.equal(intervals.mock.callCount(), 1);
+  const count = target.stderr.length;
+  context.mock.timers.tick(1000);
+  assert.equal(target.stderr.length, count);
+});
+
+test('interactive tests clear and cancel animation on load errors or errors after a completed case', async context => {
+  context.mock.timers.enable({ apis: ['setInterval'] });
+  for (const stage of ['loading', 'testing'] as const) {
+    const target = fixture();
+    const services: CliServices = {
+      ...target.services,
+      loadRules: async () => {
+        context.mock.timers.tick(80);
+        if (stage === 'loading') throw new Error('intentional load failure');
+        return [];
+      },
+      testRules: async (_rules, onResult) => {
+        onResult(TEST_RESULT, false);
+        assert.match(target.stdout.join(''), /^├─ PASS /m);
+        assert.ok(target.stdout.join('').includes(TEST_RESULT.name));
+        context.mock.timers.tick(160);
+        throw new Error('intentional later failure');
+      },
+      write: text => {
+        assert.equal(target.stderr.at(-1), '\r\u001b[2K');
+        target.stdout.push(text);
+      },
+    };
+    assert.equal(await runProgram(['test'], services), 2);
+    const output = target.stdout.join('');
+    if (stage === 'loading') assert.equal(output, '');
+    else {
+      assert.equal(output.trimEnd().split('\n').length, 2);
+      assert.equal(output.includes('└─'), false);
+      assert.equal(output.includes('\n\n'), false);
+    }
+    assert.equal(target.stderr.at(-2), '\r\u001b[2K');
+    assert.match(target.stderr.at(-1)!, /intentional.*failure/);
+    const count = target.stderr.length;
+    context.mock.timers.tick(1000);
+    assert.equal(target.stderr.length, count);
+  }
+});
+
+test('noninteractive tests stream results without starting an animation', async context => {
+  context.mock.timers.enable({ apis: ['setInterval'] });
+  const intervals = context.mock.method(globalThis, 'setInterval');
+  for (const terminal of [undefined, { color: false, interactive: false, columns: 80 }]) {
+    const target = fixture();
+    const { terminal: _terminal, ...withoutTerminal } = target.services;
+    const services: CliServices = {
+      ...withoutTerminal,
+      ...(terminal === undefined ? {} : { terminal }),
+      testRules: async (_rules, onResult) => {
+        onResult(TEST_RESULT, true);
+        assert.match(target.stdout.join(''), /^└─ PASS /m);
+        assert.ok(target.stdout.join('').includes(TEST_RESULT.name));
+        context.mock.timers.tick(160);
+        assert.equal(target.stderr.join(''), '');
+        return [TEST_RESULT];
+      },
+    };
+    assert.equal(await runProgram(['test'], services), 0);
+    context.mock.timers.tick(1000);
+    assert.equal(target.stderr.join(''), '');
+    assert.equal(target.stdout.join('').includes('\u001b'), false);
+    assert.equal(target.stdout.join('').trimEnd().split('\n\n').length, 2);
+  }
+  assert.equal(intervals.mock.callCount(), 0);
+});
+
+test('invalid test timeouts fail before loading or running any case', async () => {
+  for (const duration of [
+    '0ms', '-1s', '1', '1h', 'NaNs', 'Infinitys', '1e309s',
+    '2147483648ms', '2147484s', '35792m', `${'9'.repeat(400)}ms`,
+  ]) {
+    let loaded = false;
+    let tested = false;
+    const target = fixture({
+      terminal: { color: false, interactive: false },
+      loadRules: async () => { loaded = true; return []; },
+      testRules: async () => { tested = true; return []; },
+    });
+    assert.equal(await runProgram(['test', '--timeout', duration], target.services), 2, duration);
+    assert.equal(loaded, false, duration);
+    assert.equal(tested, false, duration);
+    assert.equal(target.stdout.join(''), '', duration);
+    assert.match(target.stderr.join(''), /must be a positive duration/);
+  }
+});
+
+test('test summary sums case durations rather than discovery, rendering, or elapsed CLI time', async context => {
+  let clock = 0;
+  context.mock.method(performance, 'now', () => clock);
+  const timeout: RuleTestResult = { ...TEST_RESULT, actual: 'timeout', durationMs: 125 };
+  const second: RuleTestResult = { ...TEST_RESULT, name: 'second case', durationMs: 875 };
+  const target = fixture({ terminal: { color: false, interactive: false } });
+  const services: CliServices = {
+    ...target.services,
+    loadRules: async () => { clock += 30_000; return []; },
+    testRules: async (_rules, onResult) => {
+      clock += 20_000;
+      onResult(timeout, false);
+      clock += 40_000;
+      onResult(second, true);
+      clock += 50_000;
+      return [timeout, second];
+    },
+    write: text => { clock += 10_000; target.stdout.push(text); },
+  };
+  assert.equal(await runProgram(['test'], services), 1);
+  const output = target.stdout.join('');
+  assert.match(output, /├─ FAIL .*actual timeout.*\(125\.00ms\)/);
+  assert.match(output, /└─ PASS second case \(875\.00ms\)/);
+  assert.match(output, /1 passed, 1 failed  Time: 1\.00s/);
+  assert.ok(clock > 1_000);
+  assert.equal(target.stderr.join(''), '');
 });
 
 test('CLI card rendering receives live widths, preserves concurrency, and closes partial output in finally', async () => {

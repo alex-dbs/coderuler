@@ -1,6 +1,7 @@
 import type { RuleReport, RunEvent } from '../../app/ports.js';
 import type { CheckResult, GroupSubject, JsonValue, ScopeSubject, Subject } from '../../app/rule.js';
 import type { InspectRenderer, TextRedactor, TextWriter } from './reports.js';
+import { createUsageTracker } from './inspect-usage.js';
 
 interface InspectJsonOptions {
   readonly write: TextWriter;
@@ -63,6 +64,7 @@ function redactResult(result: CheckResult, redact: TextRedactor): CheckResult {
     ...result,
     ...(result.message === undefined ? {} : { message: redact(result.message) }),
     ...(result.model === undefined ? {} : { model: redact(result.model) }),
+    ...(result.usage === undefined ? {} : { usage: { ...result.usage } }),
   };
 }
 
@@ -104,6 +106,8 @@ function redactEvent(event: RunEvent, redact: TextRedactor): RunEvent {
       return { ...event, name: redact(event.name), subject: redactGroup(event.subject, redact) };
     case 'evaluation':
       return { ...event, name: redact(event.name), subject: redactSubject(event.subject, redact) };
+    case 'usage':
+      return { ...event, name: redact(event.name), subject: redactSubject(event.subject, redact), usage: { ...event.usage } };
     case 'request':
     case 'response':
       return { ...event, name: redact(event.name), subject: redactSubject(event.subject, redact), body: redact(event.body) };
@@ -133,6 +137,7 @@ function redactEvent(event: RunEvent, redact: TextRedactor): RunEvent {
 
 export function createInspectJsonRenderer(options: InspectJsonOptions): InspectRenderer {
   const events: RunEvent[] = [];
+  const usage = createUsageTracker();
   let finished = false;
   const record = (value: unknown): void => options.write(`${JSON.stringify(value)}\n`);
 
@@ -140,20 +145,26 @@ export function createInspectJsonRenderer(options: InspectJsonOptions): InspectR
     emit: event => {
       if (finished) return;
       const snapshot = redactEvent(event, options.redact);
+      usage.emit(event);
       if (options.format === 'jsonl') record({ type: 'event', event: snapshot });
       else events.push(snapshot);
     },
     finish: (reports: readonly RuleReport[], error?: string) => {
       if (finished) return;
       finished = true;
+      const summary = usage.summary();
       if (options.format === 'jsonl') {
+        if (error === undefined) {
+          for (const report of reports) record({ type: 'report', report: redactReport(report, options.redact) });
+        }
+        if (summary !== undefined) record({ type: 'summary', usage: summary });
         if (error !== undefined) record({ type: 'error', message: options.redact(error) });
-        else for (const report of reports) record({ type: 'report', report: redactReport(report, options.redact) });
       } else {
         options.write(`${JSON.stringify({
           events,
           reports: error === undefined ? reports.map(report => redactReport(report, options.redact)) : [],
           ...(error === undefined ? {} : { error: options.redact(error) }),
+          ...(summary === undefined ? {} : { usage: summary }),
         }, null, 2)}\n`);
       }
     },

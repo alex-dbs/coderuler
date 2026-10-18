@@ -10,8 +10,12 @@ import {
   renderCheckJson,
   renderCheckJsonl,
   renderCheckSummary,
+  renderRuleTestHeading,
+  renderRuleTestResult,
+  renderRuleTestSummary,
 } from '../dist/adapter/cli/reports.js';
 import type { RuleReport, RunEvent } from '../src/app/ports.js';
+import type { RuleTestResult } from '../src/app/rule-tests.js';
 import type { ScopeSubject } from '../src/app/rule.js';
 
 const identity = (text: string): string => text;
@@ -37,6 +41,90 @@ function violation(subject: RuleReport['evaluations'][number]['subject'], messag
     evaluations: [{ subject, result: message === undefined ? { status: 'violation' } : { status: 'violation', message } }],
   };
 }
+
+test('test rows and summaries reuse evaluation duration scaling at unit boundaries', () => {
+  for (const [durationMs, formatted] of [
+    [0, '0.00ms'],
+    [12.5, '12.50ms'],
+    [999, '999.00ms'],
+    [1_000, '1.00s'],
+    [59_999, '60.00s'],
+    [60_000, '1.00min'],
+    [3_600_000, '1.00h'],
+    [86_400_000, '1.00d'],
+  ] as const) {
+    const result: RuleTestResult = {
+      ruleName: 'example', name: 'case', expected: 'pass', actual: 'pass', durationMs,
+    };
+    const row = renderRuleTestResult(result, identity, false, true);
+    const summary = renderRuleTestSummary(1, 0, durationMs, identity, false);
+    assert.ok(row.endsWith(` (${formatted})\n`), row);
+    assert.ok(summary.includes(`Time: ${formatted}`), summary);
+    assert.ok(renderCheckSummary([], identity, { durationMs }).includes(`Time: ${formatted}`));
+  }
+});
+
+test('test timing stays dim while failures, tree branches, and escaped names retain their styles', () => {
+  const result: RuleTestResult = {
+    ruleName: 'unsafe\u001b[31m', name: 'case\u0007', expected: 'pass', actual: 'timeout', durationMs: 10_000,
+  };
+  const plain = renderRuleTestResult(result, identity, false, false);
+  const colored = renderRuleTestResult(result, identity, true, false);
+  assert.match(plain, /^├─ FAIL case\\u0007 \(expected pass, actual timeout\)/);
+  assert.ok(plain.endsWith(' (10.00s)\n'));
+  assert.equal(stripVTControlCharacters(colored), plain);
+  assert.ok(colored.includes('\u001b[31mFAIL\u001b[39m'));
+  assert.ok(colored.includes('\u001b[2m (10.00s)\u001b[22m'));
+  assert.equal(stripVTControlCharacters(renderRuleTestHeading(result.ruleName, identity, true)), 'unsafe\\u001b[31m\n');
+  const summary = renderRuleTestSummary(0, 1, result.durationMs, identity, false);
+  assert.equal(stripVTControlCharacters(renderRuleTestSummary(0, 1, result.durationMs, identity, true)), summary);
+});
+
+test('numeric test secrets redact fields, counts, and timings before ANSI styling', () => {
+  const redact = createRedactor(['1']);
+  const result: RuleTestResult = {
+    ruleName: 'rule1', name: 'case1', expected: 'pass', actual: 'violation', durationMs: 1,
+  };
+  const heading = renderRuleTestHeading(result.ruleName, redact, false);
+  const coloredHeading = renderRuleTestHeading(result.ruleName, redact, true);
+  assert.equal(stripVTControlCharacters(coloredHeading), heading);
+  assert.ok(coloredHeading.includes('\u001b[1mrule[REDACTED]\u001b[22m'), coloredHeading);
+  for (const lastInRule of [false, true]) {
+    const plain = renderRuleTestResult(result, redact, false, lastInRule);
+    const colored = renderRuleTestResult(result, redact, true, lastInRule);
+    assert.equal(stripVTControlCharacters(colored), plain);
+    assert.ok(!plain.includes('1'), plain);
+    assert.ok(plain.includes('case[REDACTED]'), plain);
+    assert.ok(colored.includes('\u001b[31mFAIL\u001b[39m'), colored);
+    assert.ok(colored.includes(`\u001b[2m${lastInRule ? '└─ ' : '├─ '}\u001b[22m`), colored);
+    assert.ok(colored.includes('\u001b[2m ([REDACTED].00ms)\u001b[22m'), colored);
+  }
+  const summary = renderRuleTestSummary(1, 11, 1, redact, false);
+  const coloredSummary = renderRuleTestSummary(1, 11, 1, redact, true);
+  assert.equal(stripVTControlCharacters(coloredSummary), summary);
+  assert.ok(!summary.includes('1'), summary);
+  assert.ok(coloredSummary.includes('\u001b[32m[REDACTED] passed\u001b[39m'), coloredSummary);
+  assert.ok(coloredSummary.includes('\u001b[31m[REDACTED][REDACTED] failed\u001b[39m'), coloredSummary);
+  assert.ok(summary.includes('Time: [REDACTED].00ms'), summary);
+});
+
+test('test credentials are redacted before escaping names and mismatch details', () => {
+  const credential = 'token\u001b[31mvalue';
+  const redact = createRedactor([credential, 'pass', 'timeout']);
+  const result: RuleTestResult = {
+    ruleName: credential, name: `case ${credential}\u0007`, expected: 'pass', actual: 'timeout', durationMs: 0,
+  };
+  for (const color of [false, true]) {
+    const heading = stripVTControlCharacters(renderRuleTestHeading(result.ruleName, redact, color));
+    const row = stripVTControlCharacters(renderRuleTestResult(result, redact, color, true));
+    assert.ok(heading.includes('[REDACTED]'), heading);
+    assert.ok(row.includes('case [REDACTED]\\u0007'), row);
+    assert.ok(row.includes('expected [REDACTED], actual [REDACTED]'), row);
+    for (const secret of ['token', 'value', 'pass', 'timeout']) {
+      assert.ok(!`${heading}${row}`.includes(secret), row);
+    }
+  }
+});
 
 test('plain diagnostic preserves Unicode and expands source tabs at four-column stops', () => {
   const report = violation(scope('\tconst café = "你好 👋";\r\n\tif (café) {\n\t\t挨拶(café);'));

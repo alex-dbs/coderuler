@@ -1,7 +1,10 @@
 export { Rule } from './app/rule.js';
+export { test } from './app/rule-tests.js';
+export type { RuleTestCase } from './app/rule-tests.js';
 export type {
   AiExamples,
   AiOptions,
+  AiUsage,
   Awaitable,
   CheckContext,
   CheckResult,
@@ -19,6 +22,9 @@ export type {
   SelectionContext,
   SourceFile,
   Subject,
+  TokenPricing,
+  TokenUsage,
+  ViolationLocation,
 } from './app/rule.js';
 
 export { ai, pass, regex, violation } from './app/evaluators.js';

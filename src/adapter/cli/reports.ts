@@ -1,11 +1,15 @@
 import { Buffer } from 'node:buffer';
-import { styleText } from 'node:util';
+import { stripVTControlCharacters, styleText } from 'node:util';
 
 import { applyEdits, format, visit } from 'jsonc-parser';
 import stringWidth from 'string-width';
 
 import type { LoadedRule, RuleReport, RunEvent } from '../../app/ports.js';
-import type { JsonValue, ScopeSubject, Subject } from '../../app/rule.js';
+import type { RuleTestResult } from '../../app/rule-tests.js';
+import type { AiUsage, JsonValue, ScopeSubject, Subject } from '../../app/rule.js';
+import { addUsage } from '../../app/usage.js';
+import type { ViolationComment } from '../../app/violation-comments.js';
+import { createUsageTracker } from './inspect-usage.js';
 
 const MAX_VIOLATIONS = 10;
 const MAX_SOURCE_LINES = 5;
@@ -50,6 +54,40 @@ export function escapeText(text: string): string {
     CONTROL_CHARACTERS,
     character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`,
   );
+}
+
+export function renderRuleTestHeading(ruleName: string, redact: TextRedactor, color: boolean): string {
+  return `${paint(escapeText(redact(ruleName)), 'bold', color)}\n`;
+}
+
+export function renderRuleTestResult(
+  result: RuleTestResult,
+  redact: TextRedactor,
+  color: boolean,
+  lastInRule: boolean,
+): string {
+  const safe = (text: string): string => escapeText(redact(text));
+  const matches = result.expected === result.actual;
+  const label = paint(safe(matches ? 'PASS' : 'FAIL'), matches ? 'green' : 'red', color);
+  const branch = paint(lastInRule ? '└─ ' : '├─ ', 'dim', color);
+  const detail = matches
+    ? ''
+    : safe(` (expected ${result.expected}, actual ${result.actual})`);
+  const duration = paint(safe(` (${formatDuration(result.durationMs)})`), 'dim', color);
+  return `${branch}${label} ${safe(result.name)}${detail}${duration}\n`;
+}
+
+export function renderRuleTestSummary(
+  passed: number,
+  failed: number,
+  durationMs: number,
+  redact: TextRedactor,
+  color: boolean,
+): string {
+  const safe = (text: string): string => escapeText(redact(text));
+  const passing = paint(safe(`${passed} passed`), 'green', color);
+  const failing = paint(safe(`${failed} failed`), failed === 0 ? 'dim' : 'red', color);
+  return `${passing}, ${failing}${safe(`  Time: ${formatDuration(durationMs)}`)}\n`;
 }
 
 export function createRedactor(values: readonly (string | undefined)[]): TextRedactor {
@@ -160,6 +198,7 @@ export function createMetadataRenderer(
   redact: TextRedactor,
 ): (event: RunEvent) => void {
   return event => {
+    if (event.type === 'usage') return;
     write(`${redact(metadataLine(event))}\n`);
   };
 }
@@ -195,6 +234,8 @@ function metadataLine(event: RunEvent): string {
       return `response ${escapeText(event.name)} ${subjectLabel(event.subject)} HTTP ${
         event.status
       } ${Buffer.byteLength(event.body, 'utf8')} bytes`;
+    case 'usage':
+      return `usage ${escapeText(event.name)} ${subjectLabel(event.subject)} calls=${event.usage.calls}`;
     case 'result':
       return `result ${escapeText(event.name)} ${subjectLabel(event.subject)} ${event.result.status}`;
     case 'trace': {
@@ -341,9 +382,10 @@ export interface WalkthroughRenderer {
 interface EvaluationCard {
   readonly width: number;
   readonly lines: string[];
+  usage?: AiUsage;
 }
 
-export function createWalkthroughRenderer(options: WalkthroughOptions): WalkthroughRenderer {
+export function createWalkthroughRenderer(options: WalkthroughOptions, inspectUsage = false): WalkthroughRenderer {
   const { write, headings, redact } = options;
   const raw = options.raw === true;
   const color = options.color === true && !raw;
@@ -389,6 +431,9 @@ export function createWalkthroughRenderer(options: WalkthroughOptions): Walkthro
   const close = (id: number, incomplete = false): void => {
     const card = cards.get(id)!;
     if (incomplete) append(card, section(card, 'Incomplete', [`  ${field('status', 'incomplete', 'yellow')}`]));
+    if (inspectUsage && card.usage !== undefined) {
+      append(card, section(card, 'AI Usage', usageFields(card.usage).map(([label, value]) => `  ${field(label, value)}`)));
+    }
     if (buffered) write(border(card, true) + card.lines.join('') + border(card, false) + '\n');
     else write(border(card, false) + '\n');
     cards.delete(id);
@@ -449,6 +494,14 @@ export function createWalkthroughRenderer(options: WalkthroughOptions): Walkthro
   return {
     emit: event => {
       if (finished) return;
+      if (event.type === 'usage') {
+        if (inspectUsage) {
+          const card = cards.get(event.evaluationId);
+          if (card === undefined) throw new Error(`Missing evaluation start: ${event.evaluationId}`);
+          card.usage = addUsage(card.usage, event.usage);
+        }
+        return;
+      }
       if ((event.type === 'scope' && event.accepted) || event.type === 'group') return;
       if (event.type === 'evaluation') {
         if (cards.has(event.evaluationId)) throw new Error(`Duplicate evaluation start: ${event.evaluationId}`);
@@ -578,8 +631,26 @@ export interface InspectOptions {
   readonly columns?: () => number;
 }
 
+function usageFields(usage: AiUsage): readonly (readonly [string, string])[] {
+  const money = (value: number): string =>
+    `$${value > 0 && value < 1e-8 ? value.toPrecision(8) : value.toFixed(8)}`;
+  return [
+    ['calls', String(usage.calls)],
+    ...(usage.unreportedCalls === 0 ? [] : [
+      ['unreported calls', String(usage.unreportedCalls)] as const,
+      ['totals', 'reported calls only; unreported tokens and costs are unknown'] as const,
+    ]),
+    ['input tokens', String(usage.inputTokens)],
+    ['output tokens', String(usage.outputTokens)],
+    ['input cost (USD)', money(usage.inputCost)],
+    ['output cost (USD)', money(usage.outputCost)],
+    ['total cost (USD)', money(usage.inputCost + usage.outputCost)],
+  ];
+}
+
 export function createInspectRenderer(options: InspectOptions): InspectRenderer {
-  const render = createWalkthroughRenderer({ ...options, concurrency: 1 });
+  const render = createWalkthroughRenderer({ ...options, concurrency: 1 }, true);
+  const usage = createUsageTracker();
   const color = options.color === true && options.raw !== true;
   const gateExplained = new Set<string>();
   let finished = false;
@@ -587,6 +658,7 @@ export function createInspectRenderer(options: InspectOptions): InspectRenderer 
   return {
     emit: event => {
       if (finished) return;
+      usage.emit(event);
       const skippedGate = event.type === 'gate' && (!event.enabled || !event.applies);
       if (skippedGate) gateExplained.add(event.name);
       render.emit(event);
@@ -605,6 +677,14 @@ export function createInspectRenderer(options: InspectOptions): InspectRenderer 
           walkthroughField('reason', report.reason ?? 'no matching subjects', options.redact, color),
         ]);
       }
+      const summary = usage.summary();
+      if (summary !== undefined) {
+        writeWalkthroughBlock(options.write, [
+          paint('AI Usage', 'bold', color),
+          walkthroughField('verifications', String(summary.verifications), options.redact, color),
+          ...usageFields(summary).map(([label, value]) => walkthroughField(label, value, options.redact, color)),
+        ]);
+      }
     },
   };
 }
@@ -617,6 +697,58 @@ export function countViolations(reports: readonly RuleReport[]): number {
     }
   }
   return total;
+}
+
+export function renderViolationComments(
+  reports: readonly RuleReport[],
+  redact: TextRedactor,
+): readonly ViolationComment[] {
+  const safe = (text: string): string => escapeText(redact(stripVTControlCharacters(text)))
+    .replace(/[\\`*_{}\[\]()#+\-.!|~]/g, '\\$&')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/@/g, '&#64;');
+  const location = (
+    value: {
+      readonly filepath: string;
+      readonly lines?: { readonly start: number; readonly end: number };
+    },
+  ): string => safe(
+    value.lines === undefined
+      ? value.filepath
+      : `${value.filepath}:${value.lines.start}-${value.lines.end}`,
+  );
+  const comments: ViolationComment[] = [];
+  for (const report of reports) {
+    for (const { subject, result } of report.evaluations) {
+      if (result.status !== 'violation') continue;
+      const label = subject.kind === 'scope'
+        ? `scope ${location(subject)} (${safe(subject.id)})`
+        : safe(`group ${subject.group.type} ${subject.group.path} (${subject.members.length} scopes)`);
+      const body = [`- **${safe(report.name)}** — ${label}`];
+      if (result.locations !== undefined) {
+        for (const entry of result.locations) {
+          const scope = entry.scopeId === undefined ? '' : ` (scope ${safe(entry.scopeId)})`;
+          body.push(`  - Location: ${location(entry)}${scope}`);
+        }
+      }
+      if (result.message !== undefined) body.push(`  - ${safe(result.message)}`);
+      const candidates = result.locations
+        ?? (subject.kind === 'scope' ? [subject] : []);
+      const locations: ViolationComment['locations'][number][] = [];
+      const seen = new Set<string>();
+      for (const candidate of candidates) {
+        if (candidate.lines === undefined) continue;
+        const key = JSON.stringify([candidate.filepath, candidate.lines.start, candidate.lines.end]);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        locations.push({ filepath: candidate.filepath, lines: candidate.lines });
+      }
+      comments.push({ body: `${body.join('\n')}\n`, locations });
+    }
+  }
+  return comments;
 }
 
 export interface CheckReportOptions {

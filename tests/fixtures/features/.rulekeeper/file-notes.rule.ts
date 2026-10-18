@@ -1,4 +1,4 @@
-import { Rule, pass, violation, scopes, type CheckResult, type JsonValue, type Subject } from 'rulekeeper';
+import { Rule, pass, violation, scopes, type CheckResult, type JsonValue, type Subject } from '@alex-dbs/rulekeeper';
 
 export default class FileNotes extends Rule {
   files = ['docs/notes/**/*.txt'];

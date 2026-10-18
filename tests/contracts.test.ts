@@ -30,6 +30,7 @@ import {
   validateRule,
   validateScopeMatch,
 } from '../dist/app/validate.js';
+import { UNREPORTED_AI_USAGE } from './support.ts';
 
 const BRAND = Symbol.for('rulekeeper.Rule');
 const RULE_FILE = '/rules/contracts.rule.ts';
@@ -158,7 +159,7 @@ class RecordingBackend implements DecisionBackend {
 }
 
 function runtimeFor(backend: DecisionBackend, threshold = 0.4): DecisionRuntime {
-  return { backend, threshold };
+  return { backend, threshold, pricing: { inputCostPerMillion: 0.042, outputCostPerMillion: 0 } };
 }
 
 function requestAt(backend: RecordingBackend, index = 0): DecisionRequest {
@@ -299,6 +300,7 @@ test('validateRule accepts structurally valid rules in every grouping and settin
     brandedRule({ exclude: ['old/**'] }),
     brandedRule({ settings: { backend: 'jev', model: 'jev-latest', threshold: 0 } }),
     brandedRule({ settings: { backend: 'jev', model: 'jev-latest', threshold: 1 } }),
+    brandedRule({ settings: { inputCostPerMillion: 0, outputCostPerMillion: Number.MAX_VALUE } }),
   ];
 
   for (const rule of accepted) {
@@ -350,6 +352,14 @@ const malformed: readonly (readonly [string, (rule: Record<string, unknown>) => 
   ['negative infinity threshold', rule => void (rule.settings = { threshold: Number.NEGATIVE_INFINITY })],
   ['non-finite threshold', rule => void (rule.settings = { threshold: Number.NaN })],
   ['string threshold', rule => void (rule.settings = { threshold: '0.4' })],
+  ['negative input price', rule => void (rule.settings = { inputCostPerMillion: -1 })],
+  ['non-finite input price', rule => void (rule.settings = { inputCostPerMillion: Number.NaN })],
+  ['infinite input price', rule => void (rule.settings = { inputCostPerMillion: Infinity })],
+  ['string input price', rule => void (rule.settings = { inputCostPerMillion: '0.042' })],
+  ['negative output price', rule => void (rule.settings = { outputCostPerMillion: -1 })],
+  ['non-finite output price', rule => void (rule.settings = { outputCostPerMillion: Number.NaN })],
+  ['infinite output price', rule => void (rule.settings = { outputCostPerMillion: Infinity })],
+  ['null output price', rule => void (rule.settings = { outputCostPerMillion: null })],
   ['non-object settings', rule => void (rule.settings = 'none')],
 ];
 
@@ -646,8 +656,7 @@ test('validateCheckResult rejects a blank model and preserves an empty message',
 test('validateCheckResult accepts only finite thresholds within the inclusive unit interval', () => {
   for (const status of ['pass', 'violation'] as const) {
     for (const threshold of [0, 0.37, 1]) {
-      const result = { status, threshold };
-      assert.equal(validateCheckResult(result, 'check'), result);
+      assert.equal(validateCheckResult({ status, threshold }, 'check').threshold, threshold);
     }
     assert.doesNotThrow(() => validateCheckResult({ status, threshold: undefined }, 'check'));
     for (const threshold of [null, '0.4', true, -0.01, 1.01, NaN, Infinity, -Infinity]) {
@@ -655,6 +664,38 @@ test('validateCheckResult accepts only finite thresholds within the inclusive un
         () => validateCheckResult({ status, threshold }, 'check'),
         /check threshold must be a finite number between 0 and 1/,
         `${status}: ${String(threshold)}`,
+      );
+    }
+  }
+});
+
+test('validateCheckResult preserves legitimate custom usage at the safe integer and finite cost boundaries', () => {
+  for (const count of [0, Number.MAX_SAFE_INTEGER]) {
+    const usage = {
+      calls: count, unreportedCalls: count, inputTokens: count, outputTokens: count,
+      inputCost: 0, outputCost: Number.MAX_VALUE,
+    };
+    assert.deepEqual(validateCheckResult({ status: 'pass', usage }, 'check').usage, usage);
+  }
+});
+
+test('validateCheckResult rejects malformed custom usage and inconsistent call counts', () => {
+  for (const usage of [null, [], 'usage', {}, { ...UNREPORTED_AI_USAGE, calls: 0 }]) {
+    assert.throws(() => validateCheckResult({ status: 'pass', usage }, 'check'));
+  }
+  for (const field of ['calls', 'unreportedCalls', 'inputTokens', 'outputTokens'] as const) {
+    for (const value of [-1, 0.5, Number.MAX_SAFE_INTEGER + 1, NaN, Infinity, '1', null]) {
+      assert.throws(
+        () => validateCheckResult({ status: 'pass', usage: { ...UNREPORTED_AI_USAGE, [field]: value } }, 'check'),
+        `${field}: ${String(value)}`,
+      );
+    }
+  }
+  for (const field of ['inputCost', 'outputCost'] as const) {
+    for (const value of [-1, NaN, Infinity, -Infinity, '0', null]) {
+      assert.throws(
+        () => validateCheckResult({ status: 'pass', usage: { ...UNREPORTED_AI_USAGE, [field]: value } }, 'check'),
+        `${field}: ${String(value)}`,
       );
     }
   }
@@ -931,7 +972,7 @@ test('AI decisions retain the exact runtime threshold and compare probability st
     const subject = scopeSubject({ filepath: 'a', id: '$', source: 's' });
     const result = await evaluateAi(subject, { rule: 'r' }, projectContext(), runtimeFor(backend, threshold));
 
-    assert.deepEqual(result, { status, probability, threshold, model: 'test-model' });
+    assert.deepEqual(result, { status, probability, threshold, model: 'test-model', usage: UNREPORTED_AI_USAGE });
   }
 });
 
@@ -976,7 +1017,9 @@ test('AI violations preserve metadata and only supplied messages without leaking
     projectContext('infra-placement'),
     runtimeFor(backend),
   );
-  assert.deepStrictEqual(result, { status: 'violation', probability: 0.1, threshold: 0.4, model: 'test-model' });
+  assert.deepStrictEqual(result, {
+    status: 'violation', probability: 0.1, threshold: 0.4, model: 'test-model', usage: UNREPORTED_AI_USAGE,
+  });
   assert.deepStrictEqual(requestAt(backend).instructions, { rule: 'r', question: 'Is the rule respected?' });
 
   const custom = new RecordingBackend(0.1);
@@ -992,6 +1035,7 @@ test('AI violations preserve metadata and only supplied messages without leaking
     probability: 0.1,
     threshold: 0.4,
     model: 'test-model',
+    usage: UNREPORTED_AI_USAGE,
   });
   assert.equal(JSON.stringify(requestAt(custom)).includes('This belongs outside infrastructure'), false);
 });
@@ -1016,7 +1060,68 @@ test('evaluateAi delivers backend exchanges to the caller observer', async () =>
   assert.deepStrictEqual(exchanges, [
     { type: 'request', body: '{"model":"test-model"}' },
     { type: 'response', status: 200, body: '{"probability":1,"model":"test-model"}' },
+    { type: 'usage', usage: UNREPORTED_AI_USAGE },
   ]);
+});
+
+test('evaluateAi prices reported tokens once and distinguishes reported zero from missing usage', async () => {
+  const subject = scopeSubject({ filepath: 'a', id: '$', source: 's' });
+  for (const tokens of [undefined, { inputTokens: 0, outputTokens: 0 }, { inputTokens: 25, outputTokens: 4 }]) {
+    const exchanges: Parameters<DecisionObserver>[0][] = [];
+    const backend: DecisionBackend = {
+      decide: async () => ({ probability: 1, model: 'model', ...(tokens === undefined ? {} : { usage: tokens }) }),
+    };
+    const result = await evaluateAi(subject, { rule: 'r' }, projectContext(), {
+      backend, threshold: 0.4, pricing: { inputCostPerMillion: 2, outputCostPerMillion: 5 },
+    }, exchange => exchanges.push(exchange));
+    const usage = tokens === undefined ? UNREPORTED_AI_USAGE : {
+      calls: 1, unreportedCalls: 0, ...tokens,
+      inputCost: tokens.inputTokens * 2 / 1_000_000,
+      outputCost: tokens.outputTokens * 5 / 1_000_000,
+    };
+    assert.deepEqual(result.usage, usage);
+    assert.deepEqual(exchanges, [{ type: 'usage', usage }]);
+  }
+});
+
+test('evaluateAi accepts free pricing without treating reported counts as unknown', async () => {
+  const exchanges: Parameters<DecisionObserver>[0][] = [];
+  const result = await evaluateAi(
+    scopeSubject({ filepath: 'a', id: '$', source: 's' }),
+    { rule: 'r' },
+    projectContext(),
+    {
+      backend: { decide: async () => ({ probability: 1, model: 'model', usage: { inputTokens: 11, outputTokens: 1 } }) },
+      threshold: 0.4,
+      pricing: { inputCostPerMillion: 0, outputCostPerMillion: 0 },
+    },
+    exchange => exchanges.push(exchange),
+  );
+  const usage = { calls: 1, unreportedCalls: 0, inputTokens: 11, outputTokens: 1, inputCost: 0, outputCost: 0 };
+  assert.deepEqual(result.usage, usage);
+  assert.deepEqual(exchanges, [{ type: 'usage', usage }]);
+});
+
+test('evaluateAi accounts for a failed invocation but not failures before the backend is called', async () => {
+  const subject = scopeSubject({ filepath: 'a', id: '$', source: 's' });
+  const exchanges: Parameters<DecisionObserver>[0][] = [];
+  let calls = 0;
+  const failure = new Error('backend unavailable');
+  const runtime = runtimeFor({
+    decide: async () => {
+      calls += 1;
+      throw failure;
+    },
+  });
+  const observe: DecisionObserver = exchange => exchanges.push(exchange);
+  await assert.rejects(evaluateAi(subject, { rule: 'r', input: () => NaN }, projectContext(), runtime, observe));
+  await assert.rejects(evaluateAi(subject, { rule: 'r', input: () => { throw new Error('input failed'); } },
+    projectContext(), runtime, observe));
+  assert.equal(calls, 0);
+  assert.deepEqual(exchanges, []);
+  await assert.rejects(evaluateAi(subject, { rule: 'r' }, projectContext(), runtime, observe), error => error === failure);
+  assert.equal(calls, 1);
+  assert.deepEqual(exchanges, [{ type: 'usage', usage: UNREPORTED_AI_USAGE }]);
 });
 
 test('regex validates its options eagerly', () => {
@@ -1077,6 +1182,7 @@ test('regex requires every group member to match and traces members after a mism
   ]);
   assert.deepStrictEqual(await evaluator(failing, failingContext), {
     status: 'violation',
+    locations: [{ filepath: 'a.json', scopeId: '$' }],
   });
   assert.deepStrictEqual(failingContext.traces, [
     {
@@ -1121,7 +1227,10 @@ test('regex traces the evaluated inputs and results', async () => {
 
   const result = await regex({ pattern: /b/ })(subject, context);
 
-  assert.deepStrictEqual(result, { status: 'violation' });
+  assert.deepStrictEqual(result, {
+    status: 'violation',
+    locations: [{ filepath: 'a.yaml', scopeId: '0:$.x' }],
+  });
   assert.deepStrictEqual(context.traces, [
     {
       message: 'regex',
@@ -1147,6 +1256,7 @@ test('regex honours an asynchronous input override per group member and a custom
   assert.deepStrictEqual(await evaluator(first, context), { status: 'pass' });
   assert.deepStrictEqual(await evaluator(groupSubject([first, second]), context), {
     status: 'violation',
+    locations: [{ filepath: 'b.json', scopeId: '$.b' }],
   });
   assert.deepStrictEqual(context.traces, [
     {
@@ -1171,7 +1281,11 @@ test('regex honours an asynchronous input override per group member and a custom
   ]);
 
   const violated = await regex({ pattern: /^z$/, violationMessage: 'Not x' })(first, context);
-  assert.deepStrictEqual(violated, { status: 'violation', message: 'Not x' });
+  assert.deepStrictEqual(violated, {
+    status: 'violation',
+    message: 'Not x',
+    locations: [{ filepath: 'a.json', scopeId: '$.a' }],
+  });
 });
 
 test('regex never contacts the decision backend', async () => {

@@ -2,6 +2,6 @@ app:
   container:
     resources:
       requests:
-        memory: 128Mi
+        memory: 128M
       limits:
-        memory: 128Mi
+        memory: 128M

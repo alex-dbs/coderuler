@@ -11,7 +11,7 @@ function requirePositiveSafeInteger(concurrency: number): void {
 export async function mapConcurrent<T, R>(
   items: readonly T[],
   concurrency: number,
-  mapper: (item: T, index: number) => Promise<R>,
+  mapper: (item: T, index: number, reportFailure: (error: unknown) => void) => Promise<R>,
 ): Promise<R[]> {
   requirePositiveSafeInteger(concurrency);
 
@@ -23,18 +23,23 @@ export async function mapConcurrent<T, R>(
   let failureObserved = false;
   let failure: unknown;
 
+  // A mapper may need to drain started work after it has already failed.
+  const reportFailure = (error: unknown): void => {
+    if (!failureObserved) {
+      failureObserved = true;
+      failure = error;
+    }
+  };
+
   const runWorker = async (): Promise<void> => {
     while (!failureObserved) {
       const index = nextIndex;
       nextIndex += 1;
       if (index >= items.length) return;
       try {
-        results[index] = await mapper(items[index]!, index);
+        results[index] = await mapper(items[index]!, index, reportFailure);
       } catch (error) {
-        if (!failureObserved) {
-          failureObserved = true;
-          failure = error;
-        }
+        reportFailure(error);
       }
     }
   };

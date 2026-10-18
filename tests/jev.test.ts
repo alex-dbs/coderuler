@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import { after, test } from 'node:test';
+import { setImmediate } from 'node:timers/promises';
 
 import type { DecisionExchange, DecisionObserver, DecisionRequest, JsonValue } from '../dist/index.js';
 import { JevAdapter } from '../dist/adapter/decision/jev.js';
@@ -76,7 +77,7 @@ async function stopServer(server: Server): Promise<void> {
   });
 }
 
-async function startLoopback(): Promise<Loopback> {
+async function startLoopback(onRequest?: () => void): Promise<Loopback> {
   const sent: Sent[] = [];
   let backend: Loopback;
   const server = createServer((request, response) => {
@@ -99,6 +100,7 @@ async function startLoopback(): Promise<Loopback> {
         raw,
         parsed,
       });
+      onRequest?.();
       const reply = backend.answer;
       if (reply.hang === true) return;
       const headers: Record<string, string> = { 'content-type': reply.contentType ?? 'application/json' };
@@ -462,6 +464,46 @@ test('accepts a noul probability at both inclusive bounds', async () => {
   }
 });
 
+test('distinguishes absent usage from reported zero and accepts safe integer token counts', async () => {
+  const backend = await startLoopback();
+  try {
+    for (const usage of [
+      undefined,
+      { input_tokens: 0, output_tokens: 0 },
+      { input_tokens: 11, output_tokens: 1 },
+      { input_tokens: Number.MAX_SAFE_INTEGER, output_tokens: Number.MAX_SAFE_INTEGER },
+    ]) {
+      backend.answer = { body: JSON.stringify({ ...ANSWER, ...(usage === undefined ? {} : { usage }) }) };
+      const outcome = await adapterFor(backend.origin).decide(REQUEST);
+      assert.deepEqual(outcome, {
+        probability: 0.9,
+        model: 'jev-1.13.0',
+        ...(usage === undefined ? {} : { usage: { inputTokens: usage.input_tokens, outputTokens: usage.output_tokens } }),
+      });
+    }
+  } finally {
+    await backend.close();
+  }
+});
+
+test('rejects supplied usage with missing, malformed, or unsafe token counts', async () => {
+  const backend = await startLoopback();
+  try {
+    const malformed: unknown[] = [null, [], 'usage', {}, { input_tokens: 1 }, { output_tokens: 1 }];
+    for (const field of ['input_tokens', 'output_tokens']) {
+      for (const value of [null, '1', true, -1, 0.5, Number.MAX_SAFE_INTEGER + 1, Number.MAX_VALUE]) {
+        malformed.push({ input_tokens: 1, output_tokens: 1, [field]: value });
+      }
+    }
+    for (const usage of malformed) {
+      backend.answer = { body: JSON.stringify({ ...ANSWER, usage }) };
+      await assert.rejects(() => adapterFor(backend.origin).decide(REQUEST), JSON.stringify(usage));
+    }
+  } finally {
+    await backend.close();
+  }
+});
+
 test('does not follow a redirect', async () => {
   const elsewhere = await startLoopback();
   const backend = await startLoopback();
@@ -503,26 +545,40 @@ test('maps a refused connection to a sanitized network error', async () => {
   assert.ok(!error.message.includes('127.0.0.1'), 'the diagnostic must not leak the endpoint');
 });
 
-test('times out a stalled response after the fixed 30-second bound', { timeout: 45_000 }, async () => {
-  const backend = await startLoopback();
+test('times out a stalled response after the fixed 30-second bound', { timeout: 5_000 }, async context => {
+  const received = Promise.withResolvers<void>();
+  const backend = await startLoopback(received.resolve);
+  context.mock.timers.enable({ apis: ['setTimeout'] });
   try {
     backend.answer = { hang: true };
     const { exchanges, observer } = exchangesOf();
-    const started = Date.now();
+    let settled = false;
+    const pending = adapterFor(backend.origin).decide(REQUEST, observer);
+    void pending.then(
+      () => { settled = true; },
+      () => { settled = true; },
+    );
+    await received.promise;
 
-    const error = await failed(() => adapterFor(backend.origin).decide(REQUEST, observer));
+    context.mock.timers.tick(29_999);
+    await setImmediate();
+    assert.equal(settled, false, 'the request must remain pending before the 30-second bound');
+    context.mock.timers.tick(1);
+    await setImmediate();
+    assert.equal(settled, true, 'the request must reject at the 30-second bound');
+    const error = await failed(() => pending);
 
-    const elapsed = Date.now() - started;
-    assert.ok(elapsed >= 29_000, `the fixed 30-second bound must apply, saw ${elapsed} ms`);
     assert.match(error.message, /timed out/);
     assert.ok(!error.message.includes(API_KEY), 'the diagnostic must not leak the credential');
     assert.ok(!error.message.includes('127.0.0.1'), 'the diagnostic must not leak the endpoint');
+    assert.equal(backend.sent.length, 1, 'a timed-out request must not be re-sent');
     assert.deepEqual(
       exchanges.map(exchange => exchange.type),
       ['request'],
       'a timed-out request reports no response',
     );
   } finally {
+    context.mock.timers.reset();
     await backend.close();
   }
 });
@@ -565,6 +621,7 @@ test('resolves the jev backend with the default model and threshold', async () =
     const runtime = createDecisionResolver(withKey({ TYPESAFE_BASE_URL: backend.origin }))({});
 
     assert.equal(runtime.threshold, 0.4);
+    assert.deepEqual(runtime.pricing, { inputCostPerMillion: 0.042, outputCostPerMillion: 0 });
     assert.ok(runtime.backend instanceof JevAdapter);
     await runtime.backend.decide(REQUEST);
     assert.equal((only(backend.sent).parsed as Record<string, unknown>).model, 'jev-latest');
@@ -595,6 +652,58 @@ test('rejects an invalid rule threshold naming the setting', () => {
 
 test('rejects an invalid flag threshold naming the flag', () => {
   assert.throws(() => createDecisionResolver(withKey(), 5)({}), /--threshold/);
+});
+
+test('resolves each price from flags, rule, environment, then defaults and preserves zero', () => {
+  const env = withKey({ RK_INPUT_COST_PER_MILLION: '3', RK_OUTPUT_COST_PER_MILLION: '4' });
+  assert.deepEqual(createDecisionResolver(withKey())({}).pricing, {
+    inputCostPerMillion: 0.042, outputCostPerMillion: 0,
+  });
+  assert.deepEqual(createDecisionResolver(env)({}).pricing, { inputCostPerMillion: 3, outputCostPerMillion: 4 });
+  assert.deepEqual(createDecisionResolver(env)({ inputCostPerMillion: 1, outputCostPerMillion: 2 }).pricing, {
+    inputCostPerMillion: 1, outputCostPerMillion: 2,
+  });
+  assert.deepEqual(createDecisionResolver(env, undefined, { inputCostPerMillion: 0 })({
+    inputCostPerMillion: 1, outputCostPerMillion: 2,
+  }).pricing, { inputCostPerMillion: 0, outputCostPerMillion: 2 });
+  assert.deepEqual(createDecisionResolver(env, undefined, { outputCostPerMillion: 0 })({}).pricing, {
+    inputCostPerMillion: 3, outputCostPerMillion: 0,
+  });
+  assert.deepEqual(createDecisionResolver(withKey({
+    RK_INPUT_COST_PER_MILLION: '0', RK_OUTPUT_COST_PER_MILLION: '0',
+  }))({}).pricing, { inputCostPerMillion: 0, outputCostPerMillion: 0 });
+  assert.deepEqual(createDecisionResolver(env)({ inputCostPerMillion: 0, outputCostPerMillion: 0 }).pricing, {
+    inputCostPerMillion: 0, outputCostPerMillion: 0,
+  });
+});
+
+test('accepts finite nonnegative price bounds and eagerly rejects invalid flag or shadowed rule prices', () => {
+  for (const field of ['inputCostPerMillion', 'outputCostPerMillion'] as const) {
+    for (const price of [0, Number.MIN_VALUE, Number.MAX_VALUE]) {
+      assert.equal(createDecisionResolver(withKey(), undefined, { [field]: price })({}).pricing[field], price);
+      assert.equal(createDecisionResolver(withKey())({ [field]: price }).pricing[field], price);
+    }
+    for (const price of [-1, NaN, Infinity, -Infinity]) {
+      assert.throws(() => createDecisionResolver({}, undefined, { [field]: price }));
+      assert.throws(() => createDecisionResolver(withKey(), undefined, { [field]: 0 })({ [field]: price }));
+    }
+  }
+});
+
+test('reads invalid environment prices lazily and ignores them only when that price is shadowed', () => {
+  const env = withKey({ RK_INPUT_COST_PER_MILLION: 'invalid', RK_OUTPUT_COST_PER_MILLION: 'invalid' });
+  assert.doesNotThrow(() => createDecisionResolver(env));
+  assert.throws(() => createDecisionResolver(env)({}));
+  assert.throws(() => createDecisionResolver(env)({ inputCostPerMillion: 0 }));
+  assert.throws(() => createDecisionResolver(env, undefined, { outputCostPerMillion: 0 })({}));
+  assert.deepEqual(createDecisionResolver(env, undefined, { inputCostPerMillion: 0 })({
+    outputCostPerMillion: 0,
+  }).pricing, { inputCostPerMillion: 0, outputCostPerMillion: 0 });
+  for (const field of ['RK_INPUT_COST_PER_MILLION', 'RK_OUTPUT_COST_PER_MILLION']) {
+    for (const price of ['', ' ', '-1', 'NaN', 'Infinity', '1e999']) {
+      assert.throws(() => createDecisionResolver(withKey({ [field]: price }))({}), `${field}: ${price}`);
+    }
+  }
 });
 
 test('prefers the rule model over the environment model', async () => {
@@ -628,6 +737,8 @@ test('constructs a resolver without reading provider settings', () => {
       TYPESAFE_DEFAULT_MODEL: '   ',
       RK_THRESHOLD: 'abc',
       RK_BACKEND: 'nope',
+      RK_INPUT_COST_PER_MILLION: 'invalid',
+      RK_OUTPUT_COST_PER_MILLION: 'invalid',
     }),
   );
 });

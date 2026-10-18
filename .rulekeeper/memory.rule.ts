@@ -1,50 +1,58 @@
-import { Rule, ai, scopes, type AiOptions, type JsonValue, type ScopeSubject } from 'rulekeeper';
+import BigNumber from 'bignumber.js';
+
+import { Rule, pass, scopes, test, violation, type CheckResult, type ScopeSubject, type Subject } from '@alex-dbs/rulekeeper';
 
 import { isPresent } from './presence.ts';
 
-export const memoryPolicy: AiOptions = {
-  rule: 'Memory limit must be less than or equal to memory request * 1.5. Compare both values in the same units.',
-  examples: {
-    good: [
-      `# limit equals request, so the ratio is 1.0 and stays below 1.5x
-  requests:
-    memory: 512Mi
-  limits:
-    memory: 512Mi
-`,
-      `# limit is exactly 1.5x request, so the boundary is compliant
-  requests:
-    memory: 512Mi
-  limits:
-    memory: 768Mi
-`,
-      `# mixed units: 1536Mi is exactly 1.5x the 1Gi request
-  requests:
-    memory: 1Gi
-  limits:
-    memory: 1536Mi
-`,
-    ],
-    bad: [
-      `# limit is 2x request, which exceeds 1.5x
-  requests:
-    memory: 512Mi
-  limits:
-    memory: 1Gi
-`,
-    ],
-  },
-  violationMessage: 'Memory limit must not exceed 1.5 times the memory request.',
+type MemoryResources = Record<'requests' | 'limits', { memory: string }>;
+
+const bytesPerUnit: Readonly<Record<string, string>> = {
+  k: '1000',
+  M: '1000000',
+  G: '1000000000',
 };
 
-export default class MemoryRatio extends Rule {
+function parseMemoryBytes(value: string): BigNumber {
+  const match = /^(\d+(?:\.\d+)?|\.\d+)([kMG])$/.exec(value);
+  if (!match) throw new Error(`Invalid memory quantity: ${value}`);
+  return new BigNumber(match[1]!).multipliedBy(bytesPerUnit[match[2]!]!);
+}
+
+export default class MemoryRatio extends Rule<MemoryResources> {
   files = ['tests/manual/*.yml'];
 
-  scope = scopes.yaml({ path: '$.*.container.resources' });
+  scope = scopes.yaml<MemoryResources>({ path: '$.*.container.resources' });
 
-  filter(subject: ScopeSubject<JsonValue>): boolean {
+  filter(subject: ScopeSubject<MemoryResources>): boolean {
     return isPresent(subject.data, 'requests', 'memory') && isPresent(subject.data, 'limits', 'memory');
   }
 
-  check = ai(memoryPolicy);
+  check = (subject: Subject<MemoryResources>): CheckResult => {
+    const { requests, limits } = (subject as ScopeSubject<MemoryResources>).data!;
+    const requestBytes = parseMemoryBytes(requests.memory);
+    const limitBytes = parseMemoryBytes(limits.memory);
+    const maximumLimitBytes = requestBytes.multipliedBy(1.5);
+    return limitBytes.isLessThanOrEqualTo(maximumLimitBytes)
+      ? pass()
+      : violation('Memory limit must not exceed 1.5 times the memory request.');
+  };
 }
+
+function memory(request: string, limit: string) {
+  return { app: { container: { resources: { requests: { memory: request }, limits: { memory: limit } } } } };
+}
+
+export const tests = [
+  test('a limit below 1.5 times the request passes').withFiles({
+    'tests/manual/production.yml': memory('100M', '149M'),
+  }).passes(),
+  test('a limit exactly 1.5 times the request passes').withFiles({
+    'tests/manual/production.yml': memory('100M', '150M'),
+  }).passes(),
+  test('a limit above 1.5 times the request violates').withFiles({
+    'tests/manual/production.yml': memory('100M', '150.001M'),
+  }).violates(),
+  test('kilobytes and megabytes use the same ratio boundary').withFiles({
+    'tests/manual/production.yml': memory('1000k', '1.5M'),
+  }).passes()
+] as const;

@@ -1,5 +1,6 @@
 import type {
   AiOptions,
+  AiUsage,
   Awaitable,
   CheckContext,
   CheckResult,
@@ -8,9 +9,10 @@ import type {
   ProjectContext,
   ScopeSubject,
   Subject,
+  ViolationLocation,
 } from './rule.js';
 import type { DecisionInstructions, DecisionObserver, DecisionRuntime } from './ports.js';
-import { isRecord, validateJsonValue } from './validate.js';
+import { isRecord, validateAiUsage, validateJsonValue } from './validate.js';
 
 const QUESTION = 'Is the rule respected?';
 
@@ -22,8 +24,8 @@ export function pass(): CheckResult {
   return { status: 'pass' };
 }
 
-export function violation(message: string): CheckResult {
-  return { status: 'violation', message };
+export function violation(message: string, locations?: readonly ViolationLocation[]): CheckResult {
+  return { status: 'violation', message, ...(locations === undefined ? {} : { locations }) };
 }
 
 function assertExampleList(value: unknown, label: string): void {
@@ -114,10 +116,39 @@ export async function evaluateAi<T = JsonValue>(
       ? projectState(subject)
       : validateJsonValue(await options.input(subject, context), 'ai input');
 
-  const decision = await runtime.backend.decide({ state, instructions: instructionsOf(options) }, observer);
+  let decision;
+  let usage: AiUsage;
+  try {
+    decision = await runtime.backend.decide(
+      { state, instructions: instructionsOf(options) },
+      observer === undefined ? undefined : exchange => {
+        if (exchange.type !== 'usage') observer(exchange);
+      },
+    );
+    const tokens = decision.usage;
+    usage = tokens === undefined
+      ? { calls: 1, unreportedCalls: 1, inputTokens: 0, outputTokens: 0, inputCost: 0, outputCost: 0 }
+      : validateAiUsage({
+          calls: 1,
+          unreportedCalls: 0,
+          inputTokens: tokens.inputTokens,
+          outputTokens: tokens.outputTokens,
+          inputCost: tokenCost(tokens.inputTokens, runtime.pricing.inputCostPerMillion),
+          outputCost: tokenCost(tokens.outputTokens, runtime.pricing.outputCostPerMillion),
+        }, 'Decision outcome');
+  } catch (error) {
+    observer?.({
+      type: 'usage',
+      usage: { calls: 1, unreportedCalls: 1, inputTokens: 0, outputTokens: 0, inputCost: 0, outputCost: 0 },
+    });
+    throw error;
+  }
+  observer?.({ type: 'usage', usage });
 
   if (decision.probability > runtime.threshold) {
-    return { status: 'pass', probability: decision.probability, threshold: runtime.threshold, model: decision.model };
+    return {
+      status: 'pass', probability: decision.probability, threshold: runtime.threshold, model: decision.model, usage,
+    };
   }
   return {
     status: 'violation',
@@ -125,7 +156,13 @@ export async function evaluateAi<T = JsonValue>(
     probability: decision.probability,
     threshold: runtime.threshold,
     model: decision.model,
+    usage,
   };
+}
+
+function tokenCost(tokens: number, price: number): number {
+  const product = tokens * price;
+  return Number.isFinite(product) ? product / 1_000_000 : (tokens / 1_000_000) * price;
 }
 
 export interface RegexOptions<T = JsonValue> {
@@ -173,7 +210,13 @@ export function regex<T = JsonValue>(options: RegexOptions<T>): Evaluator<T> {
 
     context.trace('regex', { pattern: pattern.source, flags: pattern.flags, evaluations });
 
-    if (evaluations.every(evaluation => evaluation.matched)) return pass();
-    return violationMessage === undefined ? { status: 'violation' } : violation(violationMessage);
+    const locations: ViolationLocation[] = [];
+    for (const { matched, filepath, scopeId } of evaluations) {
+      if (!matched) locations.push({ filepath, scopeId });
+    }
+    if (locations.length === 0) return pass();
+    return violationMessage === undefined
+      ? { status: 'violation', locations }
+      : violation(violationMessage, locations);
   };
 }

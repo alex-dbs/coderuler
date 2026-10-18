@@ -1,4 +1,5 @@
 import type {
+  AiUsage,
   CheckResult,
   GroupSubject,
   JsonValue,
@@ -6,6 +7,8 @@ import type {
   RuleSettings,
   ScopeSubject,
   Subject,
+  TokenPricing,
+  TokenUsage,
 } from './rule.js';
 
 export interface Project {
@@ -58,11 +61,13 @@ export interface DecisionRequest {
 export interface DecisionOutcome {
   readonly probability: number;
   readonly model: string;
+  readonly usage?: TokenUsage;
 }
 
 export type DecisionExchange =
   | { readonly type: 'request'; readonly body: string }
-  | { readonly type: 'response'; readonly status: number; readonly body: string };
+  | { readonly type: 'response'; readonly status: number; readonly body: string }
+  | { readonly type: 'usage'; readonly usage: AiUsage };
 
 export type DecisionObserver = (exchange: DecisionExchange) => void;
 
@@ -73,11 +78,13 @@ export interface DecisionBackend {
 export interface DecisionRuntime {
   readonly backend: DecisionBackend;
   readonly threshold: number;
+  readonly pricing: TokenPricing;
 }
 
 export interface RunContext {
   readonly project: Project;
   readonly isTarget: (filepath: string) => boolean;
+  readonly changedFiles?: ReadonlySet<string>;
   readonly concurrency: number;
   readonly resolveDecision: (settings: RuleSettings) => DecisionRuntime;
   readonly emit?: (event: RunEvent) => void;
@@ -143,6 +150,13 @@ export type RunEvent =
       readonly subject: Subject;
       readonly status: number;
       readonly body: string;
+    }
+  | {
+      readonly type: 'usage';
+      readonly evaluationId: number;
+      readonly name: string;
+      readonly subject: Subject;
+      readonly usage: AiUsage;
     }
   | {
       readonly type: 'result';

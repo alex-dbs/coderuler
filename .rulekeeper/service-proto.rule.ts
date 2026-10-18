@@ -1,24 +1,56 @@
-import { Rule, ai, scopes, type AiOptions } from 'rulekeeper';
-
-export const serviceProtoPolicy: AiOptions = {
-  rule: `The URL must begin with \`/service/vX/\`, where X is a number. The one path segment immediately after this prefix must itself be a plural resource noun. A singular noun or an uncountable activity name in that position violates the rule. Do not skip to a later plural word. Further path segments are allowed only after this valid prefix.
-
-Contrastive examples:
-- /service/v2/accounts/invoices is valid: accounts is plural.
-- /service/v2/accounting/invoices is invalid: accounting is not plural; later invoices does not fix it.
-- /service/v3/devices/users is valid: devices is plural.
-- /service/v3/device/users is invalid: device is singular; later users does not fix it.
-- /service/v1/transactions is valid.
-- /service/v3/invoices is valid.
-- /api/v2/bank_accounts and /internal/v1/invoices are invalid: wrong prefix.
-`,
-  violationMessage: 'Service endpoints must start with a /service/vX/ followed by a resource in plural form.',
-};
+import { Rule, regex, scopes, test } from '@alex-dbs/rulekeeper';
 
 export default class ServiceProto extends Rule {
   files = ['tests/manual/proto/internal/*.proto'];
 
   scope = scopes.protobuf({ path: '$.rpcs[*].http.bindings[*].url' });
 
-  check = ai(serviceProtoPolicy);
+  check = regex({
+    pattern: /^\/service\/v\d+\/[a-z][a-z0-9_]*s(?:\/.*)?$/,
+    violationMessage: 'Service endpoints must start with a /service/vX/ .',
+  });
 }
+
+function proto(url: string, ...additionalUrls: string[]) {
+  return `syntax = "proto3";
+import "google/api/annotations.proto";
+package acme.billing.v1;
+message Request {}
+message Response {}
+service BillingService {
+  rpc ListInvoices(Request) returns (Response) {
+    option (google.api.http) = {
+      get: "${url}"
+      ${additionalUrls.map(binding => `additional_bindings { get: "${binding}" }`).join('\n      ')}
+    };
+  }
+}`;
+}
+
+export const tests = [
+  test('service versions, lowercase plural resources, and subpaths pass').withFiles({
+    'tests/manual/proto/internal/service.proto': proto(
+      '/service/v1/invoices',
+      '/service/v12/bank_accounts/{account_id}/transactions',
+    ),
+  }).passes(),
+  ...([
+    ['public endpoint', '/v1/invoices'],
+    ['wrong internal prefix', '/internal/v1/invoices'],
+    ['missing version', '/service/invoices'],
+    ['invalid version', '/service/vX/invoices'],
+    ['singular resource', '/service/v1/invoice'],
+    ['uppercase resource', '/service/v1/Invoices'],
+  ] as const).map(([name, url]) =>
+    test(`${name} violates`).withFiles({
+      'tests/manual/proto/internal/service.proto': proto(url),
+    }).violates(),
+  ),
+  test('a later invalid additional binding violates after valid bindings').withFiles({
+    'tests/manual/proto/internal/service.proto': proto(
+      '/service/v1/invoices',
+      '/service/v2/accounts/{account_id}',
+      '/v1/invoices',
+    ),
+  }).violates(),
+] as const;

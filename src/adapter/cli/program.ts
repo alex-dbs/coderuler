@@ -1,6 +1,6 @@
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
-import { Command, CommanderError, InvalidArgumentError } from 'commander';
+import { Command, CommanderError, InvalidArgumentError, Option } from 'commander';
 
 import type {
   LoadedRule,
@@ -9,6 +9,10 @@ import type {
   RuleSelection,
   RunContext,
 } from '../../app/ports.js';
+import type { RuleTestResult } from '../../app/rule-tests.js';
+import type { TokenPricing } from '../../app/rule.js';
+import type { ViolationComment } from '../../app/violation-comments.js';
+import type { SkillOptions } from '../skills/cli.js';
 import { createInspectJsonRenderer } from './inspect-json.js';
 import { createProgress, type TerminalCapabilities } from './progress.js';
 import {
@@ -21,6 +25,10 @@ import {
   renderCheckJson,
   renderCheckJsonl,
   renderCheckSummary,
+  renderRuleTestHeading,
+  renderRuleTestResult,
+  renderRuleTestSummary,
+  renderViolationComments,
   type InspectRenderer,
   type TextRedactor,
   type TextWriter,
@@ -38,6 +46,8 @@ const SUCCESSFUL_COMMANDER_CODES: Record<string, true> = {
 const CONCURRENCY_HINT = 'must be a positive safe integer';
 const THRESHOLD_HINT = 'must be a decimal number between 0 and 1';
 const THRESHOLD_PATTERN = /^(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)$/;
+const TIMEOUT_HINT = 'must be a positive duration in ms, s, or m, at most 2147483647ms';
+const TIMEOUT_UNITS = { ms: 1, s: 1_000, m: 60_000 } as const;
 
 export interface CliTarget {
   readonly root: string;
@@ -58,16 +68,29 @@ export interface CliServices {
     rules: readonly LoadedRule[],
     context: RunContext,
   ) => Promise<readonly RuleReport[]>;
+  readonly testRules: (
+    rules: readonly LoadedRule[],
+    onResult: (result: RuleTestResult, lastInRule: boolean) => void,
+    timeoutMs: number,
+    concurrency: number,
+    includeAI: boolean,
+  ) => Promise<readonly RuleTestResult[]>;
   readonly createProject: (
     root: string,
     options?: { readonly excludeFiles?: readonly string[] },
   ) => Project;
   readonly resolveTarget: (root: string, target: string) => Promise<CliTarget>;
+  readonly changedFiles: (root: string, base: string) => Promise<ReadonlySet<string>>;
+  readonly commentOnPullRequest: (root: string, comments: readonly ViolationComment[]) => Promise<void>;
   readonly resolveRuleSelector: (
     selector: string,
     invocationCwd: string,
   ) => Promise<RuleSelectorResolution>;
-  readonly decisionResolver: (thresholdOverride?: number) => RunContext['resolveDecision'];
+  readonly manageSkill: (operation: 'install' | 'update', options: SkillOptions) => Promise<number>;
+  readonly decisionResolver: (
+    thresholdOverride?: number,
+    pricingOverrides?: Partial<TokenPricing>,
+  ) => RunContext['resolveDecision'];
   readonly redact: TextRedactor;
   readonly write: TextWriter;
   readonly writeError: TextWriter;
@@ -81,6 +104,9 @@ interface CheckOptions {
   readonly outputAll?: boolean;
   readonly debug?: boolean;
   readonly verbose?: boolean;
+  readonly diffOnly?: boolean;
+  readonly autoComment?: boolean;
+  readonly base?: string;
   readonly concurrency: number;
   readonly threshold?: number;
 }
@@ -89,6 +115,15 @@ interface InspectOptions {
   readonly json?: boolean;
   readonly jsonl?: boolean;
   readonly raw?: boolean;
+  readonly inputCostPerMillion?: number;
+  readonly outputCostPerMillion?: number;
+}
+
+interface TestOptions {
+  readonly timeout: number;
+  readonly concurrency: number;
+  readonly ai?: boolean;
+  readonly failuresOnly?: boolean;
 }
 
 interface RuleChoice {
@@ -135,6 +170,26 @@ function parseThreshold(value: string): number {
   return parsed;
 }
 
+function parseTokenPrice(value: string): number {
+  const trimmed = value.trim();
+  const parsed = Number(trimmed);
+  if (!THRESHOLD_PATTERN.test(trimmed) || !Number.isFinite(parsed) || parsed < 0) {
+    throw new InvalidArgumentError('must be a finite nonnegative decimal number (USD per million tokens)');
+  }
+  return parsed;
+}
+
+function parseTimeout(value: string): number {
+  const match = /^([0-9]+(?:\.[0-9]+)?|\.[0-9]+)(ms|s|m)$/.exec(value.trim());
+  const durationMs = match === null
+    ? NaN
+    : Number(match[1]) * TIMEOUT_UNITS[match[2] as keyof typeof TIMEOUT_UNITS];
+  if (!Number.isFinite(durationMs) || durationMs <= 0 || durationMs > 2_147_483_647) {
+    throw new InvalidArgumentError(TIMEOUT_HINT);
+  }
+  return durationMs;
+}
+
 function ruleSelection(
   services: CliServices,
   choice: RuleChoice,
@@ -173,6 +228,35 @@ export function createProgram(services: CliServices): Command {
     })
     .exitOverride();
 
+  const skill = program
+    .command('skill')
+    .description('Install or refresh the bundled rulekeeper-new-rule Agent Skill');
+
+  skill
+    .command('install')
+    .description('Install the bundled skill; defaults to the shared universal skills directory')
+    .option('-g, --global', 'install globally instead of prompting for scope')
+    .option('-a, --agent <agents...>', 'target agents (use "*" for all agents)')
+    .option('-y, --yes', 'skip prompts (project scope unless --global)')
+    .option('--copy', 'copy files instead of symlinking agent directories')
+    .action(async (options: SkillOptions) => {
+      const status = await services.manageSkill('install', options);
+      if (status !== EXIT_OK) throw new CliExit(status);
+    });
+
+  skill
+    .command('update')
+    .description('Refresh an existing bundled-skill installation; defaults to the universal target')
+    .addOption(new Option('-g, --global', 'refresh a global installation').conflicts('project'))
+    .addOption(new Option('-p, --project', 'refresh a project installation (default)').conflicts('global'))
+    .option('-a, --agent <agents...>', 'target agents (use "*" for all agents)')
+    .option('--copy', 'copy files instead of symlinking agent directories')
+    .addHelpText('after', '\nUpgrade Rulekeeper first to obtain newer skill content. Local sources are refreshed with skills add, not skills update.')
+    .action(async (options: SkillOptions) => {
+      const status = await services.manageSkill('update', options);
+      if (status !== EXIT_OK) throw new CliExit(status);
+    });
+
   program
     .command('validate')
     .description('Load and structurally validate the selected rules without running them')
@@ -191,6 +275,93 @@ export function createProgram(services: CliServices): Command {
     });
 
   program
+    .command('test')
+    .description('Run the declared test cases for the selected rules')
+    .argument('[rule-path]', 'explicit rule module or directory instead of discovery')
+    .option('--ai', 'include aiTests that use the configured decision backend')
+    .option('--failures-only', 'show only failed test cases')
+    .addOption(
+      new Option('--timeout <duration>', 'per-test timeout (ms, s, or m)')
+        .argParser(parseTimeout)
+        .default(10_000, '10s'),
+    )
+    .option(
+      '--concurrency <number>',
+      `bounded in-flight test cases (${CONCURRENCY_HINT})`,
+      parseConcurrency,
+      1,
+    )
+    .action(async (rulePath: string | undefined, options: TestOptions) => {
+      const progress = services.terminal?.interactive === true
+        ? createProgress(services.writeError, () => services.terminal?.columns ?? 80)
+        : undefined;
+      const color = services.terminal?.color === true;
+      let passed = 0;
+      let failed = 0;
+      let durationMs = 0;
+      let previousRuleName: string | undefined;
+      const failures: RuleTestResult[] | undefined = options.failuresOnly ? [] : undefined;
+      let testsStarted = false;
+      const flushFailures = () => {
+        if (failures === undefined || failures.length === 0) return;
+        if (previousRuleName !== undefined) services.write('\n');
+        const ruleName = failures[0]!.ruleName;
+        services.write(renderRuleTestHeading(ruleName, services.redact, color));
+        previousRuleName = ruleName;
+        for (let index = 0; index < failures.length; index += 1) {
+          services.write(renderRuleTestResult(
+            failures[index]!,
+            services.redact,
+            color,
+            index === failures.length - 1,
+          ));
+        }
+        failures.length = 0;
+      };
+      try {
+        const rules = await services.loadRules(
+          ruleSelection(
+            services,
+            rulePath === undefined ? {} : { rulesPath: rulePath },
+            services.cwd,
+          ),
+        );
+        progress?.message('Running tests');
+        testsStarted = true;
+        await services.testRules(rules, (result, lastInRule) => {
+          progress?.clear();
+          if (result.expected === result.actual) passed += 1;
+          else failed += 1;
+          durationMs += result.durationMs;
+          if (failures !== undefined) {
+            if (result.expected !== result.actual) failures.push(result);
+            if (lastInRule) flushFailures();
+          } else {
+            if (result.ruleName !== previousRuleName) {
+              if (previousRuleName !== undefined) services.write('\n');
+              services.write(renderRuleTestHeading(result.ruleName, services.redact, color));
+              previousRuleName = result.ruleName;
+            }
+            services.write(renderRuleTestResult(result, services.redact, color, lastInRule));
+          }
+          progress?.message(`Running tests (${passed + failed} completed)`);
+        }, options.timeout, options.concurrency, options.ai === true);
+      } finally {
+        progress?.stop();
+        if (failures !== undefined && testsStarted) {
+          flushFailures();
+          if (previousRuleName !== undefined) services.write('\n');
+          services.write(renderRuleTestSummary(passed, failed, durationMs, services.redact, color));
+        }
+      }
+      if (failures === undefined) {
+        if (previousRuleName !== undefined) services.write('\n');
+        services.write(renderRuleTestSummary(passed, failed, durationMs, services.redact, color));
+      }
+      if (failed > 0) throw new CliExit(EXIT_VIOLATION);
+    });
+
+  program
     .command('check')
     .description('Evaluate every selected rule against the working tree')
     .argument('[path]', 'target file or folder that narrows selection', '.')
@@ -200,6 +371,9 @@ export function createProgram(services: CliServices): Command {
     .option('--output-all', 'include passing and skipped rules and every verification in the output')
     .option('--debug', 'stream framework metadata and force concurrency 1')
     .option('--verbose', 'stream the redacted walkthrough at the configured concurrency')
+    .option('--diff, --diff-only', 'evaluate changed files and affected groups against a Git base')
+    .option('--auto-comment', 'post GitHub inline violation comments, with a summary fallback (requires --diff)')
+    .option('--base <ref>', 'Git base for --diff-only (default: HEAD)')
     .option(
       '--concurrency <number>',
       `bounded in-flight selection and evaluation tasks (${CONCURRENCY_HINT})`,
@@ -211,6 +385,12 @@ export function createProgram(services: CliServices): Command {
       if (options.json === true && options.jsonl === true) {
         throw new Error('--json and --jsonl are mutually exclusive');
       }
+      if (options.base !== undefined && options.diffOnly !== true) {
+        throw new Error('--base requires --diff-only');
+      }
+      if (options.autoComment === true && options.diffOnly !== true) {
+        throw new Error('--auto-comment requires --diff (or --diff-only)');
+      }
       const debug = options.debug === true;
       const verbose = options.verbose === true;
       const machine = options.json === true || options.jsonl === true;
@@ -219,15 +399,24 @@ export function createProgram(services: CliServices): Command {
         : undefined;
       let reports: readonly RuleReport[];
       let durationMs: number;
+      let root: string;
       let walkthrough: WalkthroughRenderer | undefined;
       try {
         const area = await services.resolveTarget(services.cwd, target);
+        root = area.root;
+        let changedFiles = options.diffOnly === true
+          ? await services.changedFiles(area.root, options.base ?? 'HEAD')
+          : undefined;
         const prepared = await planWalk(
           services,
           area.root,
           filepath => area.contains(filepath),
           options.rules === undefined ? {} : { rulesPath: options.rules },
         );
+        if (changedFiles !== undefined) {
+          const ruleFiles = new Set(prepared.rules.map(entry => relative(area.root, resolve(entry.ruleFile)).split(sep).join('/')));
+          changedFiles = new Set([...changedFiles].filter(path => !ruleFiles.has(path)));
+        }
         const concurrency = debug ? 1 : options.concurrency;
         walkthrough = verbose
           ? createWalkthroughRenderer({
@@ -247,6 +436,7 @@ export function createProgram(services: CliServices): Command {
           concurrency,
           resolveDecision: services.decisionResolver(options.threshold),
           ...(emit === undefined ? {} : { emit }),
+          ...(changedFiles === undefined ? {} : { changedFiles }),
         };
         const startedAt = performance.now();
         reports = await services.runRules(prepared.rules, context);
@@ -267,7 +457,12 @@ export function createProgram(services: CliServices): Command {
             ? renderCheckJsonl(reports, reportOptions)
             : renderCheckSummary(reports, services.redact, reportOptions),
       );
-      if (countViolations(reports) > 0) throw new CliExit(EXIT_VIOLATION);
+      if (countViolations(reports) > 0) {
+        if (options.autoComment === true) {
+          await services.commentOnPullRequest(root, renderViolationComments(reports, services.redact));
+        }
+        throw new CliExit(EXIT_VIOLATION);
+      }
     });
 
   program
@@ -278,6 +473,8 @@ export function createProgram(services: CliServices): Command {
     .option('--json', 'print the complete redacted inspection as one JSON document')
     .option('--jsonl', 'stream redacted inspection events and reports as JSON Lines')
     .option('--raw', 'print the complete redacted inspection as undecorated text')
+    .option('--input-cost-per-million <number>', 'input token price override (USD per million tokens)', parseTokenPrice)
+    .option('--output-cost-per-million <number>', 'output token price override (USD per million tokens)', parseTokenPrice)
     .action(async (rule: string, folder: string, options: InspectOptions) => {
       const formats = [
         ...(options.json === true ? ['--json'] : []),
@@ -329,7 +526,10 @@ export function createProgram(services: CliServices): Command {
           project: prepared.project,
           isTarget: prepared.isTarget,
           concurrency: 1,
-          resolveDecision: services.decisionResolver(),
+          resolveDecision: services.decisionResolver(undefined, {
+            ...(options.inputCostPerMillion === undefined ? {} : { inputCostPerMillion: options.inputCostPerMillion }),
+            ...(options.outputCostPerMillion === undefined ? {} : { outputCostPerMillion: options.outputCostPerMillion }),
+          }),
           emit: inspect.emit,
         });
         inspect.finish(reports);

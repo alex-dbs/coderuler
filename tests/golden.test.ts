@@ -669,6 +669,7 @@ test('fixture: a strict policy reaches the backend while a relaxed one never res
       assert.deepEqual(settings, {});
       return {
         threshold: 0.4,
+        pricing: { inputCostPerMillion: 0.042, outputCostPerMillion: 0 },
         backend: {
           decide: async request => {
             requests.push(request);
@@ -689,7 +690,10 @@ test('fixture: a strict policy reaches the backend while a relaxed one never res
         {
           id: 'secrets',
           data: { id: 'secrets', strict: true },
-          result: { status: 'pass', probability: 1, threshold: 0.4, model: 'fixture-stub' },
+          result: {
+            status: 'pass', probability: 1, threshold: 0.4, model: 'fixture-stub',
+            usage: { calls: 1, unreportedCalls: 1, inputTokens: 0, outputTokens: 0, inputCost: 0, outputCost: 0 },
+          },
         },
       ],
     },
@@ -836,18 +840,13 @@ test('golden: duplicated-env skips scopes whose env values are all empty', async
   assert.ok(entry !== undefined);
 
   const events: RunEvent[] = [];
-  let decisions = 0;
 
   const reports = await executeRules(rules, {
     project: createProject(root, { excludeFiles: rules.map(ruleEntry => ruleEntry.ruleFile) }),
     isTarget: () => true,
     concurrency: 2,
     resolveDecision: () => {
-      decisions += 1;
-      return {
-        threshold: 0.4,
-        backend: { decide: async () => ({ probability: 1, model: 'filter-stub' }) },
-      };
+      throw new Error('duplicated-env must not call the decision backend');
     },
     emit: event => {
       events.push(event);
@@ -868,7 +867,6 @@ test('golden: duplicated-env skips scopes whose env values are all empty', async
     ],
   );
   assert.equal(events.filter(event => event.type === 'group').length, 0);
-  assert.equal(decisions, 0, 'an all-empty env mapping must never reach the decision backend');
   assert.deepEqual(stableReports(reports), [
     {
       name: 'duplicated-env',
@@ -906,25 +904,13 @@ test('golden: duplicated-env keeps zero, false, and nonempty env values in one f
   });
   const rules = await loadDuplicatedEnv(root);
   assert.deepEqual(rules.map(ruleEntry => ruleEntry.name), ['duplicated-env']);
-  const [entry] = rules;
-  assert.ok(entry !== undefined);
 
-  const requests: DecisionRequest[] = [];
   const reports = await executeRules(rules, {
     project: createProject(root, { excludeFiles: rules.map(ruleEntry => ruleEntry.ruleFile) }),
     isTarget: () => true,
     concurrency: 2,
-    resolveDecision: settings => {
-      assert.deepEqual(settings, {});
-      return {
-        threshold: 0.4,
-        backend: {
-          decide: async request => {
-            requests.push(request);
-            return { probability: 1, model: 'filter-stub' };
-          },
-        },
-      };
+    resolveDecision: () => {
+      throw new Error('duplicated-env must not call the decision backend');
     },
     emit: () => {},
   });
@@ -954,36 +940,11 @@ test('golden: duplicated-env keeps zero, false, and nonempty env values in one f
                 { filepath: 'tests/manual/timeouts.yml', id: '0:/global/env/text', data: { TIMEOUT_SECONDS: 0 } },
               ],
             },
-            result: { status: 'pass', probability: 1, threshold: 0.4, model: 'filter-stub' },
+            result: { status: 'pass' },
           },
         ],
       },
     ],
   );
-  assert.deepEqual(
-    requests.map(request => request.state),
-    [
-      {
-        files: [
-          {
-            filepath: 'tests/manual/default.yml',
-            scopes: [{ id: '0:/global/env/text', data: { LOG_LEVEL: 'info' } }],
-          },
-          {
-            filepath: 'tests/manual/production.yml',
-            scopes: [{ id: '0:/global/env/text', data: { RETRIES: 0 } }],
-          },
-          {
-            filepath: 'tests/manual/staging.yml',
-            scopes: [{ id: '0:/global/env/text', data: { FEATURE_ENABLED: false, EMPTY_STRING: '' } }],
-          },
-          {
-            filepath: 'tests/manual/timeouts.yml',
-            scopes: [{ id: '0:/global/env/text', data: { TIMEOUT_SECONDS: 0 } }],
-          },
-        ],
-      },
-    ],
-  );
-  assert.equal(requests.length, 1, 'one folder group is exactly one provider request');
 });
+

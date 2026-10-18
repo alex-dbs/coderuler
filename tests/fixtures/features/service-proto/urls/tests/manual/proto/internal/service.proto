@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+package acme.service.v1;
+
+service ServiceEndpoints {
+  rpc ListTransactions(Request) returns (Response) {
+    option (google.api.http) = { get: "/service/v1/transactions" };
+  }
+  rpc ListInvoices(Request) returns (Response) {
+    option (google.api.http) = { get: "/service/v3/invoices" };
+  }
+  rpc AccountInvoices(Request) returns (Response) {
+    option (google.api.http) = { get: "/service/v2/accounts/invoices" };
+  }
+  rpc DeviceUsers(Request) returns (Response) {
+    option (google.api.http) = { get: "/service/v3/devices/users" };
+  }
+  rpc GetBankAccount(Request) returns (Response) {
+    option (google.api.http) = { get: "/service/v12/bank_accounts/{account_id}" };
+  }
+  rpc ApiPrefix(Request) returns (Response) {
+    option (google.api.http) = { get: "/api/v2/bank_accounts" };
+  }
+  rpc InternalPrefix(Request) returns (Response) {
+    option (google.api.http) = { get: "/internal/v1/invoices" };
+  }
+  rpc AccountingInvoices(Request) returns (Response) {
+    option (google.api.http) = { get: "/service/v2/accounting/invoices" };
+  }
+  rpc SingularDeviceUsers(Request) returns (Response) {
+    option (google.api.http) = { get: "/service/v3/device/users" };
+  }
+  rpc BillingInvoices(Request) returns (Response) {
+    option (google.api.http) = { get: "/service/v1/billing/invoices/{invoice_id}" };
+  }
+  rpc MissingVersion(Request) returns (Response) {
+    option (google.api.http) = { get: "/service/v/invoices" };
+  }
+  rpc PlaceholderVersion(Request) returns (Response) {
+    option (google.api.http) = { get: "/service/vX/invoices" };
+  }
+  rpc PartialVersion(Request) returns (Response) {
+    option (google.api.http) = { get: "/service/v1x/invoices" };
+  }
+  rpc MissingResourceBoundary(Request) returns (Response) {
+    option (google.api.http) = { get: "/service/v1/invoices_extra" };
+  }
+  rpc QueryAfterResource(Request) returns (Response) {
+    option (google.api.http) = { get: "/service/v1/invoices?active=true" };
+  }
+  rpc EmptyResource(Request) returns (Response) {
+    option (google.api.http) = { get: "/service/v1/" };
+  }
+  rpc UppercaseResource(Request) returns (Response) {
+    option (google.api.http) = { get: "/service/v1/Invoices" };
+  }
+  rpc SuffixHeuristic(Request) returns (Response) {
+    option (google.api.http) = { get: "/service/v1/status" };
+  }
+  rpc StreamEvents(Request) returns (stream Response);
+}

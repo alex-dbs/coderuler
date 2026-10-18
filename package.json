@@ -1,13 +1,20 @@
 {
-  "name": "rulekeeper",
+  "name": "@alex-dbs/rulekeeper",
   "version": "0.0.0",
-  "private": true,
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alex-dbs/rulekeeper.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "engines": {
     "node": ">=24"
   },
   "bin": {
-    "rulekeeper": "./dist/cli.js"
+    "rulekeeper": "dist/cli.js"
   },
   "types": "./dist/index.d.ts",
   "exports": {
@@ -17,7 +24,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "skills/rulekeeper-new-rule"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -60,11 +68,13 @@
     "csv-parse": "7.0.3",
     "jsonc-parser": "3.3.1",
     "jsonpath-plus": "11.2.1",
+    "skills": "1.7.2",
     "string-width": "8.3.0",
     "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
+    "bignumber.js": "11.1.5",
     "typescript": "^7.0.2"
   }
 }

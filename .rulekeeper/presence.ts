@@ -1,6 +1,6 @@
-import type { JsonValue } from 'rulekeeper';
+import type { JsonValue } from '@alex-dbs/rulekeeper';
 
-export function isMapping(value: JsonValue | undefined): value is { readonly [key: string]: JsonValue } {
+export function isObject(value: JsonValue | undefined): value is { readonly [key: string]: JsonValue } {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
@@ -15,7 +15,7 @@ function isEmpty(value: JsonValue | undefined): boolean {
 export function isPresent(data: JsonValue | undefined, ...segments: string[]): boolean {
   let current: JsonValue | undefined = data;
   for (const segment of segments) {
-    if (!isMapping(current)) return false;
+    if (!isObject(current)) return false;
     current = current[segment];
   }
   return !isEmpty(current);
