@@ -9,7 +9,7 @@ import { createRuleLoader, resolveRuleSelector } from '../adapter/filesystem/rul
 import { changedFiles } from '../adapter/git/changes.js';
 import { createGithubCommenter } from '../adapter/github/comments.js';
 import { createSkillManager } from '../adapter/skills/cli.js';
-import { executeRules, validateRules } from '../app/execute.js';
+import { executeRules } from '../app/execute.js';
 import { createDecisionResolver } from './settings.js';
 
 const EXIT_FAILURE = 2;
@@ -39,9 +39,7 @@ export function createServices(
       get stdoutColumns() { return process.stdout.columns; },
     }, env),
 
-    async loadRules(selection) {
-      return validateRules(loader, selection);
-    },
+    loadRules: selection => loader.load(selection),
 
     runRules: executeRules,
 

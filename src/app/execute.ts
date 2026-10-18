@@ -20,9 +20,7 @@ import type {
   DecisionRuntime,
   LoadedRule,
   RuleEvaluation,
-  RuleLoader,
   RuleReport,
-  RuleSelection,
   RunContext,
   RunEvent,
 } from './ports.js';
@@ -69,13 +67,6 @@ interface Plan {
   durationMs: number;
   evaluationStartedAt: number | undefined;
   evaluationFinishedAt: number;
-}
-
-export async function validateRules(
-  loader: RuleLoader,
-  selection: RuleSelection,
-): Promise<readonly LoadedRule[]> {
-  return loader.load(selection);
 }
 
 export async function executeRules(

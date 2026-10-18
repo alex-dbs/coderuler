@@ -21,9 +21,7 @@ import type {
   PredicateResult,
   Project,
   ProjectContext,
-  RuleLoader,
   RuleReport,
-  RuleSelection,
   RuleSettings,
   RunContext,
   RunEvent,
@@ -34,7 +32,7 @@ import type {
   Subject,
   TokenUsage,
 } from '../dist/index.js';
-import { executeRules, validateRules } from '../dist/app/execute.js';
+import { executeRules } from '../dist/app/execute.js';
 import { wholeFileScope } from '../dist/app/selection.js';
 import { createUsageTracker } from '../dist/adapter/cli/inspect-usage.js';
 import { UNREPORTED_AI_USAGE, createSandbox, expectFailure, parseCheckOutput, runCli, writeFile } from './support.ts';
@@ -42,7 +40,6 @@ import { UNREPORTED_AI_USAGE, createSandbox, expectFailure, parseCheckOutput, ru
 const cliSandbox = createSandbox('rulekeeper-engine-');
 after(() => cliSandbox.cleanup());
 
-const SELECTION: RuleSelection = { root: '/repo', invocationCwd: '/repo' };
 const RULE_DIR = '/repo/.rulekeeper';
 
 class MemoryProject implements Project {
@@ -283,35 +280,6 @@ function stableReports(reports: readonly RuleReport[]) {
     return report;
   });
 }
-
-test('validateRules validates every loaded module before any hook runs', async () => {
-  const first = new TestRule({ files: ['**/*.txt'] });
-  const second = new TestRule({ files: ['**/*.json'] });
-  const entries: LoadedRule[] = [loaded('first', first), loaded('second', second)];
-  const loader: RuleLoader = {
-    async load(): Promise<readonly LoadedRule[]> {
-      return entries;
-    },
-  };
-
-  const result = await validateRules(loader, SELECTION);
-
-  assert.deepEqual(result.map(entry => entry.name), ['first', 'second']);
-  for (const rule of [first, second]) {
-    assert.equal(rule.whenCalls, 0);
-    assert.equal(rule.selectCalls, 0);
-    assert.equal(rule.checkCalls, 0);
-  }
-});
-
-test('validateRules surfaces loader failures', async () => {
-  const loader: RuleLoader = {
-    async load(): Promise<readonly LoadedRule[]> {
-      throw new Error('module /repo/.rulekeeper/broken.rule.ts failed to load');
-    },
-  };
-  await assert.rejects(() => validateRules(loader, SELECTION), /broken\.rule\.ts failed to load/);
-});
 
 test('disabled rules are skipped without running any hook or reading sources', async () => {
   const rule = new TestRule({ files: ['**/*.txt'] });
