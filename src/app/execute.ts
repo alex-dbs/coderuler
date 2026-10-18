@@ -279,8 +279,8 @@ export async function executeRules(
       try {
         const raw = await rule.check.call(rule, subject, checkContext);
         throwIfAccountingFailed();
-        const valid = validateCheckResult(raw, `Rule "${name}" check result`);
-        const { status, message, model, probability, threshold, usage } = valid;
+        const valid = validateCheckResult(raw, `Rule "${name}" check result`, subject);
+        const { status, message, model, probability, threshold, usage, locations } = valid;
         // Snapshot declared fields before draining: custom checks still own their returned objects.
         // Validate the snapshot too, since accessors may change values between reads.
         result = validateCheckResult({
@@ -289,6 +289,7 @@ export async function executeRules(
           ...(probability === undefined ? {} : { probability }),
           ...(threshold === undefined ? {} : { threshold }),
           ...(model === undefined ? {} : { model }),
+          ...(locations === undefined ? {} : { locations }),
           ...(usage === undefined ? {} : { usage: {
             calls: usage.calls,
             unreportedCalls: usage.unreportedCalls,

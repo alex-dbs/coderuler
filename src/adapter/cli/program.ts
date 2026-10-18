@@ -11,6 +11,7 @@ import type {
 } from '../../app/ports.js';
 import type { RuleTestResult } from '../../app/rule-tests.js';
 import type { TokenPricing } from '../../app/rule.js';
+import type { ViolationComment } from '../../app/violation-comments.js';
 import type { SkillOptions } from '../skills/cli.js';
 import { createInspectJsonRenderer } from './inspect-json.js';
 import { createProgress, type TerminalCapabilities } from './progress.js';
@@ -27,6 +28,7 @@ import {
   renderRuleTestHeading,
   renderRuleTestResult,
   renderRuleTestSummary,
+  renderViolationComments,
   type InspectRenderer,
   type TextRedactor,
   type TextWriter,
@@ -79,6 +81,7 @@ export interface CliServices {
   ) => Project;
   readonly resolveTarget: (root: string, target: string) => Promise<CliTarget>;
   readonly changedFiles: (root: string, base: string) => Promise<ReadonlySet<string>>;
+  readonly commentOnPullRequest: (root: string, comments: readonly ViolationComment[]) => Promise<void>;
   readonly resolveRuleSelector: (
     selector: string,
     invocationCwd: string,
@@ -102,6 +105,7 @@ interface CheckOptions {
   readonly debug?: boolean;
   readonly verbose?: boolean;
   readonly diffOnly?: boolean;
+  readonly autoComment?: boolean;
   readonly base?: string;
   readonly concurrency: number;
   readonly threshold?: number;
@@ -367,7 +371,8 @@ export function createProgram(services: CliServices): Command {
     .option('--output-all', 'include passing and skipped rules and every verification in the output')
     .option('--debug', 'stream framework metadata and force concurrency 1')
     .option('--verbose', 'stream the redacted walkthrough at the configured concurrency')
-    .option('--diff-only', 'evaluate changed files and affected groups against a Git base')
+    .option('--diff, --diff-only', 'evaluate changed files and affected groups against a Git base')
+    .option('--auto-comment', 'post GitHub inline violation comments, with a summary fallback (requires --diff)')
     .option('--base <ref>', 'Git base for --diff-only (default: HEAD)')
     .option(
       '--concurrency <number>',
@@ -383,6 +388,9 @@ export function createProgram(services: CliServices): Command {
       if (options.base !== undefined && options.diffOnly !== true) {
         throw new Error('--base requires --diff-only');
       }
+      if (options.autoComment === true && options.diffOnly !== true) {
+        throw new Error('--auto-comment requires --diff (or --diff-only)');
+      }
       const debug = options.debug === true;
       const verbose = options.verbose === true;
       const machine = options.json === true || options.jsonl === true;
@@ -391,9 +399,11 @@ export function createProgram(services: CliServices): Command {
         : undefined;
       let reports: readonly RuleReport[];
       let durationMs: number;
+      let root: string;
       let walkthrough: WalkthroughRenderer | undefined;
       try {
         const area = await services.resolveTarget(services.cwd, target);
+        root = area.root;
         let changedFiles = options.diffOnly === true
           ? await services.changedFiles(area.root, options.base ?? 'HEAD')
           : undefined;
@@ -447,7 +457,12 @@ export function createProgram(services: CliServices): Command {
             ? renderCheckJsonl(reports, reportOptions)
             : renderCheckSummary(reports, services.redact, reportOptions),
       );
-      if (countViolations(reports) > 0) throw new CliExit(EXIT_VIOLATION);
+      if (countViolations(reports) > 0) {
+        if (options.autoComment === true) {
+          await services.commentOnPullRequest(root, renderViolationComments(reports, services.redact));
+        }
+        throw new CliExit(EXIT_VIOLATION);
+      }
     });
 
   program

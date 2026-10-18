@@ -9,6 +9,7 @@ import type {
   ProjectContext,
   ScopeSubject,
   Subject,
+  ViolationLocation,
 } from './rule.js';
 import type { DecisionInstructions, DecisionObserver, DecisionRuntime } from './ports.js';
 import { isRecord, validateAiUsage, validateJsonValue } from './validate.js';
@@ -23,8 +24,8 @@ export function pass(): CheckResult {
   return { status: 'pass' };
 }
 
-export function violation(message: string): CheckResult {
-  return { status: 'violation', message };
+export function violation(message: string, locations?: readonly ViolationLocation[]): CheckResult {
+  return { status: 'violation', message, ...(locations === undefined ? {} : { locations }) };
 }
 
 function assertExampleList(value: unknown, label: string): void {
@@ -209,7 +210,13 @@ export function regex<T = JsonValue>(options: RegexOptions<T>): Evaluator<T> {
 
     context.trace('regex', { pattern: pattern.source, flags: pattern.flags, evaluations });
 
-    if (evaluations.every(evaluation => evaluation.matched)) return pass();
-    return violationMessage === undefined ? { status: 'violation' } : violation(violationMessage);
+    const locations: ViolationLocation[] = [];
+    for (const { matched, filepath, scopeId } of evaluations) {
+      if (!matched) locations.push({ filepath, scopeId });
+    }
+    if (locations.length === 0) return pass();
+    return violationMessage === undefined
+      ? { status: 'violation', locations }
+      : violation(violationMessage, locations);
   };
 }

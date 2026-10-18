@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { styleText } from 'node:util';
+import { stripVTControlCharacters, styleText } from 'node:util';
 
 import { applyEdits, format, visit } from 'jsonc-parser';
 import stringWidth from 'string-width';
@@ -8,6 +8,7 @@ import type { LoadedRule, RuleReport, RunEvent } from '../../app/ports.js';
 import type { RuleTestResult } from '../../app/rule-tests.js';
 import type { AiUsage, JsonValue, ScopeSubject, Subject } from '../../app/rule.js';
 import { addUsage } from '../../app/usage.js';
+import type { ViolationComment } from '../../app/violation-comments.js';
 import { createUsageTracker } from './inspect-usage.js';
 
 const MAX_VIOLATIONS = 10;
@@ -696,6 +697,58 @@ export function countViolations(reports: readonly RuleReport[]): number {
     }
   }
   return total;
+}
+
+export function renderViolationComments(
+  reports: readonly RuleReport[],
+  redact: TextRedactor,
+): readonly ViolationComment[] {
+  const safe = (text: string): string => escapeText(redact(stripVTControlCharacters(text)))
+    .replace(/[\\`*_{}\[\]()#+\-.!|~]/g, '\\$&')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/@/g, '&#64;');
+  const location = (
+    value: {
+      readonly filepath: string;
+      readonly lines?: { readonly start: number; readonly end: number };
+    },
+  ): string => safe(
+    value.lines === undefined
+      ? value.filepath
+      : `${value.filepath}:${value.lines.start}-${value.lines.end}`,
+  );
+  const comments: ViolationComment[] = [];
+  for (const report of reports) {
+    for (const { subject, result } of report.evaluations) {
+      if (result.status !== 'violation') continue;
+      const label = subject.kind === 'scope'
+        ? `scope ${location(subject)} (${safe(subject.id)})`
+        : safe(`group ${subject.group.type} ${subject.group.path} (${subject.members.length} scopes)`);
+      const body = [`- **${safe(report.name)}** — ${label}`];
+      if (result.locations !== undefined) {
+        for (const entry of result.locations) {
+          const scope = entry.scopeId === undefined ? '' : ` (scope ${safe(entry.scopeId)})`;
+          body.push(`  - Location: ${location(entry)}${scope}`);
+        }
+      }
+      if (result.message !== undefined) body.push(`  - ${safe(result.message)}`);
+      const candidates = result.locations
+        ?? (subject.kind === 'scope' ? [subject] : []);
+      const locations: ViolationComment['locations'][number][] = [];
+      const seen = new Set<string>();
+      for (const candidate of candidates) {
+        if (candidate.lines === undefined) continue;
+        const key = JSON.stringify([candidate.filepath, candidate.lines.start, candidate.lines.end]);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        locations.push({ filepath: candidate.filepath, lines: candidate.lines });
+      }
+      comments.push({ body: `${body.join('\n')}\n`, locations });
+    }
+  }
+  return comments;
 }
 
 export interface CheckReportOptions {

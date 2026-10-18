@@ -656,8 +656,7 @@ test('validateCheckResult rejects a blank model and preserves an empty message',
 test('validateCheckResult accepts only finite thresholds within the inclusive unit interval', () => {
   for (const status of ['pass', 'violation'] as const) {
     for (const threshold of [0, 0.37, 1]) {
-      const result = { status, threshold };
-      assert.equal(validateCheckResult(result, 'check'), result);
+      assert.equal(validateCheckResult({ status, threshold }, 'check').threshold, threshold);
     }
     assert.doesNotThrow(() => validateCheckResult({ status, threshold: undefined }, 'check'));
     for (const threshold of [null, '0.4', true, -0.01, 1.01, NaN, Infinity, -Infinity]) {
@@ -676,8 +675,7 @@ test('validateCheckResult preserves legitimate custom usage at the safe integer 
       calls: count, unreportedCalls: count, inputTokens: count, outputTokens: count,
       inputCost: 0, outputCost: Number.MAX_VALUE,
     };
-    const result = { status: 'pass', usage };
-    assert.equal(validateCheckResult(result, 'check'), result);
+    assert.deepEqual(validateCheckResult({ status: 'pass', usage }, 'check').usage, usage);
   }
 });
 
@@ -1184,6 +1182,7 @@ test('regex requires every group member to match and traces members after a mism
   ]);
   assert.deepStrictEqual(await evaluator(failing, failingContext), {
     status: 'violation',
+    locations: [{ filepath: 'a.json', scopeId: '$' }],
   });
   assert.deepStrictEqual(failingContext.traces, [
     {
@@ -1228,7 +1227,10 @@ test('regex traces the evaluated inputs and results', async () => {
 
   const result = await regex({ pattern: /b/ })(subject, context);
 
-  assert.deepStrictEqual(result, { status: 'violation' });
+  assert.deepStrictEqual(result, {
+    status: 'violation',
+    locations: [{ filepath: 'a.yaml', scopeId: '0:$.x' }],
+  });
   assert.deepStrictEqual(context.traces, [
     {
       message: 'regex',
@@ -1254,6 +1256,7 @@ test('regex honours an asynchronous input override per group member and a custom
   assert.deepStrictEqual(await evaluator(first, context), { status: 'pass' });
   assert.deepStrictEqual(await evaluator(groupSubject([first, second]), context), {
     status: 'violation',
+    locations: [{ filepath: 'b.json', scopeId: '$.b' }],
   });
   assert.deepStrictEqual(context.traces, [
     {
@@ -1278,7 +1281,11 @@ test('regex honours an asynchronous input override per group member and a custom
   ]);
 
   const violated = await regex({ pattern: /^z$/, violationMessage: 'Not x' })(first, context);
-  assert.deepStrictEqual(violated, { status: 'violation', message: 'Not x' });
+  assert.deepStrictEqual(violated, {
+    status: 'violation',
+    message: 'Not x',
+    locations: [{ filepath: 'a.json', scopeId: '$.a' }],
+  });
 });
 
 test('regex never contacts the decision backend', async () => {

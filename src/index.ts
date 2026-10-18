@@ -24,6 +24,7 @@ export type {
   Subject,
   TokenPricing,
   TokenUsage,
+  ViolationLocation,
 } from './app/rule.js';
 
 export { ai, pass, regex, violation } from './app/evaluators.js';

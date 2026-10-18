@@ -72,9 +72,16 @@ export interface AiUsage extends TokenUsage {
   readonly outputCost: number;
 }
 
+export interface ViolationLocation {
+  readonly filepath: string;
+  readonly scopeId?: string;
+  readonly lines?: { readonly start: number; readonly end: number };
+}
+
 export interface CheckResult {
   readonly status: 'pass' | 'violation';
   readonly message?: string;
+  readonly locations?: readonly ViolationLocation[];
   readonly probability?: number;
   readonly threshold?: number;
   readonly model?: string;

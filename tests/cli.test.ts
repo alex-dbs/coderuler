@@ -468,6 +468,11 @@ test('check JSONL preserves complete ordered reports and machine exit statuses',
   writeRule(target, 'zzz-marker', markerRule('Missing marker\nwith details'));
   const json = await runCli(['check', '--json', '--output-all'], target);
   const expected = parseCheckOutput(json, 'JSONL reference');
+  assert.deepEqual(reportNamed(expected, 'zzz-marker', 'JSONL reference').evaluations[0]!.result, {
+    status: 'violation',
+    message: 'Missing marker\nwith details',
+    locations: [{ filepath: 'src/a.txt', scopeId: '$', lines: { start: 1, end: 2 } }],
+  });
   const assertJsonl = (stdout: string, reports: typeof expected): void => {
     const lines = stdout === '' ? [] : stdout.trimEnd().split('\n');
     parseCheckOutput({ status: reports.some(report => report.status === 'violation') ? 1 : 0, stdout, stderr: '' }, 'JSONL records', '--jsonl');
@@ -493,6 +498,44 @@ test('check JSONL preserves complete ordered reports and machine exit statuses',
   const filtered = await runCli(['check', '--jsonl', '--rules', '.rulekeeper/aaa-pass.rule.ts'], target);
   assert.equal(filtered.status, 0, filtered.stderr);
   assertJsonl(filtered.stdout, []);
+});
+
+test('check JSON and JSONL preserve whitespace keyed scope locations', async () => {
+  const target = sandbox.isolated('check-whitespace-scope-location');
+  writeFiles(target, { 'data/record.json': '{\n  "id": " ",\n  "value": "bad"\n}\n' });
+  writeRule(target, 'keyed', `import { Rule, regex, scopes } from 'rulekeeper';
+export default class Keyed extends Rule {
+  files = ['data/*.json'];
+  scope = scopes.json({ key: '$.id' });
+  check = regex({ pattern: /MARKER-OK/, violationMessage: 'Missing marker' });
+}
+`);
+  const locations = [{ filepath: 'data/record.json', scopeId: ' ', lines: { start: 1, end: 4 } }];
+  for (const mode of ['--json', '--jsonl'] as const) {
+    const result = await runCli(['check', mode], target);
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.stderr, '');
+    const reports = parseCheckOutput(result, 'whitespace keyed scope', mode);
+    assert.equal(reports.length, 1);
+    const report = reports[0]!;
+    assert.equal(report.status, 'violation');
+    assert.equal(report.evaluations.length, 1);
+    const evaluation = report.evaluations[0]!;
+    assert.equal(evaluation.result.status, 'violation');
+    assert.deepEqual(evaluation.result.locations, locations);
+    const subject = scopeSubjects(report, 'whitespace keyed scope')[0]!;
+    assert.equal(subject.id, ' ');
+    assert.deepEqual(subject.lines, { start: 1, end: 4 });
+    const payload = asMapping(JSON.parse(result.stdout), `${mode} whitespace keyed scope output`);
+    let rawReport = payload;
+    if (mode === '--json') {
+      assert.ok(Array.isArray(payload['reports']));
+      rawReport = asMapping(payload['reports'][0], 'JSON whitespace keyed scope report');
+    } else {
+      assert.equal(payload['type'], 'rule');
+    }
+    assert.deepEqual(rawReport['evaluations'], report.evaluations);
+  }
 });
 
 test('check rejects conflicting machine modes before loading rules', async () => {

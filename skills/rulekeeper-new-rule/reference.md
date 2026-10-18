@@ -165,15 +165,45 @@ import type { Evaluator } from 'rulekeeper';
 const uniqueIds: Evaluator = subject => {
   const members = subject.kind === 'group' ? subject.members : [subject];
   const ids = new Set<string>();
-  for (const { id } of members) {
-    if (ids.has(id)) return violation(`Duplicate scope ID: ${id}`);
+  for (const { id, filepath } of members) {
+    if (ids.has(id)) {
+      return violation(`Duplicate scope ID: ${id}`, [{ filepath, scopeId: id }]);
+    }
     ids.add(id);
   }
   return pass();
 };
 ```
 
-A custom result is `{ status: 'pass' | 'violation', message?: string, probability?: number, threshold?: number, model?: string, usage?: AiUsage }`; `pass(): CheckResult` and `violation(message: string): CheckResult` are convenience helpers. Results validate; supplied messages survive reporting. Violations without a message report rule/location without generated text. Return real probability/model/threshold metadata only; supplied probability/threshold must be finite in `[0, 1]`. Throw for execution errors. External libraries/providers may be called directly; no backend registry is required.
+Custom checks return `CheckResult`; `pass(): CheckResult` and `violation(message: string, locations?: readonly ViolationLocation[]): CheckResult` are convenience helpers.
+
+```ts
+interface ViolationLocation {
+  readonly filepath: string;
+  readonly scopeId?: string;
+  readonly lines?: { readonly start: number; readonly end: number };
+}
+
+interface CheckResult {
+  readonly status: 'pass' | 'violation';
+  readonly message?: string;
+  readonly locations?: readonly ViolationLocation[];
+  readonly probability?: number;
+  readonly threshold?: number;
+  readonly model?: string;
+  readonly usage?: AiUsage;
+}
+```
+
+`locations` is allowed only for violations. Attribute only offending evaluated scopes or group members: use their `filepath` and `id` as `scopeId`, as above, rather than naming unrelated files. Each location requires a nonempty filepath and either a nonempty `scopeId`, `lines`, or both. A scope ID resolves that member's source lines when available.
+
+Explicit `lines` are absolute file coordinates: positive safe integers with inclusive `start <= end`. Use a narrower subrange within the member's known lines; file-only locations must fit a member's range for that file. When the selected member has no line information, explicit lines may supply it.
+
+With `locations` omitted, a scope violation uses its own source lines; a group violation does **not** automatically blame all members. Explicit `locations: []` disables automatic scope attribution. Without usable source lines (or a matching current PR diff anchor), `--auto-comment` reports the finding in an ordinary PR comment instead of guessing an inline location.
+
+Scalar AI classification supplies no offending-member attribution: scope AI can use its subject's lines, but grouped AI needs explicit locations from a custom check wrapping `context.ai(...)`; otherwise it uses the fallback comment.
+
+Results validate; supplied messages survive reporting. Violations without a message report rule/location without generated text. Return real probability/model/threshold metadata only; supplied probability/threshold must be finite in `[0, 1]`. Throw for execution errors. External libraries/providers may be called directly; no backend registry is required.
 
 ### Context helpers
 
@@ -204,7 +234,7 @@ export const tests = [
 ];
 ```
 
-Default input is `String(data)` for scalar/null data, otherwise source text. `input` replaces this **per scope member**, even for groups; every member must match for the group to pass. The pattern is cloned and `lastIndex` reset for deterministic `/g`/`/y` behavior. Good: express the allowed pattern. Bad: use a forbidden-pattern regex expecting matches to violate. Regex needs no provider/key and adds no AI metadata.
+Default input is `String(data)` for scalar/null data, otherwise source text. `input` replaces this **per scope member**, even for groups; every member must match for the group to pass. Regex automatically returns locations for the failing members only, using each member's filepath and scope ID. The pattern is cloned and `lastIndex` reset for deterministic `/g`/`/y` behavior. Good: express the allowed pattern. Bad: use a forbidden-pattern regex expecting matches to violate. Regex needs no provider/key and adds no AI metadata.
 
 ## AI options, examples, and settings
 

@@ -182,6 +182,12 @@ function asNumber(value: unknown, where: string): number {
   return value;
 }
 
+interface ViolationLocationShape {
+  readonly filepath: string;
+  readonly scopeId?: string;
+  readonly lines?: { readonly start: number; readonly end: number };
+}
+
 export interface CheckResultShape {
   readonly status: 'pass' | 'violation';
   readonly message?: string;
@@ -189,6 +195,7 @@ export interface CheckResultShape {
   readonly threshold?: number;
   readonly model?: string;
   readonly usage?: AiUsage;
+  readonly locations?: readonly ViolationLocationShape[];
 }
 
 export interface ScopeSubjectShape {
@@ -223,15 +230,49 @@ export interface CheckReportShape {
   readonly evaluations: readonly CheckEvaluationShape[];
 }
 
+function toViolationLocation(value: unknown, where: string): ViolationLocationShape {
+  const mapping = asMapping(value, where);
+  const filepath = asString(mapping['filepath'], `${where}.filepath`);
+  if (filepath.length === 0) throw new Error(`${where}.filepath must not be empty`);
+  const location: { filepath: string; scopeId?: string; lines?: { start: number; end: number } } = { filepath };
+  if (mapping['scopeId'] !== undefined) {
+    const scopeId = asString(mapping['scopeId'], `${where}.scopeId`);
+    if (scopeId.length === 0) throw new Error(`${where}.scopeId must not be empty`);
+    location.scopeId = scopeId;
+  }
+  if (mapping['lines'] !== undefined) {
+    const range = asMapping(mapping['lines'], `${where}.lines`);
+    const start = asNumber(range['start'], `${where}.lines.start`);
+    const end = asNumber(range['end'], `${where}.lines.end`);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start) {
+      throw new Error(`${where}.lines must be a positive inclusive range of safe integers`);
+    }
+    location.lines = { start, end };
+  }
+  if (location.scopeId === undefined && location.lines === undefined) {
+    throw new Error(`${where} must include scopeId or lines`);
+  }
+  return location;
+}
+
 function toCheckResult(value: unknown, where: string): CheckResultShape {
   const mapping = asMapping(value, where);
   const status = mapping['status'];
   if (status !== 'pass' && status !== 'violation') throw new Error(`${where}.status must be pass or violation`);
   const result: {
     status: 'pass' | 'violation'; message?: string; probability?: number; threshold?: number; model?: string; usage?: AiUsage;
+    locations?: readonly ViolationLocationShape[];
   } = { status };
   const message = mapping['message'];
   if (message !== undefined) result.message = asString(message, `${where}.message`);
+  const locations = mapping['locations'];
+  if (locations !== undefined) {
+    if (status !== 'violation') throw new Error(`${where}.locations are only valid for violations`);
+    if (!Array.isArray(locations)) throw new Error(`${where}.locations must be an array`);
+    result.locations = locations.map((location: unknown, index: number) =>
+      toViolationLocation(location, `${where}.locations[${index}]`),
+    );
+  }
   const probability = mapping['probability'];
   if (probability !== undefined) result.probability = asNumber(probability, `${where}.probability`);
   const threshold = mapping['threshold'];

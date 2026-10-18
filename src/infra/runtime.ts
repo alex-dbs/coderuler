@@ -7,6 +7,7 @@ import { createProject, resolveTarget } from '../adapter/filesystem/project.js';
 import { runRuleTests } from '../adapter/filesystem/rule-tests.js';
 import { createRuleLoader, resolveRuleSelector } from '../adapter/filesystem/rules.js';
 import { changedFiles } from '../adapter/git/changes.js';
+import { createGithubCommenter } from '../adapter/github/comments.js';
 import { createSkillManager } from '../adapter/skills/cli.js';
 import { executeRules, validateRules } from '../app/execute.js';
 import { createDecisionResolver } from './settings.js';
@@ -27,7 +28,7 @@ export function createServices(
   env: Readonly<Record<string, string | undefined>>,
 ): CliServices {
   const loader = createRuleLoader();
-  const redact = createRedactor([env.TYPESAFE_API_KEY]);
+  const redact = createRedactor([env.TYPESAFE_API_KEY, env.GITHUB_TOKEN]);
   return {
     cwd,
     redact,
@@ -53,6 +54,8 @@ export function createServices(
 
     changedFiles,
 
+    commentOnPullRequest: createGithubCommenter(env),
+
     resolveRuleSelector,
 
     manageSkill: createSkillManager(cwd, env),
@@ -77,7 +80,7 @@ export async function runCli(argv: readonly string[]): Promise<number> {
     loadEnvironment(cwd);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const redact = createRedactor([process.env.TYPESAFE_API_KEY]);
+    const redact = createRedactor([process.env.TYPESAFE_API_KEY, process.env.GITHUB_TOKEN]);
     process.stderr.write(`rulekeeper: ${redact(escapeDiagnostic(message))}\n`);
     return EXIT_FAILURE;
   }

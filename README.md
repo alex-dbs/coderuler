@@ -24,7 +24,7 @@ Node access — this is an authoring framework, not a sandbox.
 ## Requirements and build
 
 - **Node.js 24 or later** (ESM, `node:path.matchesGlob`, and native TypeScript type stripping).
-- No Git, and no revision/diff integration of any kind.
+- Git is required only for `check --diff` (also spelled `--diff-only`).
 
 Install and build the package:
 
@@ -381,19 +381,64 @@ conditional or multi-step logic, already bound to the current subject and rule s
 - **`regex({ pattern, violationMessage?, input? }): Evaluator`** — deterministic, no provider, no key,
 no network. The default input is `String(data)` for scalar/null data and the scope source text
 otherwise; an `input` callback (`(subject, context) => Awaitable<string>`) replaces it per member. A
-group passes only when **all** members match. The pattern is cloned at construction and `lastIndex` is
-reset before each test, so `/g` and `/y` flags stay deterministic. The result carries no fake
-probability/model/threshold.
-- **`pass()` / `violation(message)`** — helpers for custom checks.
+group passes only when **all** members match; a violation names only the failing members in its locations.
+The pattern is cloned at construction and `lastIndex` is reset before each test, so `/g` and `/y`
+flags stay deterministic. The result carries no fake probability/model/threshold.
+- **`pass()` / `violation(message, locations?)`** — helpers for custom checks.
 
 A **custom check** is any `Evaluator`-shaped value (`(subject, context) => Awaitable<CheckResult>`)
 assigned to the function-valued `check` property, for example
 `check = async (subject, context) => { ... }`. `subject` is a `Subject<T>`, so `subject.kind === 'scope'`
 narrows it to `ScopeSubject<T>` (with `id`, `source`, `data`, `captures`, and `filepath`). The check
-returns `{ status: 'pass' | 'violation', message?, probability?, threshold?, model?, usage? }` or throws; the result is
-validated and supplied messages are preserved. A violation without a message is reported by rule name
-and location, without generated message text. Checks may use any external library/provider directly —
-there is no backend-registration framework.
+returns `{ status: 'pass' | 'violation', message?, probability?, threshold?, model?, usage?, locations? }`
+or throws; the result is validated and supplied messages are preserved. A violation without a message
+is reported by rule name and location, without generated message text. Checks may use any external
+library/provider directly — there is no backend-registration framework.
+
+`CheckResult.locations?: readonly ViolationLocation[]` attributes a violation to evaluated scopes:
+
+```ts
+interface ViolationLocation {
+  readonly filepath: string;
+  readonly scopeId?: string;
+  readonly lines?: { readonly start: number; readonly end: number };
+}
+```
+
+Each location needs `scopeId`, `lines`, or both. Paths are invocation-project-relative and must identify
+the evaluated scope or an actual group member. Line numbers are positive and inclusive; explicit ranges
+must fit the named member's known range (or a member's known range for that file when no ID is given).
+A member without line metadata can accept explicit lines; `scopeId` alone resolves existing line metadata.
+Locations are allowed only on violations. Omitting them infers a scope's own range, **not every group
+member's**; explicit `[]` disables that inference. Source text is never searched to guess an anchor.
+
+In a folder/project check, name only the responsible member scopes:
+
+```ts
+check = subject => {
+  const members = subject.kind === 'group' ? subject.members : [subject];
+  const rejected = members.filter(member => member.source.includes('unsafe'));
+  return rejected.length === 0
+    ? pass()
+    : violation('Remove unsafe calls', rejected.map(member => ({
+        filepath: member.filepath,
+        scopeId: member.id,
+      })));
+};
+```
+
+To identify a narrower range inside an evaluated scope:
+
+```ts
+return violation('Replace this call', [{
+  filepath: scope.filepath,
+  scopeId: scope.id,
+  lines: { start: 12, end: 14 },
+}]);
+```
+
+Scalar AI output has no member attribution: scope AI can use its own range, but grouped AI falls back
+to an ordinary PR comment unless a custom check adds locations. No extra model calls infer attribution.
 
 AI results include the actual effective `threshold` used for the decision. Returning `context.ai(...)`
 preserves that metadata; a custom check that replaces the AI result does not inherit it automatically.
@@ -432,6 +477,7 @@ export default class StrictLimits extends Rule {
 | model     | `TYPESAFE_DEFAULT_MODEL` | `jev-latest`              | rule setting &gt; env &gt; default                                            |
 | base URL  | `TYPESAFE_BASE_URL`      | `https://api.typesafe.ai` | env only                                                                      |
 | API key   | `TYPESAFE_API_KEY`       | —                         | env only (required for AI calls)                                              |
+| GitHub PAT | `GITHUB_TOKEN`          | —                         | env only (required when `--auto-comment` posts violation comments)             |
 | input price | `RK_INPUT_COST_PER_MILLION` | `0.042` USD/M | inspect flag &gt; `rule.settings.inputCostPerMillion` &gt; env &gt; default |
 | output price | `RK_OUTPUT_COST_PER_MILLION` | `0` USD/M | inspect flag &gt; `rule.settings.outputCostPerMillion` &gt; env &gt; default |
 
@@ -443,7 +489,8 @@ shadowed by a higher-precedence setting are not consulted. Rule and flag values 
 Token prices must be finite and nonnegative; zero is valid. Prices affect cost estimates only, not
 the provider request or pass/violation decision.
 
-Copy `.env.example` to `.env` and set `TYPESAFE_API_KEY` for AI-backed rules. Other values show defaults.
+Copy `.env.example` to `.env` and set `TYPESAFE_API_KEY` for AI-backed rules. Set `GITHUB_TOKEN`
+for GitHub PR comments with `--auto-comment`; other populated values show defaults.
 
 The CLI loads `.env` from the invocation cwd via `process.loadEnvFile()` **without overriding exported
 shell variables**; a missing `.env` is ignored. There is no other configuration system and no statistics
@@ -614,8 +661,9 @@ evaluates them.
 | Flag                     | Meaning                                                                                                                            |
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `--rules <path>`         | Explicit rule file or recursive directory instead of discovery.                                                                    |
-| `--diff-only`            | Evaluate changed files only; folder/project groups retain full contents but run only when affected.                                |
-| `--base <ref>`           | Git reference to compare directly with the working tree; default `HEAD`; requires `--diff-only`.                                   |
+| `--diff`, `--diff-only` | Evaluate changed files only; folder/project groups retain full contents but run only when affected.                                |
+| `--base <ref>`           | Git reference to compare directly with the working tree; default `HEAD`; requires `--diff`.                                        |
+| `--auto-comment`         | Post inline GitHub PR review comments, with a PR-comment fallback per unanchorable finding; requires `--diff` and `GITHUB_TOKEN` when posting. |
 | `--json`                 | JSON object on stdout: `{ "durationMs": number, "reports": [...] }`; violations only by default.                                   |
 | `--jsonl`                | Compact `{ "type": "rule", ...report }` records with each rule's `durationMs`; violations only by default, with no summary record. |
 | `--output-all`           | Include every verification and skipped rule in human, JSON, or JSONL output.                                                       |
@@ -648,11 +696,50 @@ paths and both sides of a rename can trigger surviving groups; wholly removed gr
 synthesized. Unaffected groups and an empty diff are skipped. Traversal exclusions and loaded rule-file
 exclusions still apply. Gates, project readers, and check-time `context.select` retain normal access.
 
+To comment on a GitHub PR when a diff violates a rule:
+
+```sh
+node dist/cli.js check --diff --base origin/main --auto-comment
+```
+
+Set `GITHUB_TOKEN` in the environment or `.env` to a PAT with access to the repository. A fine-grained
+PAT needs **Pull requests: read and write**; a classic PAT needs the `repo` scope for private repositories.
+Only `github.com` is supported. In GitHub Actions PR workflows, Rulekeeper uses `GITHUB_REPOSITORY`
+and `GITHUB_REF`, or the pull request's base repository and number from `GITHUB_EVENT_PATH`.
+Outside those workflows, it discovers the current branch's open PR in the GitHub `origin` repository
+(HTTPS or SSH). No matching PR, multiple matching PRs, and a detached HEAD without Actions PR metadata
+are errors rather than guessed comment targets.
+
+Each opted-in violating run posts fresh GitHub review comments at usable RIGHT-side PR diff locations.
+Scope violations use their source line range unless the check supplies explicit locations; file/folder/project
+groups require explicit attribution, rather than blaming every member. A finding can produce multiple
+inline comments. Only findings with no usable inline location appear in one ordinary PR summary comment;
+anchored findings are not duplicated there.
+
+Inline posting requires the current file's exact bytes to match its GitHub PR-file blob SHA and its location
+to overlap an added or context line in that file's PR patch. Missing patches/files, removed files, no diff
+overlap, missing line metadata, or content mismatches produce fallback for that finding. There is no
+historical line remapping: locally changed or unpushed content that differs from the PR file is not attached
+to potentially misleading PR lines. Locations may be narrowed to the intersecting range within one diff
+hunk; added-line overlap is preferred. A renamed file uses its new PR path. Nested invocation paths are
+mapped to repository paths. Reviews target the fetched PR head commit, which is rechecked before posting;
+a moved PR head fails instead of guessing.
+
+`--auto-comment` does not change diff selection or the base: `--base` still defaults to `HEAD`, and
+`--base origin/main` compares directly to that tree, not a merge base or automatically discovered PR base.
+Checks always use current working-tree contents. Comments include rule/scope or group descriptions and
+violation messages, omit source/data/captures/passing evaluations, and redact configured credentials;
+JSON reports remain unredacted. Clean or empty diffs make no GitHub requests and do not need a PAT.
+Successful posting preserves exit `1`; a missing PAT, unresolved PR, moved head, or API failure exits `2`
+after printing the completed check report. A failed API post is not retried or converted into fallback.
+Existing comments are not updated or removed.
+
+
 `--json` and `--jsonl` are mutually exclusive. By default they omit passing/skipped rules and passing
 evaluations inside mixed-result rules. `--output-all` preserves every report and evaluation. Included
 reports retain their complete subject data; neither format adds colors or automatic progress animation.
 JSONL contains only rule records and emits nothing when no rules are included. These formats are
-emitted only after execution completes; they never contain a partial report after a runtime error.
+emitted only after execution completes; they never contain a partial report after a rule-execution error.
 
 Human output shows the total elapsed rule-execution time using two decimal places and scaled units:
 `23.49ms`, `23.49s`, `1.25min`, `1.25h`, or `1.25d`. JSON retains the total as the envelope's numeric
@@ -952,6 +1039,10 @@ node dist/cli.js check src --rules .rulekeeper/ts-no-any.rule.ts
 
 ## Release notes
 
+- PR comments normalize ANSI sequences before redacting credentials, preventing formatted secrets
+from being reconstructed in posted messages.
+- Violation locations use indexed scope-ID lookup and lazy per-file range indexes. Range-only
+attribution uses logarithmic containment lookups instead of rescanning every scope in the file.
 - Clarified the tiny-helper and dynamic-import AI policies without changing thresholds or existing
 expectations; added contrastive public-adapter and type-only/runtime-import exception regressions.
 - Added `test --failures-only` to filter case output without changing execution, complete totals,
@@ -998,8 +1089,8 @@ such as `$..v`. This does not change JSONPath operator syntax.
 - Scope data arrays and capture arrays must be dense: holes are rejected instead of becoming `null`
 entries in reports, including holes nested inside scope data.
 - Every `CheckResult` is projected to its plain declared fields (`status`, `message`, `probability`,
-`threshold`, `model`); accessor-backed values are materialized, and message-free violations retain
-their probability, threshold, and model without adding generated message text.
+`threshold`, `model`, `usage`, `locations`); accessor-backed values and inclusive location ranges are
+materialized snapshots. Message-free violations retain their metadata without generated message text.
 - Custom `select` subjects are projected to validated declared fields; `captures` become a plain object
 of strings or string arrays, and `lines` are materialized. Extra fields returned by a scope selector
 cannot overwrite framework-owned `kind` or `filepath`.
