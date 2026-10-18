@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import { after, test } from 'node:test';
+import { setImmediate } from 'node:timers/promises';
 
 import type { DecisionExchange, DecisionObserver, DecisionRequest, JsonValue } from '../dist/index.js';
 import { JevAdapter } from '../dist/adapter/decision/jev.js';
@@ -76,7 +77,7 @@ async function stopServer(server: Server): Promise<void> {
   });
 }
 
-async function startLoopback(): Promise<Loopback> {
+async function startLoopback(onRequest?: () => void): Promise<Loopback> {
   const sent: Sent[] = [];
   let backend: Loopback;
   const server = createServer((request, response) => {
@@ -99,6 +100,7 @@ async function startLoopback(): Promise<Loopback> {
         raw,
         parsed,
       });
+      onRequest?.();
       const reply = backend.answer;
       if (reply.hang === true) return;
       const headers: Record<string, string> = { 'content-type': reply.contentType ?? 'application/json' };
@@ -543,26 +545,40 @@ test('maps a refused connection to a sanitized network error', async () => {
   assert.ok(!error.message.includes('127.0.0.1'), 'the diagnostic must not leak the endpoint');
 });
 
-test('times out a stalled response after the fixed 30-second bound', { timeout: 45_000 }, async () => {
-  const backend = await startLoopback();
+test('times out a stalled response after the fixed 30-second bound', { timeout: 5_000 }, async context => {
+  const received = Promise.withResolvers<void>();
+  const backend = await startLoopback(received.resolve);
+  context.mock.timers.enable({ apis: ['setTimeout'] });
   try {
     backend.answer = { hang: true };
     const { exchanges, observer } = exchangesOf();
-    const started = Date.now();
+    let settled = false;
+    const pending = adapterFor(backend.origin).decide(REQUEST, observer);
+    void pending.then(
+      () => { settled = true; },
+      () => { settled = true; },
+    );
+    await received.promise;
 
-    const error = await failed(() => adapterFor(backend.origin).decide(REQUEST, observer));
+    context.mock.timers.tick(29_999);
+    await setImmediate();
+    assert.equal(settled, false, 'the request must remain pending before the 30-second bound');
+    context.mock.timers.tick(1);
+    await setImmediate();
+    assert.equal(settled, true, 'the request must reject at the 30-second bound');
+    const error = await failed(() => pending);
 
-    const elapsed = Date.now() - started;
-    assert.ok(elapsed >= 29_000, `the fixed 30-second bound must apply, saw ${elapsed} ms`);
     assert.match(error.message, /timed out/);
     assert.ok(!error.message.includes(API_KEY), 'the diagnostic must not leak the credential');
     assert.ok(!error.message.includes('127.0.0.1'), 'the diagnostic must not leak the endpoint');
+    assert.equal(backend.sent.length, 1, 'a timed-out request must not be re-sent');
     assert.deepEqual(
       exchanges.map(exchange => exchange.type),
       ['request'],
       'a timed-out request reports no response',
     );
   } finally {
+    context.mock.timers.reset();
     await backend.close();
   }
 });
