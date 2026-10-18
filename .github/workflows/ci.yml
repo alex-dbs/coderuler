@@ -19,5 +19,5 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
-      - run: npm test -- --test-concurrency=4
+      - run: npm test
       - run: npm run typecheck
