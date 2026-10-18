@@ -32,10 +32,12 @@ import type {
   ScopeSubject,
   SelectionContext,
   Subject,
+  TokenUsage,
 } from '../dist/index.js';
 import { executeRules, validateRules } from '../dist/app/execute.js';
 import { wholeFileScope } from '../dist/app/selection.js';
-import { createSandbox, expectFailure, parseCheckOutput, runCli, writeFile } from './support.ts';
+import { createUsageTracker } from '../dist/adapter/cli/inspect-usage.js';
+import { UNREPORTED_AI_USAGE, createSandbox, expectFailure, parseCheckOutput, runCli, writeFile } from './support.ts';
 
 const cliSandbox = createSandbox('rulekeeper-engine-');
 after(() => cliSandbox.cleanup());
@@ -99,13 +101,18 @@ class MemoryProject implements Project {
 class RecordingBackend implements DecisionBackend {
   readonly requests: DecisionRequest[] = [];
   probabilities: number[] = [];
+  usages: (TokenUsage | undefined)[] = [];
+  failures: (Error | undefined)[] = [];
   model = 'recording-model';
 
   async decide(request: DecisionRequest, observer?: DecisionObserver): Promise<DecisionOutcome> {
     this.requests.push(request);
     observer?.({ type: 'request', body: JSON.stringify(request) });
+    const failure = this.failures.shift();
+    if (failure !== undefined) throw failure;
     const probability = this.probabilities.shift() ?? 0.9;
-    const outcome: DecisionOutcome = { probability, model: this.model };
+    const usage = this.usages.shift();
+    const outcome: DecisionOutcome = { probability, model: this.model, ...(usage === undefined ? {} : { usage }) };
     observer?.({ type: 'response', status: 200, body: JSON.stringify(outcome) });
     return outcome;
   }
@@ -132,7 +139,14 @@ class Harness {
       concurrency: options.concurrency ?? 8,
       resolveDecision: (settings: RuleSettings): DecisionRuntime => {
         this.resolveCalls += 1;
-        return { backend, threshold: settings.threshold ?? fallbackThreshold };
+        return {
+          backend,
+          threshold: settings.threshold ?? fallbackThreshold,
+          pricing: {
+            inputCostPerMillion: settings.inputCostPerMillion ?? 0.042,
+            outputCostPerMillion: settings.outputCostPerMillion ?? 0,
+          },
+        };
       },
       emit: (event: RunEvent): void => {
         this.events.push(event);
@@ -230,7 +244,7 @@ function assertEvaluationLifecycle(events: readonly RunEvent[]): void {
       started.set(event.evaluationId, event);
       continue;
     }
-    if (event.type === 'request' || event.type === 'response' || event.type === 'result') {
+    if (event.type === 'request' || event.type === 'response' || event.type === 'usage' || event.type === 'result') {
       assert.equal(typeof event.evaluationId, 'number');
     }
     if (!('evaluationId' in event) || event.evaluationId === undefined) continue;
@@ -861,6 +875,693 @@ test('ai projects the current subject and resolves one runtime per rule', async 
   assert.deepEqual(eventsOfType(harness.events, 'response').map(event => event.status), [200, 200]);
 });
 
+test('multiple context.ai calls are accumulated even when a custom check transforms the result', async () => {
+  const rule = new TestRule({
+    files: ['a.txt'],
+    check: async (_subject, context) => {
+      await context.ai({ rule: 'First policy' });
+      await context.ai({ rule: 'Second policy' });
+      await context.ai({ rule: 'Third policy' });
+      return { status: 'violation', message: 'Combined policy failed', usage: UNREPORTED_AI_USAGE };
+    },
+  });
+  rule.settings = { inputCostPerMillion: 2, outputCostPerMillion: 5 };
+  const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }));
+  harness.backend.usages = [{ inputTokens: 20, outputTokens: 4 }, undefined, { inputTokens: 30, outputTokens: 6 }];
+  const [report] = await executeRules([loaded('combined', rule)], harness.context);
+  const usage = {
+    calls: 3, unreportedCalls: 1, inputTokens: 50, outputTokens: 10,
+    inputCost: 20 * 2 / 1_000_000 + 30 * 2 / 1_000_000,
+    outputCost: 4 * 5 / 1_000_000 + 6 * 5 / 1_000_000,
+  };
+  const expected = { status: 'violation', message: 'Combined policy failed', usage };
+  assert.deepEqual(report?.evaluations[0]?.result, expected);
+  assert.deepEqual(eventsOfType(harness.events, 'result').map(event => event.result), [expected]);
+  const calls = eventsOfType(harness.events, 'usage');
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls.map(event => event.usage), [
+    { calls: 1, unreportedCalls: 0, inputTokens: 20, outputTokens: 4, inputCost: 20 * 2 / 1_000_000, outputCost: 4 * 5 / 1_000_000 },
+    UNREPORTED_AI_USAGE,
+    { calls: 1, unreportedCalls: 0, inputTokens: 30, outputTokens: 6, inputCost: 30 * 2 / 1_000_000, outputCost: 6 * 5 / 1_000_000 },
+  ]);
+  assert.equal(new Set(calls.map(event => event.evaluationId)).size, 1);
+  assertEvaluationLifecycle(harness.events);
+});
+
+test('usage events retain partial accounting when a later AI invocation fails', async () => {
+  const rule = new TestRule({
+    files: ['a.txt'],
+    check: async (_subject, context) => {
+      await context.ai({ rule: 'First policy' });
+      return context.ai({ rule: 'Second policy' });
+    },
+  });
+  const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }));
+  harness.backend.usages = [{ inputTokens: 11, outputTokens: 1 }];
+  harness.backend.failures = [undefined, new Error('backend failed')];
+  await assert.rejects(executeRules([loaded('partial', rule)], harness.context));
+  const calls = eventsOfType(harness.events, 'usage');
+  assert.deepEqual(calls.map(event => event.usage), [
+    { calls: 1, unreportedCalls: 0, inputTokens: 11, outputTokens: 1, inputCost: 11 * 0.042 / 1_000_000, outputCost: 0 },
+    UNREPORTED_AI_USAGE,
+  ]);
+  assert.equal(harness.backend.requests.length, 2);
+  assert.equal(eventsOfType(harness.events, 'result').length, 0);
+  assertEvaluationLifecycle(harness.events);
+});
+
+test('a concurrent AI failure drains pending calls before closing the evaluation', { timeout: 5000 }, async () => {
+  const first = Promise.withResolvers<DecisionOutcome>();
+  const second = Promise.withResolvers<DecisionOutcome>();
+  const bothStarted = Promise.withResolvers<void>();
+  const failure = new Error('first concurrent call failed');
+  const rule = new TestRule({
+    files: ['a.txt'],
+    check: async (_subject, context) => {
+      await Promise.all([
+        context.ai({ rule: 'First policy' }),
+        context.ai({ rule: 'Second policy' }),
+      ]);
+      return pass();
+    },
+  });
+  rule.settings = { inputCostPerMillion: 2, outputCostPerMillion: 5 };
+  const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }));
+  harness.backend.decide = async (request, observer) => {
+    harness.backend.requests.push(request);
+    observer?.({ type: 'request', body: JSON.stringify(request) });
+    const pending = harness.backend.requests.length === 1 ? first : second;
+    if (harness.backend.requests.length === 2) bothStarted.resolve();
+    const outcome = await pending.promise;
+    observer?.({ type: 'response', status: 200, body: JSON.stringify(outcome) });
+    return outcome;
+  };
+  let settled = false;
+  const completed = executeRules([loaded('concurrent-failure', rule)], harness.context).then(
+    () => { settled = true; return undefined; },
+    error => { settled = true; return error; },
+  );
+  await bothStarted.promise;
+  first.reject(failure);
+  await new Promise<void>(resolve => { setImmediate(resolve); });
+  try {
+    assert.equal(settled, false, 'the evaluation must wait for its pending AI call');
+    assert.deepEqual(eventsOfType(harness.events, 'error'), []);
+    assert.deepEqual(eventsOfType(harness.events, 'result'), []);
+    assert.deepEqual(eventsOfType(harness.events, 'usage').map(event => event.usage), [UNREPORTED_AI_USAGE]);
+  } finally {
+    second.resolve({
+      probability: 0.9,
+      model: 'recording-model',
+      usage: { inputTokens: 20, outputTokens: 4 },
+    });
+  }
+  assert.equal(await completed, failure, 'draining must preserve the original failure');
+  assert.deepEqual(eventsOfType(harness.events, 'usage').map(event => event.usage), [
+    UNREPORTED_AI_USAGE,
+    {
+      calls: 1, unreportedCalls: 0, inputTokens: 20, outputTokens: 4,
+      inputCost: 20 * 2 / 1_000_000, outputCost: 4 * 5 / 1_000_000,
+    },
+  ]);
+  assert.equal(harness.backend.requests.length, 2);
+  assert.equal(eventsOfType(harness.events, 'result').length, 0);
+  assert.deepEqual(eventsOfType(harness.events, 'error').map(event => [
+    event.evaluationId, event.stage, event.message,
+  ]), [[1, 'check', failure.message]]);
+  assertEvaluationLifecycle(harness.events);
+});
+
+test('an AI failure stops new subjects before its pending calls finish draining', { timeout: 5000 }, async () => {
+  for (const siblingFails of [false, true]) {
+    const failed = Promise.withResolvers<DecisionOutcome>();
+    const slow = Promise.withResolvers<DecisionOutcome>();
+    const sibling = Promise.withResolvers<DecisionOutcome>();
+    const allStarted = Promise.withResolvers<void>();
+    const checkFailed = Promise.withResolvers<void>();
+    const siblingFinished = Promise.withResolvers<void>();
+    const failure = new Error('first subject failed');
+    const started: string[] = [];
+    const rule = new TestRule({
+      files: ['a.txt'],
+      scope: file => Array.from({ length: 6 }, (_unused, index) => ({ id: String(index), source: file.source })),
+      check: async (subject, context) => {
+        const id = asScope(subject).id;
+        started.push(id);
+        if (id !== '0') return context.ai({ rule: 'Sibling policy' });
+        try {
+          await Promise.all([
+            context.ai({ rule: 'Failed policy' }),
+            context.ai({ rule: 'Slow policy' }),
+          ]);
+        } catch (error) {
+          checkFailed.resolve();
+          throw error;
+        }
+        return pass();
+      },
+    });
+    const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }), { concurrency: 2 });
+    harness.backend.decide = async (request, observer) => {
+      harness.backend.requests.push(request);
+      observer?.({ type: 'request', body: JSON.stringify(request) });
+      if (harness.backend.requests.length === 3) allStarted.resolve();
+      const outcome = await (request.instructions.rule === 'Failed policy'
+        ? failed.promise
+        : request.instructions.rule === 'Slow policy' ? slow.promise : sibling.promise);
+      observer?.({ type: 'response', status: 200, body: JSON.stringify(outcome) });
+      return outcome;
+    };
+    const context: RunContext = {
+      ...harness.context,
+      emit: event => {
+        harness.events.push(event);
+        if ((event.type === 'result' || event.type === 'error') && event.evaluationId === 2) {
+          siblingFinished.resolve();
+        }
+      },
+    };
+    let settled = false;
+    const completed = executeRules([loaded('stop-before-drain', rule)], context).then(
+      () => { settled = true; return undefined; },
+      error => { settled = true; return error; },
+    );
+    await allStarted.promise;
+    failed.reject(failure);
+    await checkFailed.promise;
+    if (siblingFails) sibling.reject(new Error('later sibling failure'));
+    else sibling.resolve({ probability: 0.9, model: 'recording-model' });
+    await siblingFinished.promise;
+    assert.equal(settled, false);
+    assert.equal(eventsOfType(harness.events, 'error').some(event => event.evaluationId === 1), false);
+    slow.resolve({
+      probability: 0.9, model: 'recording-model', usage: { inputTokens: 20, outputTokens: 4 },
+    });
+    assert.equal(await completed, failure, 'the first failure must survive a later worker rejection');
+    assert.deepEqual(started, ['0', '1']);
+    assert.equal(harness.backend.requests.length, 3);
+    assert.deepEqual(eventsOfType(harness.events, 'usage').map(event => [
+      event.evaluationId, event.usage.inputTokens, event.usage.unreportedCalls,
+    ]), [[1, 0, 1], [2, 0, 1], [1, 20, 0]]);
+    assertEvaluationLifecycle(harness.events);
+  }
+});
+
+test('invalid check results stop scheduling before pending AI calls drain', { timeout: 5000 }, async () => {
+  for (const getterThrows of [false, true]) {
+    for (const siblingFails of [false, true]) {
+      const slow = Promise.withResolvers<DecisionOutcome>();
+      const sibling = Promise.withResolvers<CheckResult>();
+      const validationStarted = Promise.withResolvers<void>();
+      const siblingFinished = Promise.withResolvers<void>();
+      const validationFailure = new Error('check result getter failed');
+      const siblingFailure = new Error('later sibling failure');
+      const started: string[] = [];
+      const rule = new TestRule({
+        files: ['a.txt'],
+        scope: file => Array.from({ length: 6 }, (_unused, index) => ({ id: String(index), source: file.source })),
+        check: (subject, context) => {
+          const id = asScope(subject).id;
+          started.push(id);
+          if (id !== '0') return sibling.promise;
+          void context.ai({ rule: 'Slow policy' });
+          return {
+            status: 'pass',
+            get probability() {
+              validationStarted.resolve();
+              if (getterThrows) throw validationFailure;
+              return 2;
+            },
+          };
+        },
+      });
+      const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }), { concurrency: 2 });
+      harness.backend.decide = async (request, observer) => {
+        harness.backend.requests.push(request);
+        observer?.({ type: 'request', body: JSON.stringify(request) });
+        return slow.promise;
+      };
+      const context: RunContext = {
+        ...harness.context,
+        emit: event => {
+          harness.events.push(event);
+          if ((event.type === 'result' || event.type === 'error') && event.evaluationId === 2) {
+            siblingFinished.resolve();
+          }
+        },
+      };
+      let settled = false;
+      const completed = executeRules([loaded('invalid-before-drain', rule)], context).then(
+        () => { settled = true; return undefined; },
+        error => { settled = true; return error; },
+      );
+      await validationStarted.promise;
+      if (siblingFails) sibling.reject(siblingFailure);
+      else sibling.resolve(pass());
+      await siblingFinished.promise;
+      assert.equal(settled, false, 'validation failure must still drain its pending AI call');
+      assert.equal(eventsOfType(harness.events, 'error').some(event => event.evaluationId === 1), false);
+      slow.resolve({ probability: 0.9, model: 'recording-model', usage: { inputTokens: 20, outputTokens: 4 } });
+      const failure: unknown = await completed;
+      assert.ok(failure instanceof Error);
+      if (getterThrows) assert.equal(failure, validationFailure);
+      else assert.match(failure.message, /check probability must be a finite number between 0 and 1/);
+      assert.notEqual(failure, siblingFailure);
+      assert.deepEqual(started, ['0', '1']);
+      assert.equal(harness.backend.requests.length, 1);
+      assert.deepEqual(eventsOfType(harness.events, 'usage').map(event => event.evaluationId), [1]);
+      assert.deepEqual(eventsOfType(harness.events, 'error').filter(event => event.evaluationId === 1).map(event => [
+        event.stage, event.message,
+      ]), [['check', failure.message]]);
+      assert.equal(eventsOfType(harness.events, 'result').some(event => event.evaluationId === 1), false);
+      assertEvaluationLifecycle(harness.events);
+    }
+  }
+});
+
+test('check results are snapshotted before pending AI handlers mutate their fields', { timeout: 5000 }, async () => {
+  const first = Promise.withResolvers<DecisionOutcome>();
+  const second = Promise.withResolvers<DecisionOutcome>();
+  const bothStarted = Promise.withResolvers<void>();
+  const mutated = Promise.withResolvers<void>();
+  const suppliedUsage = {
+    calls: 7, unreportedCalls: 1, inputTokens: 11, outputTokens: 1, inputCost: 0.25, outputCost: 0,
+  };
+  const shared = {
+    status: 'pass' as 'pass' | 'violation',
+    message: 'initial message',
+    probability: 0.9,
+    threshold: 0.4,
+    model: 'initial-model',
+    usage: suppliedUsage,
+    extra: 'must not escape',
+  };
+  const rule = new TestRule({
+    files: ['a.txt'],
+    check: (_subject, context) => {
+      void context.ai({ rule: 'First policy' }).then(() => {
+        shared.status = 'violation';
+        shared.message = 'changed message';
+        shared.probability = 2;
+        shared.threshold = 2;
+        shared.model = 'changed-model';
+        suppliedUsage.calls = -1;
+        suppliedUsage.inputTokens = Number.NaN;
+        shared.usage = { ...suppliedUsage, outputTokens: Number.POSITIVE_INFINITY };
+        mutated.resolve();
+      });
+      void context.ai({ rule: 'Second policy' });
+      return shared;
+    },
+  });
+  rule.settings = { inputCostPerMillion: 2, outputCostPerMillion: 5 };
+  const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }));
+  harness.backend.decide = async (request, observer) => {
+    harness.backend.requests.push(request);
+    observer?.({ type: 'request', body: JSON.stringify(request) });
+    if (harness.backend.requests.length === 2) bothStarted.resolve();
+    return request.instructions.rule === 'First policy' ? first.promise : second.promise;
+  };
+  const completed = executeRules([loaded('snapshot-before-drain', rule)], harness.context);
+  await bothStarted.promise;
+  await new Promise<void>(resolve => { setImmediate(resolve); });
+  assert.deepEqual(eventsOfType(harness.events, 'result'), []);
+  first.resolve({
+    probability: 0.9, model: 'recording-model', usage: { inputTokens: 20, outputTokens: 4 },
+  });
+  await mutated.promise;
+  assert.equal(shared.probability, 2, 'the custom handler must mutate the original result during drain');
+  assert.deepEqual(eventsOfType(harness.events, 'result'), []);
+  second.resolve({
+    probability: 0.9, model: 'recording-model', usage: { inputTokens: 30, outputTokens: 6 },
+  });
+  const [report] = await completed;
+  const expected = {
+    status: 'pass',
+    message: 'initial message',
+    probability: 0.9,
+    threshold: 0.4,
+    model: 'initial-model',
+    usage: {
+      calls: 2, unreportedCalls: 0, inputTokens: 50, outputTokens: 10,
+      inputCost: 20 * 2 / 1_000_000 + 30 * 2 / 1_000_000,
+      outputCost: 4 * 5 / 1_000_000 + 6 * 5 / 1_000_000,
+    },
+  };
+  assert.deepEqual(report?.evaluations[0]?.result, expected);
+  assert.deepEqual(eventsOfType(harness.events, 'result').map(event => event.result), [expected]);
+  assert.equal(eventsOfType(harness.events, 'usage').length, 2);
+  assertEvaluationLifecycle(harness.events);
+});
+
+test('a caught backend failure still contributes usage to the returned custom result', async () => {
+  const rule = new TestRule({
+    files: ['a.txt'],
+    check: async (_subject, context) => {
+      try {
+        await context.ai({ rule: 'Policy' });
+      } catch {
+        return pass();
+      }
+      return violation('The backend unexpectedly succeeded');
+    },
+  });
+  const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }));
+  harness.backend.failures = [new Error('backend failed')];
+  const [report] = await executeRules([loaded('caught', rule)], harness.context);
+  assert.deepEqual(report?.evaluations[0]?.result, { status: 'pass', usage: UNREPORTED_AI_USAGE });
+  assert.deepEqual(eventsOfType(harness.events, 'usage').map(event => event.usage), [UNREPORTED_AI_USAGE]);
+  assertEvaluationLifecycle(harness.events);
+});
+
+test('invalid AI input before a backend invocation produces no usage', async () => {
+  const rule = new TestRule({ files: ['a.txt'], check: ai({ rule: 'Policy', input: () => NaN }) });
+  const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }));
+  await assert.rejects(executeRules([loaded('invalid-input', rule)], harness.context));
+  assert.equal(harness.backend.requests.length, 0);
+  assert.deepEqual(eventsOfType(harness.events, 'usage'), []);
+  assertEvaluationLifecycle(harness.events);
+});
+
+test('legitimate external usage is preserved and normalized without inventing backend calls', async () => {
+  const usage = { calls: 2, unreportedCalls: 1, inputTokens: 11, outputTokens: 1, inputCost: 0.25, outputCost: 0 };
+  const inheritedUsage = Object.assign(Object.create(usage), { extra: 'dropped' }) as typeof usage;
+  const rule = new TestRule({ files: ['a.txt'], check: () => ({ status: 'pass', usage: inheritedUsage }) });
+  const { report, harness } = await runRule(rule, new MemoryProject('/repo', { 'a.txt': 'A' }));
+  const result = report.evaluations[0]?.result;
+  assert.deepEqual(result, { status: 'pass', usage });
+  assert.equal(Object.getPrototypeOf(result?.usage), Object.prototype);
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { status: 'pass', usage });
+  assert.deepEqual(eventsOfType(harness.events, 'result')[0]?.result, result);
+  assert.equal(harness.resolveCalls, 0);
+  assert.deepEqual(eventsOfType(harness.events, 'usage'), []);
+});
+
+test('malformed external usage rejects the custom check without producing a result or usage event', async () => {
+  const rule = new TestRule({
+    files: ['a.txt'],
+    check: () => ({ status: 'pass', usage: { ...UNREPORTED_AI_USAGE, inputTokens: Number.MAX_SAFE_INTEGER + 1 } }),
+  });
+  const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }));
+  await assert.rejects(executeRules([loaded('invalid-usage', rule)], harness.context));
+  assert.deepEqual(eventsOfType(harness.events, 'result'), []);
+  assert.deepEqual(eventsOfType(harness.events, 'usage'), []);
+  assert.equal(harness.resolveCalls, 0);
+});
+
+test('accumulating individually valid AI calls rejects unsafe token totals and nonfinite total costs', async () => {
+  for (const tokenField of ['inputTokens', 'outputTokens', 'cost'] as const) {
+    const rule = new TestRule({
+      files: ['a.txt'],
+      check: async (_subject, context) => {
+        await context.ai({ rule: 'First policy' });
+        return context.ai({ rule: 'Second policy' });
+      },
+    });
+    rule.settings = {
+      inputCostPerMillion: tokenField === 'cost' ? Number.MAX_VALUE : 0,
+      outputCostPerMillion: 0,
+    };
+    const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }));
+    harness.backend.usages = tokenField === 'cost'
+      ? [{ inputTokens: 1_000_000, outputTokens: 0 }, { inputTokens: 1_000_000, outputTokens: 0 }]
+      : [
+          { inputTokens: 0, outputTokens: 0, [tokenField]: Number.MAX_SAFE_INTEGER },
+          { inputTokens: 0, outputTokens: 0, [tokenField]: 1 },
+        ];
+    await assert.rejects(executeRules([loaded('overflow', rule)], harness.context), tokenField);
+    assert.equal(harness.backend.requests.length, 2);
+    assert.deepEqual(eventsOfType(harness.events, 'result'), []);
+  }
+});
+
+test('custom checks cannot swallow aggregate accounting failures and still drain pending calls', { timeout: 5000 }, async () => {
+  for (const field of ['inputTokens', 'outputTokens', 'inputCost', 'outputCost'] as const) {
+    const pending = Promise.withResolvers<DecisionOutcome>();
+    const caught = Promise.withResolvers<unknown>();
+    const tokens = field === 'inputTokens' || field === 'outputTokens';
+    const usageField = field === 'inputTokens' || field === 'inputCost' ? 'inputTokens' : 'outputTokens';
+    const firstUsage = { inputTokens: 0, outputTokens: 0, [usageField]: tokens ? Number.MAX_SAFE_INTEGER : 1_000_000 };
+    const secondUsage = { inputTokens: 0, outputTokens: 0, [usageField]: tokens ? 1 : 1_000_000 };
+    const rule = new TestRule({
+      files: ['a.txt'],
+      check: async (_subject, context) => {
+        await context.ai({ rule: 'First policy' });
+        void context.ai({ rule: 'Pending policy' });
+        try {
+          await context.ai({ rule: 'Overflow policy' });
+        } catch (error) {
+          caught.resolve(error);
+        }
+        return pass();
+      },
+    });
+    rule.settings = {
+      inputCostPerMillion: field === 'inputCost' ? Number.MAX_VALUE : 0,
+      outputCostPerMillion: field === 'outputCost' ? Number.MAX_VALUE : 0,
+    };
+    const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }));
+    harness.backend.decide = async (request, observer) => {
+      harness.backend.requests.push(request);
+      observer?.({ type: 'request', body: JSON.stringify(request) });
+      const outcome = request.instructions.rule === 'Pending policy'
+        ? await pending.promise
+        : {
+            probability: 0.9, model: 'recording-model',
+            usage: request.instructions.rule === 'First policy' ? firstUsage : secondUsage,
+          };
+      observer?.({ type: 'response', status: 200, body: JSON.stringify(outcome) });
+      return outcome;
+    };
+    let settled = false;
+    const completed = executeRules([loaded('caught-overflow', rule)], harness.context).then(
+      () => { settled = true; return undefined; },
+      error => { settled = true; return error; },
+    );
+    const accountingError = await caught.promise;
+    assert.ok(accountingError instanceof Error);
+    assert.equal(settled, false);
+    assert.deepEqual(eventsOfType(harness.events, 'error'), []);
+    assert.deepEqual(eventsOfType(harness.events, 'result'), []);
+    assert.equal(eventsOfType(harness.events, 'usage').length, 2);
+    pending.resolve({
+      probability: 0.9, model: 'recording-model', usage: { inputTokens: 0, outputTokens: 0 },
+    });
+    assert.equal(await completed, accountingError);
+    assert.equal(harness.backend.requests.length, 3);
+    assert.deepEqual(eventsOfType(harness.events, 'result'), []);
+    assert.equal(eventsOfType(harness.events, 'usage').length, 3);
+    assert.deepEqual(eventsOfType(harness.events, 'error').map(event => [
+      event.evaluationId, event.stage, event.message,
+    ]), [[1, 'check', accountingError.message]]);
+    assertEvaluationLifecycle(harness.events);
+  }
+});
+
+test('caught inspection accounting failures stop scheduling and drain without a successful result', { timeout: 5000 }, async () => {
+  for (const field of ['inputTokens', 'outputTokens', 'inputCost', 'outputCost'] as const) {
+    const pending = Promise.withResolvers<DecisionOutcome>();
+    const firstUsageReported = Promise.withResolvers<void>();
+    const caught = Promise.withResolvers<unknown>();
+    const firstFinished = Promise.withResolvers<void>();
+    const tokens = field === 'inputTokens' || field === 'outputTokens';
+    const usageField = field === 'inputTokens' || field === 'inputCost' ? 'inputTokens' : 'outputTokens';
+    const firstUsage = { inputTokens: 0, outputTokens: 0, [usageField]: tokens ? Number.MAX_SAFE_INTEGER : 1_000_000 };
+    const secondUsage = { inputTokens: 0, outputTokens: 0, [usageField]: tokens ? 1 : 1_000_000 };
+    const started: string[] = [];
+    const rule = new TestRule({
+      files: ['a.txt'],
+      scope: file => Array.from({ length: 6 }, (_unused, index) => ({ id: String(index), source: file.source })),
+      check: async (subject, context) => {
+        const id = asScope(subject).id;
+        started.push(id);
+        if (id === '0') {
+          await context.ai({ rule: 'First policy' });
+          firstUsageReported.resolve();
+          await caught.promise;
+        } else {
+          await firstUsageReported.promise;
+          void context.ai({ rule: 'Pending policy' });
+          try {
+            await context.ai({ rule: 'Overflow policy' });
+          } catch (error) {
+            caught.resolve(error);
+          }
+        }
+        return pass();
+      },
+    });
+    rule.settings = {
+      inputCostPerMillion: field === 'inputCost' ? Number.MAX_VALUE : 0,
+      outputCostPerMillion: field === 'outputCost' ? Number.MAX_VALUE : 0,
+    };
+    const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }), { concurrency: 2 });
+    harness.backend.decide = async (request, observer) => {
+      harness.backend.requests.push(request);
+      observer?.({ type: 'request', body: JSON.stringify(request) });
+      return request.instructions.rule === 'Pending policy'
+        ? pending.promise
+        : {
+            probability: 0.9, model: 'recording-model',
+            usage: request.instructions.rule === 'First policy' ? firstUsage : secondUsage,
+          };
+    };
+    const usage = createUsageTracker();
+    const context: RunContext = {
+      ...harness.context,
+      emit: event => {
+        harness.events.push(event);
+        usage.emit(event);
+        if (event.type === 'result' && event.evaluationId === 1) firstFinished.resolve();
+      },
+    };
+    let settled = false;
+    const completed = executeRules([loaded('caught-inspection-overflow', rule)], context).then(
+      () => { settled = true; return undefined; },
+      error => { settled = true; return error; },
+    );
+    const accountingError = await caught.promise;
+    assert.ok(accountingError instanceof Error);
+    await firstFinished.promise;
+    assert.equal(settled, false);
+    assert.deepEqual(eventsOfType(harness.events, 'error'), []);
+    assert.deepEqual(eventsOfType(harness.events, 'usage').map(event => event.evaluationId), [1, 2]);
+    pending.resolve({ probability: 0.9, model: 'recording-model', usage: { inputTokens: 0, outputTokens: 0 } });
+    assert.equal(await completed, accountingError);
+    assert.deepEqual(started, ['0', '1']);
+    assert.equal(harness.backend.requests.length, 3);
+    assert.deepEqual(eventsOfType(harness.events, 'result').map(event => event.evaluationId), [1]);
+    assert.deepEqual(eventsOfType(harness.events, 'usage').map(event => event.evaluationId), [1, 2, 2]);
+    assert.deepEqual(eventsOfType(harness.events, 'error').map(event => [
+      event.evaluationId, event.stage, event.message,
+    ]), [[2, 'check', accountingError.message]]);
+    assertEvaluationLifecycle(harness.events);
+  }
+});
+
+test('a usage consumer cannot replace the original local accounting failure', async () => {
+  const consumerFailure = new Error('usage consumer failed too');
+  let caught: unknown;
+  const rule = new TestRule({
+    files: ['a.txt'],
+    check: async (_subject, context) => {
+      await context.ai({ rule: 'First policy' });
+      try {
+        await context.ai({ rule: 'Overflow policy' });
+      } catch (error) {
+        caught = error;
+      }
+      return pass();
+    },
+  });
+  rule.settings = { inputCostPerMillion: 0, outputCostPerMillion: 0 };
+  const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }));
+  harness.backend.usages = [
+    { inputTokens: Number.MAX_SAFE_INTEGER, outputTokens: 0 },
+    { inputTokens: 1, outputTokens: 0 },
+  ];
+  const context: RunContext = {
+    ...harness.context,
+    emit: event => {
+      harness.events.push(event);
+      if (event.type === 'usage' && event.usage.inputTokens === 1) throw consumerFailure;
+    },
+  };
+  const failure: unknown = await executeRules([loaded('two-accounting-failures', rule)], context).then(
+    () => undefined,
+    error => error,
+  );
+  assert.ok(failure instanceof Error);
+  assert.match(failure.message, /inputTokens/);
+  assert.equal(failure, caught);
+  assert.notEqual(failure, consumerFailure);
+  assert.equal(eventsOfType(harness.events, 'usage').length, 2);
+  assert.deepEqual(eventsOfType(harness.events, 'result'), []);
+  assert.deepEqual(eventsOfType(harness.events, 'error').map(event => event.message), [failure.message]);
+  assertEvaluationLifecycle(harness.events);
+});
+
+test('aggregate AI usage accepts safe token and finite cost boundaries', async () => {
+  for (const field of ['inputTokens', 'outputTokens', 'inputCost', 'outputCost'] as const) {
+    const tokens = field === 'inputTokens' || field === 'outputTokens';
+    const usageField = field === 'inputTokens' || field === 'inputCost' ? 'inputTokens' : 'outputTokens';
+    const rule = new TestRule({
+      files: ['a.txt'],
+      check: async (_subject, context) => {
+        await context.ai({ rule: 'First policy' });
+        await context.ai({ rule: 'Second policy' });
+        return pass();
+      },
+    });
+    rule.settings = {
+      inputCostPerMillion: field === 'inputCost' ? Number.MAX_VALUE / 2 : 0,
+      outputCostPerMillion: field === 'outputCost' ? Number.MAX_VALUE / 2 : 0,
+    };
+    const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }));
+    harness.backend.usages = [
+      { inputTokens: 0, outputTokens: 0, [usageField]: tokens ? Number.MAX_SAFE_INTEGER - 1 : 1_000_000 },
+      { inputTokens: 0, outputTokens: 0, [usageField]: tokens ? 1 : 1_000_000 },
+    ];
+    const [report] = await executeRules([loaded('usage-boundary', rule)], harness.context);
+    assert.equal(report?.evaluations[0]?.result.usage?.[field], tokens ? Number.MAX_SAFE_INTEGER : Number.MAX_VALUE);
+    assert.equal(report?.evaluations[0]?.result.usage?.calls, 2);
+    assert.equal(eventsOfType(harness.events, 'usage').length, 2);
+    assertEvaluationLifecycle(harness.events);
+  }
+});
+
+test('a check rejection keeps its identity when draining later overflows usage', { timeout: 5000 }, async () => {
+  const pending = Promise.withResolvers<DecisionOutcome>();
+  const checkFailed = Promise.withResolvers<void>();
+  const failure = new Error('original check failure');
+  const rule = new TestRule({
+    files: ['a.txt'],
+    check: async (_subject, context) => {
+      await context.ai({ rule: 'First policy' });
+      void context.ai({ rule: 'Pending policy' });
+      checkFailed.resolve();
+      throw failure;
+    },
+  });
+  rule.settings = { inputCostPerMillion: 0, outputCostPerMillion: 0 };
+  const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }));
+  harness.backend.decide = async (request, observer) => {
+    harness.backend.requests.push(request);
+    observer?.({ type: 'request', body: JSON.stringify(request) });
+    return request.instructions.rule === 'First policy'
+      ? { probability: 0.9, model: 'recording-model', usage: { inputTokens: Number.MAX_SAFE_INTEGER, outputTokens: 0 } }
+      : pending.promise;
+  };
+  const completed = executeRules([loaded('check-before-overflow', rule)], harness.context).then(
+    () => undefined,
+    error => error,
+  );
+  await checkFailed.promise;
+  pending.resolve({ probability: 0.9, model: 'recording-model', usage: { inputTokens: 1, outputTokens: 0 } });
+  assert.equal(await completed, failure);
+  assert.equal(eventsOfType(harness.events, 'usage').length, 2);
+  assert.deepEqual(eventsOfType(harness.events, 'error').map(event => event.message), [failure.message]);
+  assertEvaluationLifecycle(harness.events);
+});
+
+test('early scheduling failure reporting preserves normalization of non-Error check rejections', async () => {
+  for (const reason of [undefined, null, 'check failed', 0]) {
+    const rule = new TestRule({
+      files: ['a.txt'],
+      check: () => { throw reason; },
+    });
+    const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }));
+    const failure: unknown = await executeRules([loaded('non-error-check', rule)], harness.context).then(
+      () => undefined,
+      error => error,
+    );
+    assert.ok(failure instanceof Error);
+    assert.equal(failure.message, String(reason));
+    assert.deepEqual(eventsOfType(harness.events, 'error').map(event => event.message), [failure.message]);
+    assertEvaluationLifecycle(harness.events);
+  }
+});
+
 test('probability equal to the threshold violates; above it passes', async () => {
   const rule = new TestRule({ files: ['**/*.txt'], check: ai({ rule: 'Boundary policy' }) });
   const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A', 'b.txt': 'B' }), { threshold: 0.4 });
@@ -871,8 +1572,8 @@ test('probability equal to the threshold violates; above it passes', async () =>
   const report = reports[0];
   assert.ok(report);
   const expected: readonly CheckResult[] = [
-    { status: 'violation', probability: 0.4, threshold: 0.4, model: 'recording-model' },
-    { status: 'pass', probability: 0.4001, threshold: 0.4, model: 'recording-model' },
+    { status: 'violation', probability: 0.4, threshold: 0.4, model: 'recording-model', usage: UNREPORTED_AI_USAGE },
+    { status: 'pass', probability: 0.4001, threshold: 0.4, model: 'recording-model', usage: UNREPORTED_AI_USAGE },
   ];
   assert.deepEqual(report.evaluations.map(evaluation => evaluation.result), expected);
   assert.deepEqual(eventsOfType(harness.events, 'result').map(event => event.result), expected);
@@ -893,6 +1594,7 @@ test('rule settings threshold overrides the harness default', async () => {
   assert.equal(report.status, 'violation');
   assert.deepEqual(report.evaluations[0]?.result, {
     status: 'violation', probability: 0.5, threshold: 0.9, model: 'recording-model',
+    usage: UNREPORTED_AI_USAGE,
   });
   assert.deepEqual(eventsOfType(harness.events, 'result')[0]?.result, report.evaluations[0]?.result);
   assert.equal(asScope(report.evaluations[0]?.subject ?? ({} as Subject)).filepath, 'a.txt');
@@ -969,6 +1671,7 @@ test('violationMessage is reporting only and examples are normalized', async () 
   const [fell] = await executeRules([loaded('ai-fallback', fallback)], fallbackRun.context);
   assert.deepEqual(fell?.evaluations[0]?.result, {
     status: 'violation', probability: 0.1, threshold: 0.4, model: 'recording-model',
+    usage: UNREPORTED_AI_USAGE,
   });
 
   const emptyExamples = new TestRule({
@@ -1245,26 +1948,6 @@ test('a deterministic rule never resolves a decision runtime', async () => {
   assert.equal(eventsOfType(harness.events, 'response').length, 0);
 });
 
-test('context.ai inside a custom check uses the same projection and runtime', async () => {
-  const rule = new TestRule({
-    files: ['a.txt'],
-    check: (_subject, context) => context.ai({ rule: 'Inside policy' }),
-  });
-  rule.settings = { threshold: 0.67 };
-  const { report, harness } = await runRule(
-    rule, new MemoryProject('/repo', { 'a.txt': 'A' }), { threshold: 0.5 }, 'inside',
-  );
-  const expected: CheckResult = { status: 'pass', probability: 0.9, threshold: 0.67, model: 'recording-model' };
-  assert.deepEqual(report.evaluations[0]?.result, expected);
-  assert.deepEqual(eventsOfType(harness.events, 'result')[0]?.result, expected);
-  assert.equal(harness.resolveCalls, 1);
-  assert.deepEqual(harness.backend.requests[0]?.state, { filepath: 'a.txt', scope: { id: '$', source: 'A' } });
-  assert.deepEqual(harness.backend.requests[0]?.instructions, {
-    rule: 'Inside policy',
-    question: 'Is the rule respected?',
-  });
-});
-
 test('a custom check replacing its AI result does not inherit threshold metadata', async () => {
   const rule = new TestRule({
     files: ['a.txt'],
@@ -1275,8 +1958,13 @@ test('a custom check replacing its AI result does not inherit threshold metadata
   });
   const { report, harness } = await runRule(rule, new MemoryProject('/repo', { 'a.txt': 'A' }), { threshold: 0.67 });
   assert.equal(harness.backend.requests.length, 1);
-  assert.deepEqual(report.evaluations[0]?.result, { status: 'pass' });
-  assert.deepEqual(eventsOfType(harness.events, 'result')[0]?.result, { status: 'pass' });
+  for (const result of [
+    report.evaluations[0]?.result,
+    eventsOfType(harness.events, 'result')[0]?.result,
+  ]) {
+    assert.equal(result?.status, 'pass');
+    assert.equal(result?.threshold, undefined);
+  }
 });
 
 test('a skipped rule never resolves a runtime or sends a request', async () => {

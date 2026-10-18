@@ -1,5 +1,6 @@
 import type {
   AiOptions,
+  AiUsage,
   Awaitable,
   CheckContext,
   CheckResult,
@@ -10,7 +11,7 @@ import type {
   Subject,
 } from './rule.js';
 import type { DecisionInstructions, DecisionObserver, DecisionRuntime } from './ports.js';
-import { isRecord, validateJsonValue } from './validate.js';
+import { isRecord, validateAiUsage, validateJsonValue } from './validate.js';
 
 const QUESTION = 'Is the rule respected?';
 
@@ -114,10 +115,39 @@ export async function evaluateAi<T = JsonValue>(
       ? projectState(subject)
       : validateJsonValue(await options.input(subject, context), 'ai input');
 
-  const decision = await runtime.backend.decide({ state, instructions: instructionsOf(options) }, observer);
+  let decision;
+  let usage: AiUsage;
+  try {
+    decision = await runtime.backend.decide(
+      { state, instructions: instructionsOf(options) },
+      observer === undefined ? undefined : exchange => {
+        if (exchange.type !== 'usage') observer(exchange);
+      },
+    );
+    const tokens = decision.usage;
+    usage = tokens === undefined
+      ? { calls: 1, unreportedCalls: 1, inputTokens: 0, outputTokens: 0, inputCost: 0, outputCost: 0 }
+      : validateAiUsage({
+          calls: 1,
+          unreportedCalls: 0,
+          inputTokens: tokens.inputTokens,
+          outputTokens: tokens.outputTokens,
+          inputCost: tokenCost(tokens.inputTokens, runtime.pricing.inputCostPerMillion),
+          outputCost: tokenCost(tokens.outputTokens, runtime.pricing.outputCostPerMillion),
+        }, 'Decision outcome');
+  } catch (error) {
+    observer?.({
+      type: 'usage',
+      usage: { calls: 1, unreportedCalls: 1, inputTokens: 0, outputTokens: 0, inputCost: 0, outputCost: 0 },
+    });
+    throw error;
+  }
+  observer?.({ type: 'usage', usage });
 
   if (decision.probability > runtime.threshold) {
-    return { status: 'pass', probability: decision.probability, threshold: runtime.threshold, model: decision.model };
+    return {
+      status: 'pass', probability: decision.probability, threshold: runtime.threshold, model: decision.model, usage,
+    };
   }
   return {
     status: 'violation',
@@ -125,7 +155,13 @@ export async function evaluateAi<T = JsonValue>(
     probability: decision.probability,
     threshold: runtime.threshold,
     model: decision.model,
+    usage,
   };
+}
+
+function tokenCost(tokens: number, price: number): number {
+  const product = tokens * price;
+  return Number.isFinite(product) ? product / 1_000_000 : (tokens / 1_000_000) * price;
 }
 
 export interface RegexOptions<T = JsonValue> {

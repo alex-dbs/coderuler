@@ -1,11 +1,13 @@
 import { JevAdapter } from '../adapter/decision/jev.js';
 import type { DecisionRuntime } from '../app/ports.js';
-import type { RuleSettings } from '../app/rule.js';
+import type { RuleSettings, TokenPricing } from '../app/rule.js';
 
 const DEFAULT_BACKEND = 'jev';
 const DEFAULT_MODEL = 'jev-latest';
 const DEFAULT_BASE_URL = 'https://api.typesafe.ai';
 const DEFAULT_THRESHOLD = 0.4;
+const DEFAULT_INPUT_COST_PER_MILLION = 0.042;
+const DEFAULT_OUTPUT_COST_PER_MILLION = 0;
 const THRESHOLD_MESSAGE = 'must be a number between 0 and 1';
 const DECIMAL = /^(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)$/;
 
@@ -24,6 +26,28 @@ function parseThreshold(value: string, label: string): number {
   return validateThreshold(Number(trimmed), label);
 }
 
+function validatePrice(value: number, label: string): number {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new RangeError(`${label} must be a finite nonnegative number, got ${String(value)}`);
+  }
+  return value;
+}
+
+function price(
+  override: number | undefined,
+  ruleValue: number | undefined,
+  env: Env,
+  name: string,
+  fallback: number,
+): number {
+  if (override !== undefined) return override;
+  if (ruleValue !== undefined) return ruleValue;
+  const raw = setting(env, name);
+  if (raw === undefined) return fallback;
+  if (!DECIMAL.test(raw)) throw new RangeError(`${name} must be a finite nonnegative decimal number`);
+  return validatePrice(Number(raw), name);
+}
+
 function setting(env: Env, name: string): string | undefined {
   const value = env[name];
   if (value === undefined) return undefined;
@@ -35,8 +59,13 @@ function setting(env: Env, name: string): string | undefined {
 export function createDecisionResolver(
   env: Env,
   thresholdOverride?: number,
+  pricingOverrides?: Partial<TokenPricing>,
 ): (settings: RuleSettings) => DecisionRuntime {
   const flagThreshold = thresholdOverride === undefined ? undefined : validateThreshold(thresholdOverride, '--threshold');
+  const inputOverride = pricingOverrides?.inputCostPerMillion;
+  const outputOverride = pricingOverrides?.outputCostPerMillion;
+  if (inputOverride !== undefined) validatePrice(inputOverride, '--input-cost-per-million');
+  if (outputOverride !== undefined) validatePrice(outputOverride, '--output-cost-per-million');
 
   return settings => {
     const backend = settings.backend ?? setting(env, 'RK_BACKEND') ?? DEFAULT_BACKEND;
@@ -54,6 +83,21 @@ export function createDecisionResolver(
       threshold = raw === undefined ? DEFAULT_THRESHOLD : parseThreshold(raw, 'RK_THRESHOLD');
     }
 
+    if (settings.inputCostPerMillion !== undefined) {
+      validatePrice(settings.inputCostPerMillion, 'rule.settings.inputCostPerMillion');
+    }
+    if (settings.outputCostPerMillion !== undefined) {
+      validatePrice(settings.outputCostPerMillion, 'rule.settings.outputCostPerMillion');
+    }
+    const pricing: TokenPricing = {
+      inputCostPerMillion: price(
+        inputOverride, settings.inputCostPerMillion, env, 'RK_INPUT_COST_PER_MILLION', DEFAULT_INPUT_COST_PER_MILLION,
+      ),
+      outputCostPerMillion: price(
+        outputOverride, settings.outputCostPerMillion, env, 'RK_OUTPUT_COST_PER_MILLION', DEFAULT_OUTPUT_COST_PER_MILLION,
+      ),
+    };
+
     const model = settings.model ?? setting(env, 'TYPESAFE_DEFAULT_MODEL') ?? DEFAULT_MODEL;
     const baseUrl = setting(env, 'TYPESAFE_BASE_URL') ?? DEFAULT_BASE_URL;
     const apiKey = setting(env, 'TYPESAFE_API_KEY');
@@ -61,6 +105,6 @@ export function createDecisionResolver(
       throw new Error('No decision API key: set TYPESAFE_API_KEY');
     }
 
-    return { backend: new JevAdapter({ model, baseUrl, apiKey }), threshold };
+    return { backend: new JevAdapter({ model, baseUrl, apiKey }), threshold, pricing };
   };
 }

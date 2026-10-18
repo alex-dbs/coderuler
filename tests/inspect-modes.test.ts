@@ -7,6 +7,7 @@ import { after, test } from 'node:test';
 import { runProgram } from '../dist/adapter/cli/program.js';
 import type { RuleReport, RunEvent } from '../dist/app/ports.js';
 import { createServices } from '../dist/infra/runtime.js';
+import type { InspectionUsage } from '../src/adapter/cli/inspect-usage.js';
 import {
   CLI,
   asMapping,
@@ -65,11 +66,13 @@ export default class Example extends Rule {
 type MachineRecord =
   | { type: 'event'; event: RunEvent }
   | { type: 'report'; report: RuleReport }
+  | { type: 'summary'; usage: InspectionUsage }
   | { type: 'error'; message: string };
 interface Inspection {
   readonly events: readonly RunEvent[];
   readonly reports: readonly RuleReport[];
   readonly error?: string;
+  readonly usage?: InspectionUsage;
 }
 
 function records(stdout: string): readonly MachineRecord[] {
@@ -77,7 +80,7 @@ function records(stdout: string): readonly MachineRecord[] {
   return stdout.trimEnd().split('\n').map(line => {
     const record = JSON.parse(line) as MachineRecord;
     assert.equal(line, JSON.stringify(record));
-    assert.ok(['event', 'report', 'error'].includes(record.type), line);
+    assert.ok(['event', 'report', 'summary', 'error'].includes(record.type), line);
     return record;
   });
 }
@@ -96,11 +99,15 @@ function inspection(result: CliResult, mode: '--json' | '--jsonl'): Inspection {
   assert.ok(errors.length <= 1);
   if (errors.length > 0) assert.equal(lines.at(-1), errors[0]);
   const firstReport = lines.findIndex(record => record.type === 'report');
-  if (firstReport >= 0) assert.ok(lines.slice(firstReport).every(record => record.type === 'report'));
+  if (firstReport >= 0) assert.ok(lines.slice(firstReport).every(record => record.type === 'report' || record.type === 'summary'));
+  const summaries = lines.filter(record => record.type === 'summary');
+  assert.ok(summaries.length <= 1);
+  if (summaries.length > 0 && errors.length === 0) assert.equal(lines.at(-1), summaries[0]);
   return {
     events: lines.flatMap(record => record.type === 'event' ? [record.event] : []),
     reports: lines.flatMap(record => record.type === 'report' ? [record.report] : []),
     ...(errors[0]?.type === 'error' ? { error: errors[0].message } : {}),
+    ...(summaries[0]?.type === 'summary' ? { usage: summaries[0].usage } : {}),
   };
 }
 
@@ -118,6 +125,7 @@ test('inspect machine modes retain complete passes, violations and skipped repor
       assert.equal(result.stderr, '');
       const document = inspection(result, mode);
       assert.equal(document.error, undefined);
+      assert.equal(document.usage, undefined);
       assert.equal(document.reports.length, 1);
       const report = document.reports[0]!;
       assert.equal(report.status, status);
@@ -165,6 +173,14 @@ test('inspect machine HTTP exchanges remain correlated strings with real thresho
     assert.ok(report.durationMs > 0);
     assert.equal(report.evaluations[0]!.result.threshold, 0.8);
     assert.equal(report.evaluations[0]!.result.probability, backend.probability);
+    assert.deepEqual(document.usage, {
+      verifications: 1, calls: 1, unreportedCalls: 0,
+      inputTokens: 11, outputTokens: 1, inputCost: 11 * 0.042 / 1e6, outputCost: 0,
+    });
+    assert.deepEqual(report.evaluations[0]!.result.usage, {
+      calls: 1, unreportedCalls: 0,
+      inputTokens: 11, outputTokens: 1, inputCost: 11 * 0.042 / 1e6, outputCost: 0,
+    });
   }
 });
 
@@ -240,6 +256,10 @@ test('inspect machine modes produce valid documents and terminal errors for prep
         assert.equal(response.status, 503);
         assert.equal(typeof response.body, 'string');
         assert.equal(JSON.parse(response.body), 'upstream refused\ntry later');
+        assert.deepEqual(document.usage, {
+          verifications: 1, calls: 1, unreportedCalls: 1,
+          inputTokens: 0, outputTokens: 0, inputCost: 0, outputCost: 0,
+        });
       }
     }
   }
@@ -385,5 +405,78 @@ test('inspect help and usage errors keep standard CLI stdout and stderr conventi
     assert.equal(result.status, 2);
     assert.equal(result.stdout, '');
     assert.ok(result.stderr.length > 0);
+  }
+});
+
+test('inspect pricing overrides independently replace rule and environment rates, including zero', async () => {
+  const backend = await fixture();
+  const rule = AI_RULE.replace('threshold: 0.8', 'threshold: 0.8, inputCostPerMillion: 5, outputCostPerMillion: 7');
+  for (const mode of ['--json', '--jsonl'] as const) {
+    for (const [flags, inputPrice, outputPrice] of [
+      [[], 5, 7],
+      [['--input-cost-per-million', '0'], 0, 7],
+      [['--output-cost-per-million', '.25'], 5, 0.25],
+      [['--input-cost-per-million', '2.5', '--output-cost-per-million', '3'], 2.5, 3],
+    ] as const) {
+      const target = project(`prices-${mode}-${inputPrice}-${outputPrice}`, rule);
+      const result = await runCli(['inspect', 'example', mode, ...flags], target, {
+        ...backend.env, RK_INPUT_COST_PER_MILLION: '99', RK_OUTPUT_COST_PER_MILLION: '101',
+      });
+      assert.equal(result.status, 0, result.stderr);
+      const document = inspection(result, mode);
+      assert.equal(document.usage?.inputCost, 11 * inputPrice / 1e6);
+      assert.equal(document.usage?.outputCost, outputPrice / 1e6);
+      assert.equal(document.reports[0]!.evaluations[0]!.result.usage?.inputCost, document.usage?.inputCost);
+      assert.equal(document.reports[0]!.evaluations[0]!.result.usage?.outputCost, document.usage?.outputCost);
+    }
+  }
+});
+
+test('inspect rejects invalid prices before loading and does not expose price flags on other commands', async () => {
+  const target = sandbox.isolated('invalid-prices');
+  for (const option of ['--input-cost-per-million', '--output-cost-per-million']) {
+    for (const value of ['', '-1', 'NaN', 'Infinity', '1e3', '0x10', '1'.repeat(400)]) {
+      const result = await runCli(['inspect', 'missing', `${option}=${value}`], target);
+      assert.equal(result.status, 2);
+      assert.equal(result.stdout, '');
+      assert.ok(result.stderr.includes(option), result.stderr);
+    }
+    for (const command of ['check', 'validate', 'test']) {
+      const result = await runCli([command, option, '1'], target);
+      assert.equal(result.status, 2);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, /unknown option/);
+    }
+  }
+});
+
+test('inspect recaps multiple actual calls and earlier verifications after a later backend failure', async () => {
+  const backend = await fixture();
+  let calls = 0;
+  backend.answer = () => ++calls === 3 ? { status: 503, body: 'stopped' } : {};
+  const target = project('multi-partial', `import { Rule, pass } from 'rulekeeper';
+export default class Example extends Rule {
+  files = ['src/*.txt'];
+  async check(subject, context) {
+    await context.ai({ rule: 'First check' });
+    await context.ai({ rule: 'Second check' });
+    return pass();
+  }
+}`);
+  writeFile(join(target.cwd, 'src/second.txt'), 'Second source');
+  for (const mode of ['--json', '--jsonl'] as const) {
+    calls = 0;
+    const result = await runCli(['inspect', 'example', mode], target, backend.env);
+    assert.equal(result.status, 2, result.stderr);
+    const document = inspection(result, mode);
+    assert.ok(document.error);
+    assert.deepEqual(document.usage, {
+      verifications: 2, calls: 3, unreportedCalls: 1,
+      inputTokens: 22, outputTokens: 2, inputCost: 2 * (11 * 0.042 / 1e6), outputCost: 0,
+    });
+    const completed = document.events.find(event => event.type === 'result');
+    assert.ok(completed?.type === 'result');
+    assert.equal(completed.result.status, 'pass');
+    assert.equal(completed.result.usage?.calls, 2);
   }
 });

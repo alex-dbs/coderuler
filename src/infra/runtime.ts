@@ -7,6 +7,7 @@ import { createProject, resolveTarget } from '../adapter/filesystem/project.js';
 import { runRuleTests } from '../adapter/filesystem/rule-tests.js';
 import { createRuleLoader, resolveRuleSelector } from '../adapter/filesystem/rules.js';
 import { changedFiles } from '../adapter/git/changes.js';
+import { createSkillManager } from '../adapter/skills/cli.js';
 import { executeRules, validateRules } from '../app/execute.js';
 import { createDecisionResolver } from './settings.js';
 
@@ -54,8 +55,10 @@ export function createServices(
 
     resolveRuleSelector,
 
-    decisionResolver(thresholdOverride) {
-      return createDecisionResolver(env, thresholdOverride);
+    manageSkill: createSkillManager(cwd, env),
+
+    decisionResolver(thresholdOverride, pricingOverrides) {
+      return createDecisionResolver(env, thresholdOverride, pricingOverrides);
     },
 
     write(text) {

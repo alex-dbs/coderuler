@@ -10,6 +10,8 @@ import type {
   RunContext,
 } from '../../app/ports.js';
 import type { RuleTestResult } from '../../app/rule-tests.js';
+import type { TokenPricing } from '../../app/rule.js';
+import type { SkillOptions } from '../skills/cli.js';
 import { createInspectJsonRenderer } from './inspect-json.js';
 import { createProgress, type TerminalCapabilities } from './progress.js';
 import {
@@ -81,7 +83,11 @@ export interface CliServices {
     selector: string,
     invocationCwd: string,
   ) => Promise<RuleSelectorResolution>;
-  readonly decisionResolver: (thresholdOverride?: number) => RunContext['resolveDecision'];
+  readonly manageSkill: (operation: 'install' | 'update', options: SkillOptions) => Promise<number>;
+  readonly decisionResolver: (
+    thresholdOverride?: number,
+    pricingOverrides?: Partial<TokenPricing>,
+  ) => RunContext['resolveDecision'];
   readonly redact: TextRedactor;
   readonly write: TextWriter;
   readonly writeError: TextWriter;
@@ -105,6 +111,8 @@ interface InspectOptions {
   readonly json?: boolean;
   readonly jsonl?: boolean;
   readonly raw?: boolean;
+  readonly inputCostPerMillion?: number;
+  readonly outputCostPerMillion?: number;
 }
 
 interface TestOptions {
@@ -158,6 +166,15 @@ function parseThreshold(value: string): number {
   return parsed;
 }
 
+function parseTokenPrice(value: string): number {
+  const trimmed = value.trim();
+  const parsed = Number(trimmed);
+  if (!THRESHOLD_PATTERN.test(trimmed) || !Number.isFinite(parsed) || parsed < 0) {
+    throw new InvalidArgumentError('must be a finite nonnegative decimal number (USD per million tokens)');
+  }
+  return parsed;
+}
+
 function parseTimeout(value: string): number {
   const match = /^([0-9]+(?:\.[0-9]+)?|\.[0-9]+)(ms|s|m)$/.exec(value.trim());
   const durationMs = match === null
@@ -206,6 +223,35 @@ export function createProgram(services: CliServices): Command {
       writeErr: text => services.writeError(`rulekeeper: ${services.redact(escapeDiagnostic(text))}`),
     })
     .exitOverride();
+
+  const skill = program
+    .command('skill')
+    .description('Install or refresh the bundled rulekeeper-new-rule Agent Skill');
+
+  skill
+    .command('install')
+    .description('Install the bundled skill; defaults to the shared universal skills directory')
+    .option('-g, --global', 'install globally instead of prompting for scope')
+    .option('-a, --agent <agents...>', 'target agents (use "*" for all agents)')
+    .option('-y, --yes', 'skip prompts (project scope unless --global)')
+    .option('--copy', 'copy files instead of symlinking agent directories')
+    .action(async (options: SkillOptions) => {
+      const status = await services.manageSkill('install', options);
+      if (status !== EXIT_OK) throw new CliExit(status);
+    });
+
+  skill
+    .command('update')
+    .description('Refresh an existing bundled-skill installation; defaults to the universal target')
+    .addOption(new Option('-g, --global', 'refresh a global installation').conflicts('project'))
+    .addOption(new Option('-p, --project', 'refresh a project installation (default)').conflicts('global'))
+    .option('-a, --agent <agents...>', 'target agents (use "*" for all agents)')
+    .option('--copy', 'copy files instead of symlinking agent directories')
+    .addHelpText('after', '\nUpgrade Rulekeeper first to obtain newer skill content. Local sources are refreshed with skills add, not skills update.')
+    .action(async (options: SkillOptions) => {
+      const status = await services.manageSkill('update', options);
+      if (status !== EXIT_OK) throw new CliExit(status);
+    });
 
   program
     .command('validate')
@@ -412,6 +458,8 @@ export function createProgram(services: CliServices): Command {
     .option('--json', 'print the complete redacted inspection as one JSON document')
     .option('--jsonl', 'stream redacted inspection events and reports as JSON Lines')
     .option('--raw', 'print the complete redacted inspection as undecorated text')
+    .option('--input-cost-per-million <number>', 'input token price override (USD per million tokens)', parseTokenPrice)
+    .option('--output-cost-per-million <number>', 'output token price override (USD per million tokens)', parseTokenPrice)
     .action(async (rule: string, folder: string, options: InspectOptions) => {
       const formats = [
         ...(options.json === true ? ['--json'] : []),
@@ -463,7 +511,10 @@ export function createProgram(services: CliServices): Command {
           project: prepared.project,
           isTarget: prepared.isTarget,
           concurrency: 1,
-          resolveDecision: services.decisionResolver(),
+          resolveDecision: services.decisionResolver(undefined, {
+            ...(options.inputCostPerMillion === undefined ? {} : { inputCostPerMillion: options.inputCostPerMillion }),
+            ...(options.outputCostPerMillion === undefined ? {} : { outputCostPerMillion: options.outputCostPerMillion }),
+          }),
           emit: inspect.emit,
         });
         inspect.finish(reports);

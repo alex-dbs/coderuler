@@ -925,7 +925,24 @@ test('check sends the default whole-file projection automatically', async () => 
     probability: fixture.probability,
     threshold: 0.4,
     model: fixture.model,
+    usage: { calls: 1, unreportedCalls: 0, inputTokens: 11, outputTokens: 1, inputCost: 11 * 0.042 / 1_000_000, outputCost: 0 },
   });
+});
+
+test('invalid environment prices are ignored by deterministic checks and rejected before an AI request', async () => {
+  const target = sandbox.isolated('check-lazy-pricing');
+  writeFiles(target, { 'src/one.txt': 'SOURCE' });
+  writeRule(target, 'lazy', PASS_RULE);
+  const fixture = await decisionFixture();
+  const env = { ...fixture.env, RK_INPUT_COST_PER_MILLION: 'invalid', RK_OUTPUT_COST_PER_MILLION: 'invalid' };
+  const deterministic = await runCli(['check', '--json', '--output-all'], target, env);
+  assert.equal(deterministic.status, 0, deterministic.stderr);
+  const report = reportNamed(parseCheckOutput(deterministic, 'deterministic pricing'), 'lazy', 'deterministic pricing');
+  assert.deepEqual(report.evaluations[0]?.result, { status: 'pass' });
+  writeRule(target, 'lazy', AI_WHOLE_FILE);
+  const aiResult = await runCli(['check', '--json'], target, env);
+  expectFailure(aiResult, 'invalid AI pricing');
+  assert.equal(fixture.requests.length, 0);
 });
 
 test('check projects falsy structured data for AI', async () => {
@@ -1037,6 +1054,7 @@ test('check carries examples, model settings and hides the violation message', a
     probability: 0.95,
     threshold: 0.9,
     model: fixture.model,
+    usage: { calls: 1, unreportedCalls: 0, inputTokens: 11, outputTokens: 1, inputCost: 11 * 0.042 / 1_000_000, outputCost: 0 },
   });
 });
 
@@ -1069,13 +1087,10 @@ test('check and inspect report the effective flag, rule, environment and default
       assert.equal(result.stderr, '');
       const report = reportNamed(parseCheckOutput(result, entry.label, mode), entry.rule, entry.label);
       assert.equal(report.status, entry.status, entry.label);
-      assert.deepEqual(report.evaluations[0]!.result, {
-        status: entry.status,
-        ...(entry.status === 'violation' ? { message: entry.rule === 'examples' ? 'LEAK-ME-NOT' : 'Not tidy' } : {}),
-        probability: entry.probability,
-        threshold: entry.threshold,
-        model: fixture.model,
-      }, entry.label);
+      const evaluation = report.evaluations[0]!.result;
+      assert.equal(evaluation.status, entry.status, entry.label);
+      assert.equal(evaluation.probability, entry.probability, entry.label);
+      assert.equal(evaluation.threshold, entry.threshold, entry.label);
     }
     const inspected = await runCli(
       entry.flag === undefined

@@ -79,6 +79,7 @@ interface InstalledManifest {
   readonly exports: Readonly<Record<string, { readonly types?: string; readonly import?: string }>>;
   readonly bin: Readonly<Record<string, string>>;
   readonly files: readonly string[];
+  readonly dependencies: Readonly<Record<string, string>>;
 }
 
 interface Consumer {
@@ -289,10 +290,13 @@ function isolatedEnv(home: string, extra: Readonly<Record<string, string>> = {})
   }
   env.HOME = home;
   env.USERPROFILE = home;
+  env.XDG_CONFIG_HOME = join(home, '.config');
   env.PATH = dirname(process.execPath);
   env.NO_COLOR = '1';
   env.FORCE_COLOR = '0';
   for (const [key, value] of Object.entries(extra)) env[key] = value;
+  env.CLAUDE_CONFIG_DIR = join(home, '.claude');
+  env.XDG_CONFIG_HOME = join(home, '.config');
   return env;
 }
 
@@ -345,6 +349,8 @@ const PACKAGE_METADATA_PATTERN = /^(readme|license|licence|changelog)(\.[a-z0-9]
 
 function isPackagedEntry(path: string): boolean {
   if (path.startsWith('dist/')) return true;
+  if (path === 'skills/rulekeeper-new-rule/SKILL.md') return true;
+  if (path === 'skills/rulekeeper-new-rule/reference.md') return true;
   if (path === 'package.json') return true;
   return !path.includes('/') && PACKAGE_METADATA_PATTERN.test(path);
 }
@@ -453,12 +459,14 @@ before(async () => {
   };
 });
 
-test('the packed tarball ships only the built package', () => {
+test('the packed tarball ships the built package and bundled authoring skill', () => {
   const { packedPaths } = consumer;
   assert.ok(packedPaths.includes('package.json'), `package.json missing from tarball: ${packedPaths.join(', ')}`);
   assert.ok(packedPaths.includes('dist/index.js'), `dist/index.js missing from tarball: ${packedPaths.join(', ')}`);
   assert.ok(packedPaths.includes('dist/index.d.ts'), `dist/index.d.ts missing from tarball: ${packedPaths.join(', ')}`);
   assert.ok(packedPaths.includes('dist/cli.js'), `dist/cli.js missing from tarball: ${packedPaths.join(', ')}`);
+  assert.ok(packedPaths.includes('skills/rulekeeper-new-rule/SKILL.md'), 'SKILL.md missing from tarball');
+  assert.ok(packedPaths.includes('skills/rulekeeper-new-rule/reference.md'), 'skill reference missing from tarball');
   for (const path of packedPaths) {
     assert.ok(isPackagedEntry(path), `unexpected tarball entry: ${path}`);
     assert.ok(!/(^|\/)(old|src|tests|benchmarks|scripts|docs|node_modules|coverage|\.rulekeeper)(\/|$)/.test(path), `archived or source path packed: ${path}`);
@@ -488,7 +496,7 @@ test('the installed package is importable through its public entry with no repos
   assert.ok(!spec.includes(REPO_ROOT), `consumer must not depend on the repository path: ${spec}`);
 });
 
-test('the installed package carries only executable dist declarations and a runnable bin', async () => {
+test('the installed package carries executable dist declarations, a runnable bin, and the authoring skill', async () => {
   const installedRoot = join(consumer.app, 'node_modules', PACKAGE_NAME);
   const installedPhysical = await realpath(installedRoot);
   assert.ok(installedPhysical.startsWith(consumer.root), `installed package escapes the temp root: ${installedPhysical}`);
@@ -504,7 +512,8 @@ test('the installed package carries only executable dist declarations and a runn
   assert.equal(manifest.name, PACKAGE_NAME);
   assert.equal(manifest.type, 'module');
   assert.equal(manifest.types, './dist/index.d.ts');
-  assert.deepEqual([...manifest.files], ['dist']);
+  assert.deepEqual([...manifest.files], ['dist', 'skills/rulekeeper-new-rule']);
+  assert.equal(manifest.dependencies['skills'], '1.7.2');
   const entry = manifest.exports['.'];
   assert.ok(entry !== undefined, 'package exports must declare the public entry');
   assert.equal(entry.import, './dist/index.js');
@@ -514,6 +523,78 @@ test('the installed package carries only executable dist declarations and a runn
   const bin = join(consumer.app, 'node_modules', '.bin', PACKAGE_NAME);
   assert.ok(existsSync(bin), `installed bin missing at ${bin}`);
   assert.notEqual(statSync(bin).mode & 0o111, 0, 'installed bin is not executable');
+});
+
+test('the installed authoring skill preserves its companion reference and relative link', async () => {
+  const bundled = join(consumer.app, 'node_modules', PACKAGE_NAME, 'skills', 'rulekeeper-new-rule');
+  const source = join(REPO_ROOT, 'skills', 'rulekeeper-new-rule');
+  const skill = await readFile(join(bundled, 'SKILL.md'), 'utf8');
+  const reference = await readFile(join(bundled, 'reference.md'), 'utf8');
+  assert.equal(skill, await readFile(join(source, 'SKILL.md'), 'utf8'));
+  assert.equal(reference, await readFile(join(source, 'reference.md'), 'utf8'));
+  assert.match(skill, /\]\((?:\.\/)?reference\.md\)/);
+});
+
+test('consumer environments override ambient Claude configuration with the isolated home', () => {
+  const previous = process.env.CLAUDE_CONFIG_DIR;
+  try {
+    process.env.CLAUDE_CONFIG_DIR = join(consumer.root, 'ambient-claude-config');
+    const home = join(consumer.root, 'isolated-claude-home');
+    assert.equal(isolatedEnv(home).CLAUDE_CONFIG_DIR, join(home, '.claude'));
+  } finally {
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previous;
+  }
+});
+
+test('the released CLI installs and refreshes its bundled skill outside the repository without a skills binary on PATH', async () => {
+  const project = join(consumer.root, 'skill-project');
+  const home = join(consumer.root, 'skill-home');
+  await mkdir(project, { recursive: true });
+  await mkdir(home, { recursive: true });
+  const extra = { DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' };
+  const bundled = join(consumer.app, 'node_modules', PACKAGE_NAME, 'skills', 'rulekeeper-new-rule');
+  const installed = join(project, '.claude', 'skills', 'rulekeeper-new-rule');
+  const install = runCli(consumer.app, ['skill', 'install', '--agent', 'claude-code', '--yes', '--copy'], {
+    cwd: project, home, extra,
+  });
+  assert.equal(install.status, 0, `${install.stdout}\n${install.stderr}`);
+  for (const file of ['SKILL.md', 'reference.md']) {
+    assert.equal(await readFile(join(installed, file), 'utf8'), await readFile(join(bundled, file), 'utf8'));
+  }
+  const lock = await readFile(join(project, 'skills-lock.json'), 'utf8');
+  assert.ok(lock.includes('node_modules/rulekeeper/skills/rulekeeper-new-rule'), `skill source must point into the installed package: ${lock}`);
+  assert.ok(!lock.includes(REPO_ROOT), `skill source must not point at the repository: ${lock}`);
+
+  const unrelated = join(project, '.claude', 'skills', 'unrelated', 'SKILL.md');
+  await mkdir(dirname(unrelated), { recursive: true });
+  await writeFile(unrelated, '---\nname: unrelated\ndescription: unrelated skill\n---\nLeave this alone.\n');
+  await writeFile(join(installed, 'reference.md'), 'stale reference\n');
+  const update = runCli(consumer.app, ['skill', 'update', '--project', '--agent', 'claude-code', '--copy'], {
+    cwd: project, home, extra,
+  });
+  assert.equal(update.status, 0, `${update.stdout}\n${update.stderr}`);
+  assert.equal(await readFile(join(installed, 'reference.md'), 'utf8'), await readFile(join(bundled, 'reference.md'), 'utf8'));
+  assert.equal(await readFile(unrelated, 'utf8'), '---\nname: unrelated\ndescription: unrelated skill\n---\nLeave this alone.\n');
+  assert.ok(!existsSync(join(home, '.claude', 'skills', 'rulekeeper-new-rule')), 'project commands must not install globally');
+});
+
+test('the released CLI installs and refreshes the bundled skill globally from an unrelated cwd', async () => {
+  const project = join(consumer.root, 'global-skill-project');
+  const home = join(consumer.root, 'global-skill-home');
+  await mkdir(project, { recursive: true });
+  await mkdir(home, { recursive: true });
+  const extra = { DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' };
+  const args = ['--global', '--agent', 'universal', '--copy'];
+  const install = runCli(consumer.app, ['skill', 'install', ...args, '--yes'], { cwd: project, home, extra });
+  assert.equal(install.status, 0, `${install.stdout}\n${install.stderr}`);
+  const installed = join(home, '.agents', 'skills', 'rulekeeper-new-rule');
+  await writeFile(join(installed, 'reference.md'), 'stale global reference\n');
+  const update = runCli(consumer.app, ['skill', 'update', ...args], { cwd: project, home, extra });
+  assert.equal(update.status, 0, `${update.stdout}\n${update.stderr}`);
+  const bundled = join(consumer.app, 'node_modules', PACKAGE_NAME, 'skills', 'rulekeeper-new-rule');
+  assert.equal(await readFile(join(installed, 'reference.md'), 'utf8'), await readFile(join(bundled, 'reference.md'), 'utf8'));
+  assert.ok(!existsSync(join(project, '.agents', 'skills', 'rulekeeper-new-rule')), 'global commands must not install in the project');
 });
 
 test('the installed CLI runs a TypeScript rule on real files and reports pass by exit 0', () => {

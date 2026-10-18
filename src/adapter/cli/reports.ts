@@ -6,7 +6,9 @@ import stringWidth from 'string-width';
 
 import type { LoadedRule, RuleReport, RunEvent } from '../../app/ports.js';
 import type { RuleTestResult } from '../../app/rule-tests.js';
-import type { JsonValue, ScopeSubject, Subject } from '../../app/rule.js';
+import type { AiUsage, JsonValue, ScopeSubject, Subject } from '../../app/rule.js';
+import { addUsage } from '../../app/usage.js';
+import { createUsageTracker } from './inspect-usage.js';
 
 const MAX_VIOLATIONS = 10;
 const MAX_SOURCE_LINES = 5;
@@ -195,6 +197,7 @@ export function createMetadataRenderer(
   redact: TextRedactor,
 ): (event: RunEvent) => void {
   return event => {
+    if (event.type === 'usage') return;
     write(`${redact(metadataLine(event))}\n`);
   };
 }
@@ -230,6 +233,8 @@ function metadataLine(event: RunEvent): string {
       return `response ${escapeText(event.name)} ${subjectLabel(event.subject)} HTTP ${
         event.status
       } ${Buffer.byteLength(event.body, 'utf8')} bytes`;
+    case 'usage':
+      return `usage ${escapeText(event.name)} ${subjectLabel(event.subject)} calls=${event.usage.calls}`;
     case 'result':
       return `result ${escapeText(event.name)} ${subjectLabel(event.subject)} ${event.result.status}`;
     case 'trace': {
@@ -376,9 +381,10 @@ export interface WalkthroughRenderer {
 interface EvaluationCard {
   readonly width: number;
   readonly lines: string[];
+  usage?: AiUsage;
 }
 
-export function createWalkthroughRenderer(options: WalkthroughOptions): WalkthroughRenderer {
+export function createWalkthroughRenderer(options: WalkthroughOptions, inspectUsage = false): WalkthroughRenderer {
   const { write, headings, redact } = options;
   const raw = options.raw === true;
   const color = options.color === true && !raw;
@@ -424,6 +430,9 @@ export function createWalkthroughRenderer(options: WalkthroughOptions): Walkthro
   const close = (id: number, incomplete = false): void => {
     const card = cards.get(id)!;
     if (incomplete) append(card, section(card, 'Incomplete', [`  ${field('status', 'incomplete', 'yellow')}`]));
+    if (inspectUsage && card.usage !== undefined) {
+      append(card, section(card, 'AI Usage', usageFields(card.usage).map(([label, value]) => `  ${field(label, value)}`)));
+    }
     if (buffered) write(border(card, true) + card.lines.join('') + border(card, false) + '\n');
     else write(border(card, false) + '\n');
     cards.delete(id);
@@ -484,6 +493,14 @@ export function createWalkthroughRenderer(options: WalkthroughOptions): Walkthro
   return {
     emit: event => {
       if (finished) return;
+      if (event.type === 'usage') {
+        if (inspectUsage) {
+          const card = cards.get(event.evaluationId);
+          if (card === undefined) throw new Error(`Missing evaluation start: ${event.evaluationId}`);
+          card.usage = addUsage(card.usage, event.usage);
+        }
+        return;
+      }
       if ((event.type === 'scope' && event.accepted) || event.type === 'group') return;
       if (event.type === 'evaluation') {
         if (cards.has(event.evaluationId)) throw new Error(`Duplicate evaluation start: ${event.evaluationId}`);
@@ -613,8 +630,26 @@ export interface InspectOptions {
   readonly columns?: () => number;
 }
 
+function usageFields(usage: AiUsage): readonly (readonly [string, string])[] {
+  const money = (value: number): string =>
+    `$${value > 0 && value < 1e-8 ? value.toPrecision(8) : value.toFixed(8)}`;
+  return [
+    ['calls', String(usage.calls)],
+    ...(usage.unreportedCalls === 0 ? [] : [
+      ['unreported calls', String(usage.unreportedCalls)] as const,
+      ['totals', 'reported calls only; unreported tokens and costs are unknown'] as const,
+    ]),
+    ['input tokens', String(usage.inputTokens)],
+    ['output tokens', String(usage.outputTokens)],
+    ['input cost (USD)', money(usage.inputCost)],
+    ['output cost (USD)', money(usage.outputCost)],
+    ['total cost (USD)', money(usage.inputCost + usage.outputCost)],
+  ];
+}
+
 export function createInspectRenderer(options: InspectOptions): InspectRenderer {
-  const render = createWalkthroughRenderer({ ...options, concurrency: 1 });
+  const render = createWalkthroughRenderer({ ...options, concurrency: 1 }, true);
+  const usage = createUsageTracker();
   const color = options.color === true && options.raw !== true;
   const gateExplained = new Set<string>();
   let finished = false;
@@ -622,6 +657,7 @@ export function createInspectRenderer(options: InspectOptions): InspectRenderer 
   return {
     emit: event => {
       if (finished) return;
+      usage.emit(event);
       const skippedGate = event.type === 'gate' && (!event.enabled || !event.applies);
       if (skippedGate) gateExplained.add(event.name);
       render.emit(event);
@@ -638,6 +674,14 @@ export function createInspectRenderer(options: InspectOptions): InspectRenderer 
           `${paint('result', 'cyan', color)} ${walkthroughText(report.name, options.redact, color, 'bold')}`,
           walkthroughField('status', 'skipped', options.redact, color, 'yellow'),
           walkthroughField('reason', report.reason ?? 'no matching subjects', options.redact, color),
+        ]);
+      }
+      const summary = usage.summary();
+      if (summary !== undefined) {
+        writeWalkthroughBlock(options.write, [
+          paint('AI Usage', 'bold', color),
+          walkthroughField('verifications', String(summary.verifications), options.redact, color),
+          ...usageFields(summary).map(([label, value]) => walkthroughField(label, value, options.redact, color)),
         ]);
       }
     },

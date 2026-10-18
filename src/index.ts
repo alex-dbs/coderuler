@@ -4,6 +4,7 @@ export type { RuleTestCase } from './app/rule-tests.js';
 export type {
   AiExamples,
   AiOptions,
+  AiUsage,
   Awaitable,
   CheckContext,
   CheckResult,
@@ -21,6 +22,8 @@ export type {
   SelectionContext,
   SourceFile,
   Subject,
+  TokenPricing,
+  TokenUsage,
 } from './app/rule.js';
 
 export { ai, pass, regex, violation } from './app/evaluators.js';

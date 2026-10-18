@@ -462,6 +462,46 @@ test('accepts a noul probability at both inclusive bounds', async () => {
   }
 });
 
+test('distinguishes absent usage from reported zero and accepts safe integer token counts', async () => {
+  const backend = await startLoopback();
+  try {
+    for (const usage of [
+      undefined,
+      { input_tokens: 0, output_tokens: 0 },
+      { input_tokens: 11, output_tokens: 1 },
+      { input_tokens: Number.MAX_SAFE_INTEGER, output_tokens: Number.MAX_SAFE_INTEGER },
+    ]) {
+      backend.answer = { body: JSON.stringify({ ...ANSWER, ...(usage === undefined ? {} : { usage }) }) };
+      const outcome = await adapterFor(backend.origin).decide(REQUEST);
+      assert.deepEqual(outcome, {
+        probability: 0.9,
+        model: 'jev-1.13.0',
+        ...(usage === undefined ? {} : { usage: { inputTokens: usage.input_tokens, outputTokens: usage.output_tokens } }),
+      });
+    }
+  } finally {
+    await backend.close();
+  }
+});
+
+test('rejects supplied usage with missing, malformed, or unsafe token counts', async () => {
+  const backend = await startLoopback();
+  try {
+    const malformed: unknown[] = [null, [], 'usage', {}, { input_tokens: 1 }, { output_tokens: 1 }];
+    for (const field of ['input_tokens', 'output_tokens']) {
+      for (const value of [null, '1', true, -1, 0.5, Number.MAX_SAFE_INTEGER + 1, Number.MAX_VALUE]) {
+        malformed.push({ input_tokens: 1, output_tokens: 1, [field]: value });
+      }
+    }
+    for (const usage of malformed) {
+      backend.answer = { body: JSON.stringify({ ...ANSWER, usage }) };
+      await assert.rejects(() => adapterFor(backend.origin).decide(REQUEST), JSON.stringify(usage));
+    }
+  } finally {
+    await backend.close();
+  }
+});
+
 test('does not follow a redirect', async () => {
   const elsewhere = await startLoopback();
   const backend = await startLoopback();
@@ -565,6 +605,7 @@ test('resolves the jev backend with the default model and threshold', async () =
     const runtime = createDecisionResolver(withKey({ TYPESAFE_BASE_URL: backend.origin }))({});
 
     assert.equal(runtime.threshold, 0.4);
+    assert.deepEqual(runtime.pricing, { inputCostPerMillion: 0.042, outputCostPerMillion: 0 });
     assert.ok(runtime.backend instanceof JevAdapter);
     await runtime.backend.decide(REQUEST);
     assert.equal((only(backend.sent).parsed as Record<string, unknown>).model, 'jev-latest');
@@ -595,6 +636,58 @@ test('rejects an invalid rule threshold naming the setting', () => {
 
 test('rejects an invalid flag threshold naming the flag', () => {
   assert.throws(() => createDecisionResolver(withKey(), 5)({}), /--threshold/);
+});
+
+test('resolves each price from flags, rule, environment, then defaults and preserves zero', () => {
+  const env = withKey({ RK_INPUT_COST_PER_MILLION: '3', RK_OUTPUT_COST_PER_MILLION: '4' });
+  assert.deepEqual(createDecisionResolver(withKey())({}).pricing, {
+    inputCostPerMillion: 0.042, outputCostPerMillion: 0,
+  });
+  assert.deepEqual(createDecisionResolver(env)({}).pricing, { inputCostPerMillion: 3, outputCostPerMillion: 4 });
+  assert.deepEqual(createDecisionResolver(env)({ inputCostPerMillion: 1, outputCostPerMillion: 2 }).pricing, {
+    inputCostPerMillion: 1, outputCostPerMillion: 2,
+  });
+  assert.deepEqual(createDecisionResolver(env, undefined, { inputCostPerMillion: 0 })({
+    inputCostPerMillion: 1, outputCostPerMillion: 2,
+  }).pricing, { inputCostPerMillion: 0, outputCostPerMillion: 2 });
+  assert.deepEqual(createDecisionResolver(env, undefined, { outputCostPerMillion: 0 })({}).pricing, {
+    inputCostPerMillion: 3, outputCostPerMillion: 0,
+  });
+  assert.deepEqual(createDecisionResolver(withKey({
+    RK_INPUT_COST_PER_MILLION: '0', RK_OUTPUT_COST_PER_MILLION: '0',
+  }))({}).pricing, { inputCostPerMillion: 0, outputCostPerMillion: 0 });
+  assert.deepEqual(createDecisionResolver(env)({ inputCostPerMillion: 0, outputCostPerMillion: 0 }).pricing, {
+    inputCostPerMillion: 0, outputCostPerMillion: 0,
+  });
+});
+
+test('accepts finite nonnegative price bounds and eagerly rejects invalid flag or shadowed rule prices', () => {
+  for (const field of ['inputCostPerMillion', 'outputCostPerMillion'] as const) {
+    for (const price of [0, Number.MIN_VALUE, Number.MAX_VALUE]) {
+      assert.equal(createDecisionResolver(withKey(), undefined, { [field]: price })({}).pricing[field], price);
+      assert.equal(createDecisionResolver(withKey())({ [field]: price }).pricing[field], price);
+    }
+    for (const price of [-1, NaN, Infinity, -Infinity]) {
+      assert.throws(() => createDecisionResolver({}, undefined, { [field]: price }));
+      assert.throws(() => createDecisionResolver(withKey(), undefined, { [field]: 0 })({ [field]: price }));
+    }
+  }
+});
+
+test('reads invalid environment prices lazily and ignores them only when that price is shadowed', () => {
+  const env = withKey({ RK_INPUT_COST_PER_MILLION: 'invalid', RK_OUTPUT_COST_PER_MILLION: 'invalid' });
+  assert.doesNotThrow(() => createDecisionResolver(env));
+  assert.throws(() => createDecisionResolver(env)({}));
+  assert.throws(() => createDecisionResolver(env)({ inputCostPerMillion: 0 }));
+  assert.throws(() => createDecisionResolver(env, undefined, { outputCostPerMillion: 0 })({}));
+  assert.deepEqual(createDecisionResolver(env, undefined, { inputCostPerMillion: 0 })({
+    outputCostPerMillion: 0,
+  }).pricing, { inputCostPerMillion: 0, outputCostPerMillion: 0 });
+  for (const field of ['RK_INPUT_COST_PER_MILLION', 'RK_OUTPUT_COST_PER_MILLION']) {
+    for (const price of ['', ' ', '-1', 'NaN', 'Infinity', '1e999']) {
+      assert.throws(() => createDecisionResolver(withKey({ [field]: price }))({}), `${field}: ${price}`);
+    }
+  }
 });
 
 test('prefers the rule model over the environment model', async () => {
@@ -628,6 +721,8 @@ test('constructs a resolver without reading provider settings', () => {
       TYPESAFE_DEFAULT_MODEL: '   ',
       RK_THRESHOLD: 'abc',
       RK_BACKEND: 'nope',
+      RK_INPUT_COST_PER_MILLION: 'invalid',
+      RK_OUTPUT_COST_PER_MILLION: 'invalid',
     }),
   );
 });

@@ -51,6 +51,25 @@ export interface RuleSettings {
   readonly backend?: 'jev';
   readonly model?: string;
   readonly threshold?: number;
+  readonly inputCostPerMillion?: number;
+  readonly outputCostPerMillion?: number;
+}
+
+export interface TokenUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+}
+
+export interface TokenPricing {
+  readonly inputCostPerMillion: number;
+  readonly outputCostPerMillion: number;
+}
+
+export interface AiUsage extends TokenUsage {
+  readonly calls: number;
+  readonly unreportedCalls: number;
+  readonly inputCost: number;
+  readonly outputCost: number;
 }
 
 export interface CheckResult {
@@ -59,6 +78,7 @@ export interface CheckResult {
   readonly probability?: number;
   readonly threshold?: number;
   readonly model?: string;
+  readonly usage?: AiUsage;
 }
 
 export interface AiExamples {

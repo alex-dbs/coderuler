@@ -1,5 +1,6 @@
 import { RULE_BRAND } from './rule.js';
 import type {
+  AiUsage,
   CheckResult,
   JsonValue,
   PredicateResult,
@@ -46,6 +47,13 @@ function validateSettings(settings: Record<string, unknown>, at: string): void {
     (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold < 0 || threshold > 1)
   ) {
     invalid(at, 'settings.threshold must be a finite number between 0 and 1');
+  }
+
+  for (const key of ['inputCostPerMillion', 'outputCostPerMillion']) {
+    const value = settings[key];
+    if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < 0)) {
+      invalid(at, `settings.${key} must be a finite nonnegative number`);
+    }
   }
 }
 
@@ -230,6 +238,26 @@ export function validatePredicateResult(value: unknown, label: string): Predicat
   invalid(label, 'predicate must return a boolean or { applies, reason? }');
 }
 
+export function validateAiUsage(value: unknown, label: string): AiUsage {
+  if (!isRecord(value)) invalid(label, 'usage must be an object');
+  for (const key of ['calls', 'unreportedCalls', 'inputTokens', 'outputTokens']) {
+    const count = value[key];
+    if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
+      invalid(label, `usage.${key} must be a nonnegative safe integer`);
+    }
+  }
+  if ((value['unreportedCalls'] as number) > (value['calls'] as number)) {
+    invalid(label, 'usage.unreportedCalls must not exceed usage.calls');
+  }
+  for (const key of ['inputCost', 'outputCost']) {
+    const cost = value[key];
+    if (typeof cost !== 'number' || !Number.isFinite(cost) || cost < 0) {
+      invalid(label, `usage.${key} must be a finite nonnegative number`);
+    }
+  }
+  return value as unknown as AiUsage;
+}
+
 export function validateCheckResult(value: unknown, label: string): CheckResult {
   if (!isRecord(value)) invalid(label, 'check must return a check result object');
 
@@ -269,6 +297,8 @@ export function validateCheckResult(value: unknown, label: string): CheckResult 
   ) {
     invalid(label, 'check threshold must be a finite number between 0 and 1');
   }
+
+  if (value['usage'] !== undefined) validateAiUsage(value['usage'], label);
 
   return value as unknown as CheckResult;
 }

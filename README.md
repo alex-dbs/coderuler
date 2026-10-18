@@ -17,6 +17,8 @@ Node access — this is an authoring framework, not a sandbox.
 | `rulekeeper test [rule-path]`        | Run inline rule datasets and check their declared outcomes.                                             |
 | `rulekeeper check [path]`            | Run every selected rule and report violations (exit 1 when any).                                        |
 | `rulekeeper inspect <rule> [folder]` | Walk one rule through selection/filter/group/evaluate, printing each step and the exact request/result. |
+| `rulekeeper skill install`          | Install the bundled Agent Skill into the universal or selected agent directory.                    |
+| `rulekeeper skill update`           | Refresh an existing bundled skill from the installed Rulekeeper package.                           |
 
 
 ## Requirements and build
@@ -64,8 +66,45 @@ rules Node executes straight from source, and no build step makes it apply.
 Rules import the SDK normally; the framework never rewrites imports or manipulates module resolution, and
 a missing dependency reports its normal module-load error with the rule's path (no auto-install).
 
-The published package ships only `dist/`, with `types`/`exports` resolving to `dist/index.d.ts` and
-`dist/index.js`; the `rulekeeper` binary is `dist/cli.js`.
+The published package ships `dist/` and the bundled `skills/rulekeeper-new-rule/` directory, with
+`types`/`exports` resolving to `dist/index.d.ts` and `dist/index.js`; the `rulekeeper` binary is `dist/cli.js`.
+
+## Installing the authoring skill
+
+Rulekeeper includes an Agent Skill that guides coding agents through creating rules and their inline
+tests. The complete skill, including its linked `reference.md`, ships with the npm package.
+
+```sh
+rulekeeper skill install
+rulekeeper skill install --agent claude-code cursor
+rulekeeper skill install --agent codex --yes       # project scope, no prompts
+rulekeeper skill install --global --agent claude-code --yes --copy
+```
+
+Installation delegates to the pinned [`skills` CLI](https://github.com/vercel-labs/skills), resolved
+from Rulekeeper's dependencies; no separate global install or `npx` download is required. Without
+`--yes`, upstream prompts select agents, scope, installation method, and confirmation. Use `--global`
+for user-level scope; with `--yes` and no `--global`, installation uses the current project. `--agent`
+accepts multiple upstream agent identifiers (or `'*'` for all agents), and `--copy` chooses copies
+instead of agent-directory symlinks. Interactive input/output is passed through unchanged.
+
+After upgrading Rulekeeper, refresh its installed skill:
+
+```sh
+rulekeeper skill update                          # current project
+rulekeeper skill update --global --agent claude-code --copy
+```
+
+Update first checks the selected scope for `rulekeeper-new-rule` and fails if it is not installed.
+It reapplies **this installed Rulekeeper version's bundled content** using `skills add --yes`, because
+upstream `skills update` skips local-path sources. It does not download a newer Rulekeeper version or
+update any other skill. Refresh is non-interactive and replaces installed content, including local
+edits; `--agent` selects refreshed destinations and `--copy` chooses copies. Project scope is the
+default (`--project` is also accepted); `--global` selects user-level scope. Run the command from
+the intended project directory for project installs and updates.
+
+Both commands preserve the upstream process's exit status; setup/discovery errors exit 2.
+See `rulekeeper skill install --help` and `rulekeeper skill update --help`.
 
 ## Writing a rule
 
@@ -103,7 +142,7 @@ export default class InfraPlacement extends Rule {
 | `files`                    | `['**/*']`   | Root-relative globs; **non-empty**.                                                                                                                                                                                      |
 | `exclude`                  | `[]`         | Root-relative globs; exclusion wins over `files`.                                                                                                                                                                        |
 | `scope`                    | absent       | `ScopeSelector`; absent selects one whole-file scope per file.                                                                                                                                                           |
-| `settings`                 | `{}`         | `{ backend?: 'jev'; model?: string; threshold?: number }` overrides for this rule.                                                                                                                                       |
+| `settings`                 | `{}`         | `RuleSettings` overrides for backend, model, threshold, and input/output token prices. |
 | `group`                    | `'scope'`    | `'scope' | 'file' | 'folder' | 'project' | { by: 'folder', level }`.                                                                                                                                                     |
 | `when(context)`            | `true`       | Whole-rule gate; `boolean` or `{ applies, reason? }`.                                                                                                                                                                    |
 | `select(context)`          | delegates    | Override to build subjects yourself (default uses `files`/`exclude`/`scope`).                                                                                                                                            |
@@ -205,6 +244,8 @@ a runtime error, not a skip.
 time, then all surviving rules' evaluations in one ordered bounded map. Rule hooks that read project
 files or call helpers cannot deadlock the limiter. Shared rule instances must not depend on
 per-subject mutation ordering; use `--concurrency 1` when a rule needs serial checks.
+- A failed check stops scheduling new evaluations immediately. Already-started evaluations and AI
+calls finish before the run rejects, so their usage remains accounted for.
 
 ### Custom selectors
 
@@ -349,7 +390,7 @@ A **custom check** is any `Evaluator`-shaped value (`(subject, context) => Await
 assigned to the function-valued `check` property, for example
 `check = async (subject, context) => { ... }`. `subject` is a `Subject<T>`, so `subject.kind === 'scope'`
 narrows it to `ScopeSubject<T>` (with `id`, `source`, `data`, `captures`, and `filepath`). The check
-returns `{ status: 'pass' | 'violation', message?, probability?, threshold?, model? }` or throws; the result is
+returns `{ status: 'pass' | 'violation', message?, probability?, threshold?, model?, usage? }` or throws; the result is
 validated and supplied messages are preserved. A violation without a message is reported by rule name
 and location, without generated message text. Checks may use any external library/provider directly —
 there is no backend-registration framework.
@@ -358,6 +399,16 @@ AI results include the actual effective `threshold` used for the decision. Retur
 preserves that metadata; a custom check that replaces the AI result does not inherit it automatically.
 Deterministic checks do not gain an invented threshold. When supplied, threshold metadata must be a
 finite number in `[0, 1]`.
+
+Usage is accounted for independently of a custom check's return value: every `context.ai(...)` call
+contributes to the verification's `result.usage`, even when the check returns a different result.
+`usage` contains `calls`, `unreportedCalls`, `inputTokens`, `outputTokens`, `inputCost`, and
+`outputCost`; costs are USD. Token and cost totals cover reported calls only. Deterministic checks
+have no framework-generated AI usage.
+Invalid or overflowing aggregate usage fails the run even if a custom check catches the AI call's
+error; incomplete accounting cannot be returned as a successful verification.
+Returned decision fields are snapshotted before pending AI calls drain, so later asynchronous
+handlers cannot change a validated result.
 
 ## Settings and environment
 
@@ -381,12 +432,16 @@ export default class StrictLimits extends Rule {
 | model     | `TYPESAFE_DEFAULT_MODEL` | `jev-latest`              | rule setting &gt; env &gt; default                                            |
 | base URL  | `TYPESAFE_BASE_URL`      | `https://api.typesafe.ai` | env only                                                                      |
 | API key   | `TYPESAFE_API_KEY`       | —                         | env only (required for AI calls)                                              |
+| input price | `RK_INPUT_COST_PER_MILLION` | `0.042` USD/M | inspect flag &gt; `rule.settings.inputCostPerMillion` &gt; env &gt; default |
+| output price | `RK_OUTPUT_COST_PER_MILLION` | `0` USD/M | inspect flag &gt; `rule.settings.outputCostPerMillion` &gt; env &gt; default |
 
 
 Settings resolution is **lazy**: no provider-specific environment is read or validated until a rule's
 first actual AI call. A skipped, filtered, regex-only, or otherwise deterministic run needs no key and
 works even with unused invalid AI environment values. A *set-but-blank* used value is an error; values
 shadowed by a higher-precedence setting are not consulted. Rule and flag values validate eagerly.
+Token prices must be finite and nonnegative; zero is valid. Prices affect cost estimates only, not
+the provider request or pass/violation decision.
 
 Copy `.env.example` to `.env` and set `TYPESAFE_API_KEY` for AI-backed rules. Other values show defaults.
 
@@ -409,6 +464,11 @@ redacting the key (including on failures); the same redaction covers the streame
 included verifications; use `--output-all` to include passing verifications and skipped rules too.
 Headers and `Authorization` are never logged.
 
+The adapter reads actual `usage.input_tokens` and `usage.output_tokens` from the
+[Jev response](https://docs.typesafe.ai/api). Missing usage is marked unreported rather than estimated
+or treated as free; supplied malformed counts are errors. The default input price and free output
+match [Jev pricing](https://docs.typesafe.ai/models).
+
 AI `examples.good` and `examples.bad` must be dense arrays of non-empty strings. Sparse arrays and
 inherited-only entries fail during evaluator construction and runtime `context.ai` validation, before
 a decision request. Empty or omitted lists remain valid; dense example order is preserved on the wire.
@@ -426,7 +486,54 @@ after `/service/vN/` must end in `s`. This is a naming convention, not linguisti
 `duplicated-env.rule.ts` compares each override's variable names and JSON values against every
 `default.yml` scope in the same folder. Both rules run offline without AI credentials.
 
+`http-response-splitting.rule.ts` checks only `tests/manual/vulnerable_code.js`. Its JavaScript AST
+selector evaluates each function declaration, function expression (including prototype assignments),
+arrow function, and method independently, sending that scope's raw source as the AI state and reporting
+its function line range. Nested functions are selected independently and also remain in their enclosing
+function's source. It checks the CWE-113 policy from `test.sh`, phrased as prevention: visible
+unvalidated CR/LF injection into response headers or the status line is a violation. Serialization
+entry-point arguments and `statusMessage` are potentially untrusted; callers and helper implementations
+outside the scope are not supplied, so this is a local check, not whole-program analysis. Run it with
+`rulekeeper check . --rules .rulekeeper/http-response-splitting.rule.ts --output-all`, or inspect
+with `rulekeeper inspect .rulekeeper/http-response-splitting.rule.ts .`. Run its inline dataset with
+`rulekeeper test .rulekeeper/http-response-splitting.rule.ts --ai --timeout 45s`.
+These commands require `TYPESAFE_API_KEY`; `--ai` opts into live, potentially billable test calls.
+Ordinary tests do not execute this rule's `aiTests`.
+
 ## Commands
+
+### `skill install` and `skill update`
+
+The `skills` package supplies agent-aware destinations and safe copy/symlink installation. Rulekeeper
+ships the `rulekeeper-new-rule` skill and invokes that package's CLI directly; no separate `skills`
+command needs to be installed on `PATH`.
+
+```sh
+rulekeeper skill install
+rulekeeper skill install --agent claude-code --yes
+rulekeeper skill install --global --agent codex --copy
+
+rulekeeper skill update
+rulekeeper skill update --agent claude-code
+rulekeeper skill update --global --agent codex --copy
+```
+
+Install defaults to the shared **universal** directory (`.agents/skills` in the project or
+`~/.agents/skills` globally). Use `--agent <name...>` to choose agent-specific destinations;
+`--global` selects user-wide installation, and `--copy` selects copies instead of symlinks. Install
+prompts for scope and confirmation unless `--yes` is supplied; noninteractive `--yes` uses project scope
+unless `--global` is set.
+
+Update refreshes content bundled in the currently installed Rulekeeper package, so upgrade Rulekeeper
+first to receive newer skill content. It defaults to the universal destination and refuses when that
+skill is not installed at the selected scope. For agent-specific copies, repeat the same
+`--agent <name...>` used at installation; Rulekeeper verifies each requested target before refreshing.
+Agent labels that cannot be matched safely are rejected. `--agent '*'` explicitly opts into refreshing
+all supported agents and can install the skill for agents that did not previously have it. `--global`
+or `--project` selects the update scope; project is the default.
+
+The bundled skill links to `reference.md`; installation and refresh preserve that companion file.
+
 
 ### `validate [rule-path]`
 
@@ -610,8 +717,8 @@ Cards are the default. These output options are mutually exclusive:
 
 | Flag      | Output                                                                                                                                              |
 | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--json`  | One JSON document: `{ "events": [...], "reports": [...], "error"?: string }`.                                                                       |
-| `--jsonl` | Streamed `{ "type": "event", "event": ... }` records, followed by `{ "type": "report", "report": ... }` records on completion.                      |
+| `--json`  | One JSON document: `{ "events": [...], "reports": [...], "usage"?: {...}, "error"?: string }`. |
+| `--jsonl` | Streamed event records, completion reports, and an AI usage summary when calls were made. |
 | `--raw`   | Plain labels, indentation, source excerpts, and serialized payload text without cards, colors, dividers, terminal wrapping, or JSON prettification. |
 
 
@@ -619,9 +726,12 @@ Inspect machine output includes the complete diagnostic walk and all final evalu
 passes and skipped rules. Request/response bodies remain strings; `evaluationId` correlates events.
 `--json` buffers events until completion and includes collected events, empty reports, and `error` on
 preparation/evaluation failure. `--jsonl` streams events immediately and ends failures with a
-`{ "type": "error", "message": ... }` record instead of completion reports. There is no generic summary
-record. Exit codes remain `0` for clean/skipped, `1` for completed violations, and `2` for errors;
-usage errors keep standard CLI diagnostics rather than producing a machine document.
+`{ "type": "error", "message": ... }` record instead of completion reports. If AI calls occurred,
+JSON includes a top-level `usage` recap; JSONL emits `{ "type": "summary", "usage": {...} }`
+after reports on success or before the terminal error on failure. The recap adds `verifications`
+to the usage fields described above and includes partial accounting from completed calls.
+Deterministic-only inspections have no AI recap. Exit codes remain `0` for clean/skipped, `1` for
+completed violations, and `2` for errors; usage errors retain standard CLI diagnostics.
 
 Every inspect format redacts configured credentials, including JSON event data and reports. This
 differs from `check --json`/`check --jsonl`, which retain unredacted subject data as documented above.
@@ -633,6 +743,21 @@ file decisions, and filtered scopes appear outside evaluation cards. Each evalua
 card with its rule, file/range, and scope metadata shown once in the header. Source excerpts (or grouped
 member sources), traces, requests, responses, and the result stay together inside that card. Accepted
 scope and group details move into their evaluation card rather than being repeated during selection.
+
+Each AI verification has an **AI Usage** section showing input/output tokens and their USD costs,
+followed by a final recap across all AI verifications and calls. Multiple AI calls within one
+verification are combined. Unreported calls are explicitly marked; displayed totals then cover
+reported calls only, not an estimate of the complete bill.
+
+Override prices for one inspection:
+
+```sh
+rulekeeper inspect http-response-splitting . --input-cost-per-million 0.042 --output-cost-per-million 0
+```
+
+Use `RK_INPUT_COST_PER_MILLION` / `RK_OUTPUT_COST_PER_MILLION` for global defaults, or
+`settings = { inputCostPerMillion: 0.042, outputCostPerMillion: 0 }` for a rule. The inspect flags
+override rule settings and environment values independently.
 
 Inspect streams the card as evaluation proceeds. Errors close the card and preserve its already-written
 content; unfinished evaluations are marked incomplete rather than reported as passing or violating.

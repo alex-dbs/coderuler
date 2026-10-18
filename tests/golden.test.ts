@@ -669,6 +669,7 @@ test('fixture: a strict policy reaches the backend while a relaxed one never res
       assert.deepEqual(settings, {});
       return {
         threshold: 0.4,
+        pricing: { inputCostPerMillion: 0.042, outputCostPerMillion: 0 },
         backend: {
           decide: async request => {
             requests.push(request);
@@ -689,7 +690,10 @@ test('fixture: a strict policy reaches the backend while a relaxed one never res
         {
           id: 'secrets',
           data: { id: 'secrets', strict: true },
-          result: { status: 'pass', probability: 1, threshold: 0.4, model: 'fixture-stub' },
+          result: {
+            status: 'pass', probability: 1, threshold: 0.4, model: 'fixture-stub',
+            usage: { calls: 1, unreportedCalls: 1, inputTokens: 0, outputTokens: 0, inputCost: 0, outputCost: 0 },
+          },
         },
       ],
     },

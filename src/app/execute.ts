@@ -1,6 +1,7 @@
 import { matchesGlob } from 'node:path';
 
 import type {
+  AiUsage,
   CheckContext,
   CheckResult,
   Grouping,
@@ -28,6 +29,7 @@ import type {
 import { mapConcurrent } from './concurrency.js';
 import { evaluateAi } from './evaluators.js';
 import { wholeFileScope } from './selection.js';
+import { addUsage } from './usage.js';
 import {
   validateCheckResult,
   validatePredicateResult,
@@ -213,16 +215,43 @@ export async function executeRules(
     plan: Plan,
     subject: Subject<JsonValue>,
     evaluationId: number,
+    reportFailure: (error: unknown) => void,
   ): Promise<CheckResult> => {
     plan.evaluationStartedAt ??= performance.now();
     const { name, rule } = plan;
     emit({ type: 'evaluation', evaluationId, name, subject });
     const trace = traceFor(name, evaluationId);
+    let trackedUsage: AiUsage | undefined;
+    let pendingAi: Set<Promise<CheckResult>> | undefined;
+    let accountingFailure: { readonly error: Error } | undefined;
+    const retainAccountingFailure = (error: unknown): void => {
+      if (accountingFailure !== undefined) return;
+      const failure = error instanceof Error ? error : new Error(String(error));
+      accountingFailure = { error: failure };
+      reportFailure(failure);
+    };
+    const throwIfAccountingFailed = (): void => {
+      if (accountingFailure !== undefined) throw accountingFailure.error;
+    };
     const observer: DecisionObserver = exchange => {
       if (exchange.type === 'request') {
         emit({ type: 'request', evaluationId, name, subject, body: exchange.body });
-      } else {
+      } else if (exchange.type === 'response') {
         emit({ type: 'response', evaluationId, name, subject, status: exchange.status, body: exchange.body });
+      } else {
+        const next = exchange.usage;
+        try {
+          trackedUsage = addUsage(trackedUsage, next);
+        } catch (error) {
+          retainAccountingFailure(error);
+        }
+        // Individual usage remains valid even when its aggregate cannot be represented.
+        try {
+          emit({ type: 'usage', evaluationId, name, subject, usage: next });
+        } catch (error) {
+          retainAccountingFailure(error);
+        }
+        throwIfAccountingFailed();
       }
     };
     const checkContext: CheckContext<JsonValue> = {
@@ -230,32 +259,63 @@ export async function executeRules(
       ruleName: name,
       trace,
       select: selection => selectFromRule(name, selection, evaluationId),
-      ai: options =>
-        evaluateAi(subject, options, { project: context.project, ruleName: name, trace }, runtimeOf(plan), observer),
+      ai: options => {
+        const call = evaluateAi(
+          subject, options, { project: context.project, ruleName: name, trace }, runtimeOf(plan), observer,
+        );
+        const pending = pendingAi ??= new Set<Promise<CheckResult>>();
+        pending.add(call);
+        // Observe both outcomes immediately; the check still receives the original promise.
+        void call.then(
+          () => { pending.delete(call); },
+          () => { pending.delete(call); },
+        );
+        return call;
+      },
     };
-
-    let raw: unknown;
-    try {
-      raw = await rule.check.call(rule, subject, checkContext);
-    } catch (error) {
-      throw fail(name, 'check', error, evaluationId);
-    }
 
     let result: CheckResult;
     try {
-      result = validateCheckResult(raw, `Rule "${name}" check result`);
+      try {
+        const raw = await rule.check.call(rule, subject, checkContext);
+        throwIfAccountingFailed();
+        const valid = validateCheckResult(raw, `Rule "${name}" check result`);
+        const { status, message, model, probability, threshold, usage } = valid;
+        // Snapshot declared fields before draining: custom checks still own their returned objects.
+        // Validate the snapshot too, since accessors may change values between reads.
+        result = validateCheckResult({
+          status,
+          ...(message === undefined ? {} : { message }),
+          ...(probability === undefined ? {} : { probability }),
+          ...(threshold === undefined ? {} : { threshold }),
+          ...(model === undefined ? {} : { model }),
+          ...(usage === undefined ? {} : { usage: {
+            calls: usage.calls,
+            unreportedCalls: usage.unreportedCalls,
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            inputCost: usage.inputCost,
+            outputCost: usage.outputCost,
+          } }),
+        }, `Rule "${name}" check result`);
+      } catch (error) {
+        const cause = accountingFailure === undefined ? error : accountingFailure.error;
+        const failure = cause instanceof Error ? cause : new Error(String(cause));
+        reportFailure(failure);
+        throw failure;
+      } finally {
+        // Promise.all may reject while sibling calls are still producing usage events.
+        while (pendingAi !== undefined && pendingAi.size > 0) {
+          await Promise.allSettled(pendingAi);
+        }
+      }
+      // A custom check may catch context.ai failures, but cannot discard accounting failures.
+      throwIfAccountingFailed();
     } catch (error) {
       throw fail(name, 'check', error, evaluationId);
     }
 
-    const { status, message, model, probability, threshold } = result;
-    const normalized: CheckResult = {
-      status,
-      ...(message === undefined ? {} : { message }),
-      ...(probability === undefined ? {} : { probability }),
-      ...(threshold === undefined ? {} : { threshold }),
-      ...(model === undefined ? {} : { model }),
-    };
+    const normalized: CheckResult = trackedUsage === undefined ? result : { ...result, usage: trackedUsage };
     emit({ type: 'result', evaluationId, name, subject, result: normalized });
     context.emit?.({
       type: 'progress', phase: 'evaluation', completed: ++completedEvaluations, total: tasks.length,
@@ -398,8 +458,8 @@ export async function executeRules(
   }
   context.emit?.({ type: 'progress', phase: 'evaluation', completed: 0, total: tasks.length });
 
-  const results = await mapConcurrent(tasks, context.concurrency, task =>
-    evaluateSubject(task.plan, task.subject, task.evaluationId),
+  const results = await mapConcurrent(tasks, context.concurrency, (task, _index, reportFailure) =>
+    evaluateSubject(task.plan, task.subject, task.evaluationId, reportFailure),
   );
   for (let index = 0; index < tasks.length; index += 1) {
     const task = tasks[index]!;
