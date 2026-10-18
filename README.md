@@ -192,9 +192,11 @@ npm run typecheck
 
 Add or update tests for changes to rule behavior. The [rule-writing skill](skills/rulekeeper-new-rule/SKILL.md) explains how to create rules, add inline tests, and inspect rule behavior.
 
+To reproduce CI's test scheduling, run `npm test -- --test-concurrency=4`. Test files stay isolated, with up to four running concurrently.
+
 ### Publishing to npm
 
-CI runs typechecking and the complete test suite, including installing and exercising the packed CLI, on branch pushes and pull requests. Pushing a `v*` tag runs the same checks before publishing to npm. The tag must match `package.json` exactly, for example `v0.1.0` for version `0.1.0`. Stable versions use npm's `latest` tag; prereleases use `next`.
+CI runs typechecking and the complete test suite, including installing and exercising the packed CLI, on pushes to `main` and on pull requests. Feature-branch pushes do not trigger a separate run. Pushing a `v*` tag runs the same checks before publishing to npm. The tag must match `package.json` exactly, for example `v0.1.0` for version `0.1.0`. Stable versions use npm's `latest` tag; prereleases use `next`.
 
 One-time setup:
 
