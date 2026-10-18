@@ -1,4 +1,4 @@
-import type { CheckResult, ScopeSubject } from 'rulekeeper';
+import type { CheckResult, ScopeSubject } from '@alex-dbs/rulekeeper';
 
 export interface GoldenCase {
   readonly group: string;

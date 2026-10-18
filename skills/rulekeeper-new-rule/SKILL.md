@@ -5,7 +5,7 @@ description: Create Rulekeeper rules, including custom selection, filters and ch
 
 # Create a Rulekeeper rule
 
-Use the installed `rulekeeper` CLI from the project root. In commands, `.` means this project. Import the public SDK from `rulekeeper`.
+Use the installed `rulekeeper` CLI from the project root. In commands, `.` means this project. Import the public SDK from `@alex-dbs/rulekeeper`.
 
 For all rule options, read [reference.md](reference.md) when that branch is needed.
 
@@ -28,8 +28,8 @@ Add a named `tests` export in the same file. Run the relevant cases before the p
 This complete example requires at least two replicas whenever `spec.replicas` is an integer:
 
 ```ts
-import { Rule, pass, scopes, test, violation } from 'rulekeeper';
-import type { Evaluator, ScopeSubject } from 'rulekeeper';
+import { Rule, pass, scopes, test, violation } from '@alex-dbs/rulekeeper';
+import type { Evaluator, ScopeSubject } from '@alex-dbs/rulekeeper';
 
 type Deployment = { replicas: number };
 

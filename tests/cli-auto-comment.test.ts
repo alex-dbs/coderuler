@@ -29,7 +29,7 @@ interface Fixture extends Sandbox {
   readonly head: string;
 }
 
-const scoped = (check: string, options = '') => `import { Rule, pass, violation, regex } from 'rulekeeper';
+const scoped = (check: string, options = '') => `import { Rule, pass, violation, regex } from '@alex-dbs/rulekeeper';
 export default class FixtureRule extends Rule {
   files = ['src/*.txt'];
   scope = file => [{ id: '$', source: file.source, data: { private: 'DATA-SECRET' }, captures: { private: 'CAPTURE-SECRET' }, lines: { start: 2, end: 3 } }];

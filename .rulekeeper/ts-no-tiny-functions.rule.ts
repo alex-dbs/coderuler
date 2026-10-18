@@ -1,4 +1,4 @@
-import { Rule, ai, scopes, test } from 'rulekeeper';
+import { Rule, ai, scopes, test } from '@alex-dbs/rulekeeper';
 
 export default class TsNoTinyFunctions extends Rule {
   files = ['**/*.{ts,tsx,mts,cts}'];

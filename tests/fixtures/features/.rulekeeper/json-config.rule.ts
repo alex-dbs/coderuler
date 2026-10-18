@@ -8,7 +8,7 @@ import {
   type PredicateResult,
   type ScopeSubject,
   type Subject,
-} from 'rulekeeper';
+} from '@alex-dbs/rulekeeper';
 
 import { isMapping, readNumber } from './policy-helpers.ts';
 

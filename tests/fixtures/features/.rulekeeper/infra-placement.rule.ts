@@ -1,4 +1,4 @@
-import { Rule, ai, scopes, type ProjectContext } from 'rulekeeper';
+import { Rule, ai, scopes, type ProjectContext } from '@alex-dbs/rulekeeper';
 
 export default class InfraPlacement extends Rule {
   files = ['internal/infra/**/*.go'];

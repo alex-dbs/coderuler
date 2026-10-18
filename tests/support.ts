@@ -61,9 +61,8 @@ export function isolatedEnv(home: string): NodeJS.ProcessEnv {
 }
 
 function linkSdk(base: string): void {
-  const modules = join(base, 'node_modules');
-  mkdirSync(modules, { recursive: true });
-  const link = join(modules, 'rulekeeper');
+  const link = join(base, 'node_modules', '@alex-dbs/rulekeeper');
+  mkdirSync(dirname(link), { recursive: true });
   if (!existsSync(link)) symlinkSync(ROOT, link, 'dir');
 }
 

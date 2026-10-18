@@ -12,7 +12,7 @@ test('test stops synchronous and asynchronous hangs, cleans their projects, and 
   const target = sandbox.isolated('timeouts');
   const roots = join(target.root, 'case-roots.jsonl');
   writeFile(join(target.cwd, '.rulekeeper/deadline.rule.ts'), `import { appendFileSync } from 'node:fs';
-import { Rule, pass, test } from 'rulekeeper';
+import { Rule, pass, test } from '@alex-dbs/rulekeeper';
 export default class Deadline extends Rule {
   files = ['inputs/*.txt'];
   runs = 0;

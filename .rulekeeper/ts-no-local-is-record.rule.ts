@@ -1,4 +1,4 @@
-import { Rule, ai, scopes, test } from 'rulekeeper';
+import { Rule, ai, scopes, test } from '@alex-dbs/rulekeeper';
 
 const namedIsRecord = {
   has: { field: 'name', kind: 'identifier', regex: '^isRecord$' },

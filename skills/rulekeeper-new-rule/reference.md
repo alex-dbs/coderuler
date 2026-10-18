@@ -1,6 +1,6 @@
 # Rule API reference
 
-Read the branch needed for the rule; use [SKILL.md](SKILL.md) for the authoring, test, and inspection workflow. All imports below use the public `rulekeeper` SDK.
+Read the branch needed for the rule; use [SKILL.md](SKILL.md) for the authoring, test, and inspection workflow. All imports below use the public `@alex-dbs/rulekeeper` SDK.
 
 ## Rule members and lifecycle
 
@@ -53,7 +53,7 @@ Choose a language matching the source; common JavaScript/TypeScript, markup, and
 `language: 'typescript'` (alias `'ts'`) uses TSX for `.tsx`, TypeScript otherwise (including `.ts`, `.mts`, `.cts`). Explicit `'tsx'` always uses TSX. Both TypeScript query variants validate eagerly; a TypeScript-only kind needs a TSX-compatible replacement:
 
 ```ts
-import { scopes } from 'rulekeeper';
+import { scopes } from '@alex-dbs/rulekeeper';
 
 const assertions = scopes.astGrep({
   language: 'typescript',
@@ -69,7 +69,7 @@ const assertions = scopes.astGrep({
 The public shapes are:
 
 ```ts
-import type { Awaitable, JsonValue, SourceFile, ScopeMatch } from 'rulekeeper';
+import type { Awaitable, JsonValue, SourceFile, ScopeMatch } from '@alex-dbs/rulekeeper';
 
 type ScopeSelector<T = JsonValue> =
   (file: SourceFile) => Awaitable<readonly ScopeMatch<T>[]>;
@@ -87,11 +87,11 @@ Return a dense array; `[]` means no matches. Use stable nonempty IDs and actual 
 This complete example selects owner annotations from two disjoint trees, gates asynchronously, and explains applicability. Adapt the policy and datasets together:
 
 ```ts
-import { Rule, pass, test, violation } from 'rulekeeper';
+import { Rule, pass, test, violation } from '@alex-dbs/rulekeeper';
 import type {
   Evaluator, PredicateResult, ProjectContext, ScopeSelector,
   ScopeSubject, SelectionContext,
-} from 'rulekeeper';
+} from '@alex-dbs/rulekeeper';
 
 const owners: ScopeSelector<string> = ({ source }) =>
   source.split('\n').flatMap((line, index) => {
@@ -148,15 +148,15 @@ Selection excludes symlinks and directories named `.git`, `node_modules`, `.rule
 - `'folder'`: containing folder (level 0); `{ by: 'folder', level }` requires a nonpositive integer; negative levels climb, clamping at `.`.
 - `'project'`: one group at root `.`. Empty groups are never evaluated; member order is preserved.
 
-Declare `group: Grouping = 'folder'` with `import type { Grouping } from 'rulekeeper'` to retain the union type. One group produces exactly one decision; choose the smallest group containing the comparison's evidence.
+Declare `group: Grouping = 'folder'` with `import type { Grouping } from '@alex-dbs/rulekeeper'` to retain the union type. One group produces exactly one decision; choose the smallest group containing the comparison's evidence.
 
 Grouping helps you to evaluate scopes together. For instance, grouping per folder means that ALL scopes selected for that folder will be evaluated together. A grouping per project means that ALL scopes will be evaluated together ONCE for the project. An example could be to check that `id` in all JSON files of the project, are UNIQUE on the project.
 
 `Subject<T> = ScopeSubject<T> | GroupSubject<T>`. Narrow with `subject.kind`; this evaluator enforces unique selected IDs across group files:
 
 ```ts
-import { pass, violation } from 'rulekeeper';
-import type { Evaluator } from 'rulekeeper';
+import { pass, violation } from '@alex-dbs/rulekeeper';
+import type { Evaluator } from '@alex-dbs/rulekeeper';
 // GroupSubject<T>: { readonly kind: 'group';
 //   readonly group: { readonly type: 'file' | 'folder' | 'project'; readonly path: string };
 //   readonly members: readonly ScopeSubject<T>[] }
@@ -222,7 +222,7 @@ Use `trace` for decision evidence visible during inspection; keep normal executi
 `regex<T = JsonValue>(options: RegexOptions<T>): Evaluator<T>` takes `{ readonly pattern: RegExp; readonly violationMessage?: string; readonly input?: (subject: ScopeSubject<T>, context: ProjectContext) => Awaitable<string> }`.
 
 ```ts
-import { Rule, regex, test } from 'rulekeeper';
+import { Rule, regex, test } from '@alex-dbs/rulekeeper';
 
 export default class InternalUrl extends Rule {
   files = ['config/*.txt'];
@@ -246,8 +246,8 @@ Default input is `String(data)` for scalar/null data, otherwise source text. `in
 - `input?: (subject: Subject<T>, context: ProjectContext) => Awaitable<JsonValue>`: replace the default projection; output validates as JSON-compatible.
 
 ```ts
-import { Rule, ai, test } from 'rulekeeper';
-import type { RuleSettings } from 'rulekeeper';
+import { Rule, ai, test } from '@alex-dbs/rulekeeper';
+import type { RuleSettings } from '@alex-dbs/rulekeeper';
 
 export default class ActionableInstructions extends Rule {
   files = ['guides/**/*.md'];
@@ -278,7 +278,7 @@ Inspection reports per-verification `usage: AiUsage` and a final recap: `calls`,
 AI rules, under the hood, are using TypeSafe Jev model and `noul` question (yes/no probabilistc answer). The rule must clearly explain what is checked. A global/generic rule won't match. A dedicated rule will perform better. The example bellow will check a particular usage of go slice `append` function.
 
 ```
-import { Rule, ai, scopes, test } from 'rulekeeper';
+import { Rule, ai, scopes, test } from '@alex-dbs/rulekeeper';
 
 export default class GoAppendSlice extends Rule {
   files = ['**/*.go'];
@@ -319,7 +319,7 @@ or assigning elements by index and also appending them, is a violation.`,
 
 ## Project readers
 
-Public signatures (import `Project`, `CsvOptions`, `CsvRow`, and `JsonValue` as types from `rulekeeper`):
+Public signatures (import `Project`, `CsvOptions`, `CsvRow`, and `JsonValue` as types from `@alex-dbs/rulekeeper`):
 
 ```ts
 interface Project {

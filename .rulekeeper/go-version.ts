@@ -1,5 +1,5 @@
 import { dirname, join } from 'node:path';
-import type { ProjectContext } from 'rulekeeper';
+import type { ProjectContext } from '@alex-dbs/rulekeeper';
 
 export async function goVersionAtLeast(
   filepath: string,

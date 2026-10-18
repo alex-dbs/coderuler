@@ -7,7 +7,7 @@ import {
   type CheckResult,
   type JsonValue,
   type Subject,
-} from 'rulekeeper';
+} from '@alex-dbs/rulekeeper';
 
 import { isMapping } from './policy-helpers.ts';
 

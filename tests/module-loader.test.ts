@@ -75,7 +75,7 @@ async function expectReject(
 }
 
 function plainRule(className: string, files = '**/*'): string {
-  return `import { Rule, pass } from 'rulekeeper';
+  return `import { Rule, pass } from '@alex-dbs/rulekeeper';
 
 export default class ${className} extends Rule {
   files = ['${files}'];
@@ -85,7 +85,7 @@ export default class ${className} extends Rule {
 }
 
 function typedRule(className: string): string {
-  return `import { Rule, pass, type CheckResult } from 'rulekeeper';
+  return `import { Rule, pass, type CheckResult } from '@alex-dbs/rulekeeper';
 
 export default class ${className} extends Rule {
   files: readonly string[] = ['**/*.md'];
@@ -187,7 +187,7 @@ test('imports helper modules without discovering them as rules', async () => {
   await writeModule(join(root, '.rulekeeper', 'helper.mjs'), `export const files = ['**/*.md'];\n`);
   await writeModule(
     join(root, '.rulekeeper', 'uses-helper.rule.mjs'),
-    `import { Rule, pass } from 'rulekeeper';
+    `import { Rule, pass } from '@alex-dbs/rulekeeper';
 import { files } from './helper.mjs';
 
 export default class UsesHelper extends Rule {
@@ -206,7 +206,7 @@ test('keeps additional fields and methods on a rule class', async () => {
   const root = await makeTempRoot('extra');
   await writeModule(
     join(root, '.rulekeeper', 'extra.rule.mjs'),
-    `import { Rule, pass } from 'rulekeeper';
+    `import { Rule, pass } from '@alex-dbs/rulekeeper';
 
 export default class Extra extends Rule {
   label = 'extra';
@@ -231,7 +231,7 @@ test('loads a disabled rule and reports its disabled state', async () => {
   const root = await makeTempRoot('disabled');
   await writeModule(
     join(root, '.rulekeeper', 'off.rule.mjs'),
-    `import { Rule, pass } from 'rulekeeper';
+    `import { Rule, pass } from '@alex-dbs/rulekeeper';
 
 export default class Off extends Rule {
   enabled = false;
@@ -303,7 +303,7 @@ test('rejects a discovery root that lives inside an archived old directory', asy
     join(root, '.rulekeeper', 'legacy.rule.mjs'),
     `import { writeFileSync } from 'node:fs';
 
-import { Rule, pass } from 'rulekeeper';
+import { Rule, pass } from '@alex-dbs/rulekeeper';
 
 writeFileSync(new URL('./imported.marker', import.meta.url), 'imported');
 
@@ -455,7 +455,7 @@ test('validates every module before returning any loaded rule', async () => {
   await writeModule(join(root, '.rulekeeper', 'a-good.rule.mjs'), plainRule('Good'));
   const bad = await writeModule(
     join(root, '.rulekeeper', 'b-throwing.rule.mjs'),
-    `import { Rule, pass } from 'rulekeeper';
+    `import { Rule, pass } from '@alex-dbs/rulekeeper';
 
 export default class Throwing extends Rule {
   constructor() {
@@ -500,7 +500,7 @@ interface MalformedCase {
 }
 
 function ruleWith(className: string, members: string): string {
-  return `import { Rule, pass } from 'rulekeeper';
+  return `import { Rule, pass } from '@alex-dbs/rulekeeper';
 
 export default class ${className} extends Rule {
 ${members}
@@ -514,7 +514,7 @@ const malformedCases: readonly MalformedCase[] = [
   {
     label: 'default instance',
     file: 'instance.rule.mjs',
-    source: `import { Rule, pass } from 'rulekeeper';
+    source: `import { Rule, pass } from '@alex-dbs/rulekeeper';
 
 class Instance extends Rule {
   check = async () => pass();
@@ -555,7 +555,7 @@ export default Plain;
   {
     label: 'missing check',
     file: 'no-check.rule.mjs',
-    source: `import { Rule } from 'rulekeeper';
+    source: `import { Rule } from '@alex-dbs/rulekeeper';
 
 export default class NoCheck extends Rule {}
 `,
@@ -605,7 +605,7 @@ export default class NoCheck extends Rule {}
   {
     label: 'syntax error',
     file: 'syntax.rule.mjs',
-    source: `import { Rule } from 'rulekeeper';
+    source: `import { Rule } from '@alex-dbs/rulekeeper';
 
 export default class Broken extends Rule {
   check = async () => ({ status: 'pass' });
@@ -654,7 +654,7 @@ test('rejects an explicit rule reached through a directory symlink into the arch
     join(root, 'old', 'legacy.rule.mjs'),
     `import { writeFileSync } from 'node:fs';
 
-import { Rule, pass } from 'rulekeeper';
+import { Rule, pass } from '@alex-dbs/rulekeeper';
 
 writeFileSync(new URL('./imported.marker', import.meta.url), 'imported');
 

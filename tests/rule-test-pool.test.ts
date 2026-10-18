@@ -28,7 +28,7 @@ test('test runs eight cases concurrently with explicit concurrency', { timeout: 
   const markers = names.map(name => join(target.root, name));
   writeFile(join(target.cwd, '.rulekeeper/barrier.rule.ts'), `import { existsSync, writeFileSync } from 'node:fs';
 import { threadId } from 'node:worker_threads';
-import { Rule, pass, test } from 'rulekeeper';
+import { Rule, pass, test } from '@alex-dbs/rulekeeper';
 ${WAIT_FOR}
 const markers = ${JSON.stringify(markers)};
 export default class Barrier extends Rule {
@@ -55,7 +55,7 @@ test('test defaults to one reusable worker across cases and rule suites', { time
   for (const suite of ['first', 'second']) {
     writeFile(join(target.cwd, '.rulekeeper', `${suite}.rule.ts`), `import { writeFileSync } from 'node:fs';
 import { threadId } from 'node:worker_threads';
-import { Rule, pass, test } from 'rulekeeper';
+import { Rule, pass, test } from '@alex-dbs/rulekeeper';
 export default class Serial extends Rule {
   files = ['inputs/*.txt'];
   check = subject => {
@@ -85,7 +85,7 @@ export const worker = threadId;`);
   for (const suite of suites) {
     const names = Array.from({ length: 4 }, (_, index) => `${suite}-${index}`);
     writeFile(join(target.cwd, '.rulekeeper', `${suite}.rule.ts`), `import { existsSync, writeFileSync } from 'node:fs';
-import { Rule, pass, test } from 'rulekeeper';
+import { Rule, pass, test } from '@alex-dbs/rulekeeper';
 import { worker } from './shared.js';
 ${WAIT_FOR}
 export default class Reuse extends Rule {
@@ -117,7 +117,7 @@ test('test streams completed cases in declaration order before the suite finishe
   const laterFinished = join(target.root, 'later-finished');
   const streamed = join(target.root, 'first-result-streamed');
   writeFile(join(target.cwd, '.rulekeeper/order.rule.ts'), `import { existsSync, writeFileSync } from 'node:fs';
-import { Rule, pass, test } from 'rulekeeper';
+import { Rule, pass, test } from '@alex-dbs/rulekeeper';
 ${WAIT_FOR}
 export default class Ordered extends Rule {
   files = ['inputs/*.txt'];
@@ -161,7 +161,7 @@ test('test cancels a hanging sibling on operational error and cleans every activ
   const throwing = join(target.root, 'throwing-root');
   const unscheduled = join(target.root, 'must-not-start');
   writeFile(join(target.cwd, '.rulekeeper/cancel.rule.ts'), `import { existsSync, writeFileSync } from 'node:fs';
-import { Rule, pass, test } from 'rulekeeper';
+import { Rule, pass, test } from '@alex-dbs/rulekeeper';
 ${WAIT_FOR}
 export default class Cancel extends Rule {
   files = ['inputs/*.txt'];
@@ -200,7 +200,7 @@ test('test cancels active cases when an idle worker crashes after emitting its r
   const hangingRoot = join(target.root, 'hanging-root');
   const release = join(target.root, 'release-background-error');
   writeFile(join(target.cwd, '.rulekeeper/background.rule.ts'), `import { existsSync, writeFileSync } from 'node:fs';
-import { Rule, pass, test } from 'rulekeeper';
+import { Rule, pass, test } from '@alex-dbs/rulekeeper';
 ${WAIT_FOR}
 export default class Background extends Rule {
   files = ['inputs/*.txt'];
@@ -257,7 +257,7 @@ test('test replaces only a timed-out worker and reuses its healthy peer in the n
   const names = ['hanging', 'healthy', 'next-first', 'next-second'];
   writeFile(join(target.cwd, '.rulekeeper/first.rule.ts'), `import { existsSync, writeFileSync } from 'node:fs';
 import { threadId } from 'node:worker_threads';
-import { Rule, pass, test } from 'rulekeeper';
+import { Rule, pass, test } from '@alex-dbs/rulekeeper';
 ${WAIT_FOR}
 export default class Deadline extends Rule {
   files = ['inputs/*.txt'];
@@ -275,7 +275,7 @@ export default class Deadline extends Rule {
 export const tests = [${cases(names.slice(0, 2))}];`);
   writeFile(join(target.cwd, '.rulekeeper/second.rule.ts'), `import { existsSync, writeFileSync } from 'node:fs';
 import { threadId } from 'node:worker_threads';
-import { Rule, pass, test } from 'rulekeeper';
+import { Rule, pass, test } from '@alex-dbs/rulekeeper';
 ${WAIT_FOR}
 export default class Recovery extends Rule {
   files = ['inputs/*.txt'];
@@ -304,7 +304,7 @@ export const tests = [${cases(names.slice(2))}];`);
 
 test('test rejects concurrency values that are not positive safe integers', async context => {
   const target = sandbox.isolated('invalid-concurrency');
-  writeFile(join(target.cwd, '.rulekeeper/text.rule.ts'), `import { Rule, pass, test } from 'rulekeeper';
+  writeFile(join(target.cwd, '.rulekeeper/text.rule.ts'), `import { Rule, pass, test } from '@alex-dbs/rulekeeper';
 export default class Text extends Rule { files = ['inputs/*.txt']; check = () => pass(); }
 export const tests = [${cases(['valid'])}];`);
   for (const value of ['0', '-1', '1.5', 'NaN', 'Infinity', '9007199254740992']) {

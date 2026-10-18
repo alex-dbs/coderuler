@@ -516,7 +516,7 @@ test('CLI rejects sparse scope results but keeps a genuine empty scope result sk
   const target = cliSandbox.isolated('scope-array');
   writeFile(`${target.cwd}/visible.txt`, 'visible');
   const ruleFile = `${target.cwd}/.rulekeeper/scopes.rule.ts`;
-  writeFile(ruleFile, `import { Rule, pass, type ScopeMatch } from 'rulekeeper';
+  writeFile(ruleFile, `import { Rule, pass, type ScopeMatch } from '@alex-dbs/rulekeeper';
 export default class Scopes extends Rule {
   files = ['visible.txt'];
   scope = () => new Array<ScopeMatch>(1);
@@ -527,7 +527,7 @@ export default class Scopes extends Rule {
   expectFailure(rejected, 'sparse scope result');
   assert.match(rejected.stderr, /scope.*visible\.txt\[0\]/);
 
-  writeFile(ruleFile, `import { Rule, pass } from 'rulekeeper';
+  writeFile(ruleFile, `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class Scopes extends Rule {
   files = ['visible.txt'];
   scope = () => [];
@@ -546,7 +546,7 @@ test('CLI validates sparse pattern lists even on disabled rules before executing
   writeFile(`${target.cwd}/visible.txt`, 'visible');
   for (const field of ['files', 'exclude']) {
     for (const enabled of [true, false]) {
-      writeFile(`${target.cwd}/.rulekeeper/patterns.rule.ts`, `import { Rule, pass } from 'rulekeeper';
+      writeFile(`${target.cwd}/.rulekeeper/patterns.rule.ts`, `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class Patterns extends Rule {
   enabled = ${enabled};
   ${field} = new Array<string>(1);

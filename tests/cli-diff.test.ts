@@ -30,7 +30,7 @@ function files(target: Sandbox, entries: Readonly<Record<string, string>>): void
 }
 
 function rule(target: Sandbox, name: string, fields = '', pattern = 'src/**/*.txt'): void {
-  writeFile(join(target.cwd, '.rulekeeper', `${name}.rule.ts`), `import { Rule, pass, violation, scopes } from 'rulekeeper';
+  writeFile(join(target.cwd, '.rulekeeper', `${name}.rule.ts`), `import { Rule, pass, violation, scopes } from '@alex-dbs/rulekeeper';
 export default class Local extends Rule {
   files = [${JSON.stringify(pattern)}];
   ${fields}
@@ -580,7 +580,7 @@ test('files named old or dist and nested dist directories remain eligible', asyn
 test('changing an explicitly loaded rule outside .rulekeeper does not trigger its project group', async () => {
   const target = repository('explicit-rule-change');
   const ruleFile = 'rules/explicit.rule.ts';
-  const source = `import { Rule, pass } from 'rulekeeper';
+  const source = `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class Explicit extends Rule {
   files = ['src/**/*.txt'];
   group = 'project';

@@ -7,22 +7,27 @@ Do your AI  agents keep missing rules from your prompts / AGENTS.md? If repeated
 
 Write deterministic rules in TypeScript (or JavaScript). When a policy needs judgment, send it to an AI decision API. AI rules use the selected scope as context by default, rather than sending the whole repository. You choose what each rule selects, so each AI request can stay focused.
 
-## Install from source
+## Install
 
 Rulekeeper requires Node.js 24 or later. Git is required only when you use `check --diff`.
 
-The package is not published to npm yet. In a repository checkout, install dependencies and build it:
+Install the CLI globally:
 
 ```sh
-npm ci
-npm run build
+npm install -g @alex-dbs/rulekeeper
+rulekeeper --help
 ```
 
-Run the CLI from the checkout with `npm start --`. For example:
+The npm package is scoped; the command is simply `rulekeeper`. Rules import the package API, so also install it in each project where you write rules. This provides TypeScript editor support too:
 
 ```sh
-npm start -- --help
+npm install --save-dev @alex-dbs/rulekeeper
+npx rulekeeper --help
 ```
+
+The global installation is optional: with only the project-local dependency, run commands through `npx rulekeeper`.
+
+The npm install commands require the first release to be published. To run an unreleased checkout, use `npm ci`, `npm run build`, then `npm start -- --help`.
 
 ## Write a rule
 
@@ -31,7 +36,7 @@ Save rules in `.rulekeeper` (or any subfolders) with a name that ends in `.rule
 This rule reports explicit `any` types in TypeScript files. It also tests a violating case and a passing case:
 
 ```ts
-import { Rule, scopes, test, violation } from 'rulekeeper';
+import { Rule, scopes, test, violation } from '@alex-dbs/rulekeeper';
 
 export default class NoAny extends Rule {
   files = ['src/**/*.{ts,tsx}'];
@@ -62,7 +67,7 @@ export const tests = [
 Use a regular expression for a pattern with a clear pass or fail condition. This rule selects HTTP binding URLs from protobuf files and requires versioned lowercase plural paths, such as `/v1/invoices`.
 
 ```ts
-import { Rule, regex, scopes } from 'rulekeeper';
+import { Rule, regex, scopes } from '@alex-dbs/rulekeeper';
 
 export default class PublicApiPaths extends Rule {
   files = ['api/**/*.proto'];
@@ -81,8 +86,8 @@ Add inline tests for paths that match and do not match the pattern.
 Use an AI rule when a policy needs meaning or context that a fixed pattern cannot capture. This rule sends one selected function to the AI decision API, Jev from [Typesafe](https://typesafe.ai/).
 
 ```ts
-import { Rule, ai, scopes } from 'rulekeeper';
-import type { ScopeSubject } from 'rulekeeper';
+import { Rule, ai, scopes } from '@alex-dbs/rulekeeper';
+import type { ScopeSubject } from '@alex-dbs/rulekeeper';
 
 export default class SafeResponseHeaders extends Rule {
   files = ['src/**/*.js'];
@@ -105,12 +110,12 @@ AI rules require a configured service and can incur charges.
 > [!TIP]
 > Keep the selected scope as small as the rule allows. A smaller input can reduce token costs and help the model focus on relevant code. Include enough context for the policy to make a sound decision.
 
-Run validation, tests, and the rule against a project from the checkout:
+Run validation, tests, and the rule against your project (use `npx rulekeeper` for a project-local installation):
 
 ```sh
-npm start -- validate .rulekeeper/no-any.rule.ts
-npm start -- test .rulekeeper/no-any.rule.ts
-npm start -- check . --rules .rulekeeper/no-any.rule.ts
+rulekeeper validate .rulekeeper/no-any.rule.ts
+rulekeeper test .rulekeeper/no-any.rule.ts
+rulekeeper check . --rules .rulekeeper/no-any.rule.ts
 ```
 
 ## Rule pipeline
@@ -181,11 +186,41 @@ Before you contribute, install dependencies and run the project checks from the 
 
 ```sh
 npm ci
-npm run typecheck
 npm test
+npm run typecheck
 ```
 
 Add or update tests for changes to rule behavior. The [rule-writing skill](skills/rulekeeper-new-rule/SKILL.md) explains how to create rules, add inline tests, and inspect rule behavior.
+
+### Publishing to npm
+
+CI runs typechecking and the complete test suite, including installing and exercising the packed CLI, on branch pushes and pull requests. Pushing a `v*` tag runs the same checks before publishing to npm. The tag must match `package.json` exactly, for example `v0.1.0` for version `0.1.0`. Stable versions use npm's `latest` tag; prereleases use `next`.
+
+One-time setup:
+
+1. Own the `alex-dbs` account or organization scope on npm. npm scope ownership is separate from the GitHub account `alex-dbs`.
+2. Publish the first version from a checked-out, tested release:
+
+   ```sh
+   npm login
+   npm ci
+   npm version 0.1.0 --no-git-tag-version
+   npm test
+   npm run typecheck
+   npm publish --access public
+   ```
+
+   Commit the updated `package.json` and `package-lock.json`. The first manual publish creates the package so its trusted publisher can be configured.
+3. In the npm package settings, add a [GitHub Actions trusted publisher](https://docs.npmjs.com/trusted-publishers/) for owner `alex-dbs`, repository `rulekeeper`, workflow filename `publish.yml`, with no environment name. Allow direct `npm publish`. The workflow uses OIDC; no `NPM_TOKEN` secret is needed.
+
+For subsequent releases, start from a clean checkout with the version changes on your release branch:
+
+```sh
+npm version patch
+git push --follow-tags
+```
+
+If the GitHub repository is renamed or transferred, update both `repository.url` in `package.json` and the npm trusted publisher configuration.
 
 ## License
 

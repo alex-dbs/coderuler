@@ -10,7 +10,7 @@ import {
   type SelectionContext,
   type SourceFile,
   type Subject,
-} from 'rulekeeper';
+} from '@alex-dbs/rulekeeper';
 
 import { isMapping } from './policy-helpers.ts';
 

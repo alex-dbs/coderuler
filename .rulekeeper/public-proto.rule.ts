@@ -1,4 +1,4 @@
-import { Rule, regex, scopes, test } from 'rulekeeper';
+import { Rule, regex, scopes, test } from '@alex-dbs/rulekeeper';
 
 export default class PublicProto extends Rule {
   files = ['tests/manual/proto/public/*.proto'];

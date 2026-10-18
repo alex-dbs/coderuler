@@ -1,4 +1,4 @@
-import { Rule, pass, violation, scopes, type CheckResult, type CsvRow, type Subject } from 'rulekeeper';
+import { Rule, pass, violation, scopes, type CheckResult, type CsvRow, type Subject } from '@alex-dbs/rulekeeper';
 
 import { isRow } from './policy-helpers.ts';
 

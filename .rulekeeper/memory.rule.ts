@@ -1,6 +1,6 @@
 import BigNumber from 'bignumber.js';
 
-import { Rule, pass, scopes, test, violation, type CheckResult, type ScopeSubject, type Subject } from 'rulekeeper';
+import { Rule, pass, scopes, test, violation, type CheckResult, type ScopeSubject, type Subject } from '@alex-dbs/rulekeeper';
 
 import { isPresent } from './presence.ts';
 

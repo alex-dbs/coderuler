@@ -1,4 +1,4 @@
-import { Rule, scopes, test, violation } from 'rulekeeper';
+import { Rule, scopes, test, violation } from '@alex-dbs/rulekeeper';
 
 export default class TsNoAny extends Rule {
   files = ['**/*.{ts,tsx,mts,cts}'];

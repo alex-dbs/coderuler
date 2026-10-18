@@ -1,4 +1,4 @@
-import { Rule, scopes, test, violation } from 'rulekeeper';
+import { Rule, scopes, test, violation } from '@alex-dbs/rulekeeper';
 
 const asObject = {
   kind: 'as_expression',

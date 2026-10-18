@@ -11,7 +11,7 @@ import { createSandbox, runCli, startDecisionFixture, writeFile, type Sandbox } 
 const sandbox = createSandbox('rulekeeper-testing-');
 after(() => sandbox.cleanup());
 
-const TEXT_RULE = `import { Rule, pass, test, violation } from 'rulekeeper';
+const TEXT_RULE = `import { Rule, pass, test, violation } from '@alex-dbs/rulekeeper';
 export default class Text extends Rule {
   files = ['inputs/*.txt'];
   check = subject => subject.source.includes('BAD') ? violation('bad input') : pass();
@@ -24,7 +24,7 @@ function writeRule(target: Sandbox, name: string, cases: string): string {
 
 test('test runs fluent cases through selection, filtering and grouping with isolated state and files', async () => {
   const target = sandbox.isolated('pipeline');
-  writeFile(join(target.cwd, '.rulekeeper/budget.rule.ts'), `import { Rule, scopes, pass, test, violation } from 'rulekeeper';
+  writeFile(join(target.cwd, '.rulekeeper/budget.rule.ts'), `import { Rule, scopes, pass, test, violation } from '@alex-dbs/rulekeeper';
 export default class Budget extends Rule {
   files = ['budgets/*.yml'];
   scope = scopes.yaml({ path: '$.budget' });
@@ -145,7 +145,7 @@ test('test removes temporary projects when rule execution fails and identifies t
   const target = sandbox.isolated('runtime-error');
   const marker = join(target.root, 'temporary-root.txt');
   writeFile(join(target.cwd, '.rulekeeper/throwing.rule.ts'), `import { writeFileSync } from 'node:fs';
-import { Rule, pass, test } from 'rulekeeper';
+import { Rule, pass, test } from '@alex-dbs/rulekeeper';
 export default class Throwing extends Rule {
   files = ['inputs/*.txt'];
   when({ project }) {
@@ -177,7 +177,7 @@ test('test never contacts an AI provider, even when credentials and an endpoint 
   const target = sandbox.isolated('offline');
   const fixture = await startDecisionFixture();
   t.after(() => fixture.close());
-  writeFile(join(target.cwd, '.rulekeeper/offline.rule.ts'), `import { Rule, ai, test } from 'rulekeeper';
+  writeFile(join(target.cwd, '.rulekeeper/offline.rule.ts'), `import { Rule, ai, test } from '@alex-dbs/rulekeeper';
 export default class Offline extends Rule {
   files = ['inputs/*.txt'];
   check = ai({ rule: 'The input must be good.' });
@@ -193,7 +193,7 @@ test('test runs ordinary cases by default without executing opt-in AI cases', as
   const target = sandbox.isolated('ai-opt-in');
   const fixture = await startDecisionFixture();
   t.after(() => fixture.close());
-  writeFile(join(target.cwd, '.rulekeeper/mixed.rule.ts'), `import { Rule, pass, test } from 'rulekeeper';
+  writeFile(join(target.cwd, '.rulekeeper/mixed.rule.ts'), `import { Rule, pass, test } from '@alex-dbs/rulekeeper';
 export default class Mixed extends Rule {
   files = ['inputs/*.txt'];
   check = (subject, context) => subject.source === 'LOCAL' ? pass() : context.ai({ rule: 'The input must be good.' });
@@ -212,7 +212,7 @@ test('test explains how to enable an explicitly selected AI-only rule', async t 
   const target = sandbox.isolated('ai-only');
   const fixture = await startDecisionFixture();
   t.after(() => fixture.close());
-  const path = writeFile(join(target.cwd, '.rulekeeper/live.rule.ts'), `import { Rule, ai, test } from 'rulekeeper';
+  const path = writeFile(join(target.cwd, '.rulekeeper/live.rule.ts'), `import { Rule, ai, test } from '@alex-dbs/rulekeeper';
 export default class Live extends Rule {
   files = ['inputs/*.txt'];
   check = ai({ rule: 'The input must be good.' });
@@ -230,7 +230,7 @@ test('test --ai compares HTTP decisions with expectations and preserves mixed ca
   const fixture = await startDecisionFixture();
   t.after(() => fixture.close());
   fixture.answer = (_request, index) => ({ probability: index === 0 ? 0.9 : 0.1 });
-  const path = writeFile(join(target.cwd, '.rulekeeper/mixed.rule.ts'), `import { Rule, pass, test } from 'rulekeeper';
+  const path = writeFile(join(target.cwd, '.rulekeeper/mixed.rule.ts'), `import { Rule, pass, test } from '@alex-dbs/rulekeeper';
 export default class Mixed extends Rule {
   files = ['inputs/*.txt'];
   check = (subject, context) => subject.source === 'LOCAL' ? pass() : context.ai({ rule: 'The input must be good.' });
@@ -269,7 +269,7 @@ test('test --ai never authorizes ordinary cases after a live case used the same 
   const target = sandbox.isolated('ai-permission');
   const fixture = await startDecisionFixture();
   t.after(() => fixture.close());
-  const rule = `import { Rule, ai, test } from 'rulekeeper';
+  const rule = `import { Rule, ai, test } from '@alex-dbs/rulekeeper';
 export default class Live extends Rule {
   files = ['inputs/*.txt'];
   check = ai({ rule: 'The input must be good.' });

@@ -1,8 +1,8 @@
 import { basename } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
-import { Rule, pass, scopes, test, violation } from 'rulekeeper';
-import type { CheckResult, GroupSubject, JsonValue, ScopeSubject, Subject } from 'rulekeeper';
+import { Rule, pass, scopes, test, violation } from '@alex-dbs/rulekeeper';
+import type { CheckResult, GroupSubject, JsonValue, ScopeSubject, Subject } from '@alex-dbs/rulekeeper';
 
 import { isPresent } from './presence.ts';
 

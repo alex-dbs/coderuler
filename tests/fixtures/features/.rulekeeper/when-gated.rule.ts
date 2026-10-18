@@ -9,7 +9,7 @@ import {
   type ProjectContext,
   type ScopeSubject,
   type Subject,
-} from 'rulekeeper';
+} from '@alex-dbs/rulekeeper';
 
 const BUSINESS = /:Business/;
 

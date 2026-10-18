@@ -114,28 +114,28 @@ function indentedJsonPayloads(output: string): readonly unknown[] {
   return payloads;
 }
 
-const PASS_RULE = `import { Rule, pass } from 'rulekeeper';
+const PASS_RULE = `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class Pass extends Rule {
   files = ['src/**/*.txt'];
   check = pass;
 }
 `;
 
-const SCAN_RULE = `import { Rule, pass } from 'rulekeeper';
+const SCAN_RULE = `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class Scan extends Rule {
   files = ['**/*'];
   check = pass;
 }
 `;
 
-const AI_WHOLE_FILE = `import { Rule, ai } from 'rulekeeper';
+const AI_WHOLE_FILE = `import { Rule, ai } from '@alex-dbs/rulekeeper';
 export default class Basic extends Rule {
   files = ['src/**/*.txt'];
   check = ai({ rule: 'Files must be tidy.', violationMessage: 'Not tidy' });
 }
 `;
 
-const JSON_VALUES = `import { Rule, ai, scopes } from 'rulekeeper';
+const JSON_VALUES = `import { Rule, ai, scopes } from '@alex-dbs/rulekeeper';
 export default class Values extends Rule {
   files = ['data/*.json'];
   scope = scopes.json({ path: '$.value' });
@@ -143,7 +143,7 @@ export default class Values extends Rule {
 }
 `;
 
-const GROUPED_FOLDERS = `import { Rule, ai } from 'rulekeeper';
+const GROUPED_FOLDERS = `import { Rule, ai } from '@alex-dbs/rulekeeper';
 export default class Grouped extends Rule {
   files = ['config/**/*.yml'];
   group = 'folder';
@@ -151,7 +151,7 @@ export default class Grouped extends Rule {
 }
 `;
 
-const INPUT_OVERRIDE = `import { Rule, ai } from 'rulekeeper';
+const INPUT_OVERRIDE = `import { Rule, ai } from '@alex-dbs/rulekeeper';
 export default class Input extends Rule {
   files = ['src/**/*.txt'];
   check = ai({
@@ -161,7 +161,7 @@ export default class Input extends Rule {
 }
 `;
 
-const EXAMPLES_RULE = `import { Rule, ai } from 'rulekeeper';
+const EXAMPLES_RULE = `import { Rule, ai } from '@alex-dbs/rulekeeper';
 export default class Examples extends Rule {
   files = ['src/**/*.txt'];
   settings = { threshold: 0.9, model: 'rule-model' };
@@ -173,7 +173,7 @@ export default class Examples extends Rule {
 }
 `;
 
-const GATE_DIRECTORY = `import { Rule, ai, scopes } from 'rulekeeper';
+const GATE_DIRECTORY = `import { Rule, ai, scopes } from '@alex-dbs/rulekeeper';
 export default class Infra extends Rule {
   files = ['internal/infra/**/*.go'];
   scope = scopes.astGrep({ language: 'go', rule: { any: [{ kind: 'function_declaration' }, { kind: 'method_declaration' }] } });
@@ -184,7 +184,7 @@ export default class Infra extends Rule {
 }
 `;
 
-const GATE_REASON = `import { Rule, pass } from 'rulekeeper';
+const GATE_REASON = `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class Reasoned extends Rule {
   files = ['src/**/*.txt'];
   async when() {
@@ -194,7 +194,7 @@ export default class Reasoned extends Rule {
 }
 `;
 
-const GATE_THROW = `import { Rule, pass } from 'rulekeeper';
+const GATE_THROW = `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class GateThrow extends Rule {
   files = ['src/**/*.txt'];
   async when() {
@@ -204,7 +204,7 @@ export default class GateThrow extends Rule {
 }
 `;
 
-const CUSTOM_SELECT = `import { Rule, pass, violation } from 'rulekeeper';
+const CUSTOM_SELECT = `import { Rule, pass, violation } from '@alex-dbs/rulekeeper';
 export default class CustomSelect extends Rule {
   files = ['src/**/*.txt'];
   async select(context) {
@@ -221,7 +221,7 @@ export default class CustomSelect extends Rule {
 }
 `;
 
-const CUSTOM_READS = `import { Rule, pass, violation } from 'rulekeeper';
+const CUSTOM_READS = `import { Rule, pass, violation } from '@alex-dbs/rulekeeper';
 export default class Reads extends Rule {
   files = ['src/**/*.txt'];
   check = async (subject, context) => {
@@ -236,7 +236,7 @@ export default class Reads extends Rule {
 }
 `;
 
-const CUSTOM_OUTSIDE = `import { Rule, pass } from 'rulekeeper';
+const CUSTOM_OUTSIDE = `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class Outside extends Rule {
   files = ['src/**/*.txt'];
   async select() {
@@ -246,7 +246,7 @@ export default class Outside extends Rule {
 }
 `;
 
-const CUSTOM_DUPLICATE = `import { Rule, pass } from 'rulekeeper';
+const CUSTOM_DUPLICATE = `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class Duplicates extends Rule {
   files = ['src/**/*.txt'];
   async select() {
@@ -259,7 +259,7 @@ export default class Duplicates extends Rule {
 }
 `;
 
-const THROWING_CHECK = `import { Rule } from 'rulekeeper';
+const THROWING_CHECK = `import { Rule } from '@alex-dbs/rulekeeper';
 export default class Boom extends Rule {
   files = ['src/**/*.txt'];
   check = async () => {
@@ -268,14 +268,14 @@ export default class Boom extends Rule {
 }
 `;
 
-const NO_MATCH = `import { Rule, pass } from 'rulekeeper';
+const NO_MATCH = `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class NoMatch extends Rule {
   files = ['missing/**/*.txt'];
   check = pass;
 }
 `;
 
-const DISABLED = `import { Rule, violation } from 'rulekeeper';
+const DISABLED = `import { Rule, violation } from '@alex-dbs/rulekeeper';
 export default class Off extends Rule {
   enabled = false;
   files = ['src/**/*.txt'];
@@ -283,7 +283,7 @@ export default class Off extends Rule {
 }
 `;
 
-const MJS_RULE = `import { Rule, regex } from 'rulekeeper';
+const MJS_RULE = `import { Rule, regex } from '@alex-dbs/rulekeeper';
 export default class Mjs extends Rule {
   files = ['src/**/*.txt'];
   check = regex({ pattern: /MARKER-OK/, violationMessage: 'mjs missing marker' });
@@ -302,7 +302,7 @@ func (s Store) Save() {}
 const LONG_SOURCE = `${Array.from({ length: 20 }, (_value, index) => `line-${String(index + 1).padStart(4, '0')}`).join('\n')}\n`;
 
 function markerRule(message: string): string {
-  return `import { Rule, regex } from 'rulekeeper';
+  return `import { Rule, regex } from '@alex-dbs/rulekeeper';
 export default class Marker extends Rule {
   files = ['src/**/*.txt'];
   check = regex({ pattern: /MARKER-OK/g, violationMessage: ${JSON.stringify(message)} });
@@ -310,7 +310,7 @@ export default class Marker extends Rule {
 `;
 }
 
-const MARKER_ANY_TXT_RULE = `import { Rule, regex } from 'rulekeeper';
+const MARKER_ANY_TXT_RULE = `import { Rule, regex } from '@alex-dbs/rulekeeper';
 export default class MarkerAnyTxt extends Rule {
   files = ['**/*.txt'];
   check = regex({ pattern: /MARKER-OK/g, violationMessage: 'Missing marker' });
@@ -318,7 +318,7 @@ export default class MarkerAnyTxt extends Rule {
 `;
 
 function longRule(): string {
-  return `import { Rule, regex } from 'rulekeeper';
+  return `import { Rule, regex } from '@alex-dbs/rulekeeper';
 export default class Long extends Rule {
   files = ['long/*.txt'];
   check = regex({ pattern: /MARKER-OK/g, violationMessage: 'no marker' });
@@ -327,7 +327,7 @@ export default class Long extends Rule {
 }
 
 function manyRule(): string {
-  return `import { Rule, regex } from 'rulekeeper';
+  return `import { Rule, regex } from '@alex-dbs/rulekeeper';
 export default class Many extends Rule {
   files = ['many/*.txt'];
   check = regex({ pattern: /MARKER-OK/g, violationMessage: 'no marker' });
@@ -335,7 +335,7 @@ export default class Many extends Rule {
 `;
 }
 
-const JSON_MISSING = `import { Rule, ai, scopes } from 'rulekeeper';
+const JSON_MISSING = `import { Rule, ai, scopes } from '@alex-dbs/rulekeeper';
 export default class Missing extends Rule {
   files = ['data/*.json'];
   scope = scopes.json({ path: '$.missing' });
@@ -343,7 +343,7 @@ export default class Missing extends Rule {
 }
 `;
 
-const ESC_THROW = `import { Rule } from 'rulekeeper';
+const ESC_THROW = `import { Rule } from '@alex-dbs/rulekeeper';
 export default class EscThrow extends Rule {
   files = ['src/**/*.txt'];
   check = async () => {
@@ -352,7 +352,7 @@ export default class EscThrow extends Rule {
 }
 `;
 
-const ESC_TRACE = `import { Rule, pass } from 'rulekeeper';
+const ESC_TRACE = `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class EscTrace extends Rule {
   files = ['src/**/*.txt'];
   check = (subject, context) => {
@@ -367,7 +367,7 @@ test('validate loads rules without running gates or checks', async () => {
   writeRule(
     target,
     'boom-check',
-    `import { Rule } from 'rulekeeper';
+    `import { Rule } from '@alex-dbs/rulekeeper';
 export default class BoomCheck extends Rule {
   files = ['src/**/*.txt'];
   check = async () => {
@@ -410,7 +410,7 @@ test('validate reports malformed modules and invalid disabled rules', async () =
   writeRule(
     malformedTarget,
     'broken',
-    `import { Rule, pass } from 'rulekeeper';
+    `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class Broken extends Rule {
   enabled = 'yes';
   check = pass;
@@ -425,7 +425,7 @@ export default class Broken extends Rule {
   writeRule(
     disabledTarget,
     'disabled-broken',
-    `import { Rule, pass } from 'rulekeeper';
+    `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class DisabledBroken extends Rule {
   enabled = false;
   settings = { threshold: 7 };
@@ -503,7 +503,7 @@ test('check JSONL preserves complete ordered reports and machine exit statuses',
 test('check JSON and JSONL preserve whitespace keyed scope locations', async () => {
   const target = sandbox.isolated('check-whitespace-scope-location');
   writeFiles(target, { 'data/record.json': '{\n  "id": " ",\n  "value": "bad"\n}\n' });
-  writeRule(target, 'keyed', `import { Rule, regex, scopes } from 'rulekeeper';
+  writeRule(target, 'keyed', `import { Rule, regex, scopes } from '@alex-dbs/rulekeeper';
 export default class Keyed extends Rule {
   files = ['data/*.json'];
   scope = scopes.json({ key: '$.id' });
@@ -658,7 +658,7 @@ test('check escapes control characters in violation messages', async () => {
   writeRule(
     target,
     'controls',
-    `import { Rule, violation } from 'rulekeeper';
+    `import { Rule, violation } from '@alex-dbs/rulekeeper';
 export default class Controls extends Rule {
   files = ['src/**/*.txt'];
   check = () => violation('plain\\u001b[31mred\\u0007 bell');
@@ -679,7 +679,7 @@ test('check validates every rule module before running any gate', async () => {
   writeRule(
     target,
     'zzz-invalid',
-    `import { Rule, pass } from 'rulekeeper';
+    `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class Invalid extends Rule {
   settings = { threshold: 4 };
   check = pass;
@@ -1491,7 +1491,7 @@ test('inspect separates rule stages and nests source and complete JSON exchanges
 test('inspect groups each scoped HTTP evaluation with one metadata header and faithful payloads', async () => {
   const target = sandbox.isolated('inspect-scoped-cards');
   writeFiles(target, { 'src/slice.go': 'package main\n\nfunc Alpha() {}\n\nfunc Beta() {}\n' });
-  writeRule(target, 'functions', `import { Rule, ai, scopes } from 'rulekeeper';
+  writeRule(target, 'functions', `import { Rule, ai, scopes } from '@alex-dbs/rulekeeper';
 export default class Functions extends Rule {
   files = ['src/*.go'];
   scope = scopes.astGrep({ language: 'go', rule: { kind: 'function_declaration' } });
@@ -1727,7 +1727,7 @@ test('archived directories are never discovered, selected or scanned', async () 
   writeFiles(target, {
     'src/a.txt': 'alpha',
     'old/src/legacy.txt': 'legacy',
-    'old/bad.rule.ts': `import { Rule, pass } from 'rulekeeper';
+    'old/bad.rule.ts': `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class Bad extends Rule {
   enabled = 'nope';
   check = pass;
@@ -1753,7 +1753,7 @@ test('rule modules must default-export a branded class and keep unique names', a
   writeRule(
     instanceTarget,
     'instance',
-    `import { Rule, pass } from 'rulekeeper';
+    `import { Rule, pass } from '@alex-dbs/rulekeeper';
 class Instance extends Rule {
   files = ['src/**/*.txt'];
   check = pass;
@@ -1931,21 +1931,21 @@ test('check debug output escapes trace metadata keys without dumping bodies', as
   );
 });
 
-const AI_ALPHA = `import { Rule, ai } from 'rulekeeper';
+const AI_ALPHA = `import { Rule, ai } from '@alex-dbs/rulekeeper';
 export default class Alpha extends Rule {
   files = ['src/**/*.txt'];
   check = ai({ rule: 'Alpha must hold.' });
 }
 `;
 
-const AI_BETA = `import { Rule, ai } from 'rulekeeper';
+const AI_BETA = `import { Rule, ai } from '@alex-dbs/rulekeeper';
 export default class Beta extends Rule {
   files = ['src/**/*.txt'];
   check = ai({ rule: 'Beta must hold.' });
 }
 `;
 
-const TRACE_LEAK = `import { Rule, pass } from 'rulekeeper';
+const TRACE_LEAK = `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class TraceLeak extends Rule {
   files = ['src/**/*.txt'];
   check = (subject, context) => {
@@ -1955,7 +1955,7 @@ export default class TraceLeak extends Rule {
 }
 `;
 
-const GROUPED_PROJECT = `import { Rule, violation } from 'rulekeeper';
+const GROUPED_PROJECT = `import { Rule, violation } from '@alex-dbs/rulekeeper';
 export default class GroupedProject extends Rule {
   files = ['src/**/*.txt'];
   group = 'project';
@@ -2099,7 +2099,7 @@ test('check bounds grouped members and excerpts with a truncation notice', async
   assert.match(human.stdout, /--json/, human.stdout);
 });
 
-const SHORT_KEY_LEAK = `import { Rule } from 'rulekeeper';
+const SHORT_KEY_LEAK = `import { Rule } from '@alex-dbs/rulekeeper';
 export default class LeakyError extends Rule {
   files = ['src/**/*.txt'];
   check = () => {

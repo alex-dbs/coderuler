@@ -10,7 +10,7 @@ import { CLI, createSandbox, runCli, startDecisionFixture, writeFile } from './s
 const sandbox = createSandbox('rulekeeper-test-output-');
 after(() => sandbox.cleanup());
 
-const RULE = `import { Rule, pass, test, violation } from 'rulekeeper';
+const RULE = `import { Rule, pass, test, violation } from '@alex-dbs/rulekeeper';
 export default class Example extends Rule {
   files = ['inputs/*.txt'];
   check = async subject => {
@@ -239,7 +239,7 @@ export const tests = [
 
 test('test --failures-only displays timeouts as failures and continues counting later passes', { timeout: 15_000 }, async context => {
   const target = sandbox.isolated('failures-only-timeout');
-  writeFile(join(target.cwd, '.rulekeeper/deadline.rule.ts'), `import { Rule, pass, test } from 'rulekeeper';
+  writeFile(join(target.cwd, '.rulekeeper/deadline.rule.ts'), `import { Rule, pass, test } from '@alex-dbs/rulekeeper';
 export default class Deadline extends Rule {
   files = ['inputs/*.txt'];
   check = subject => {
@@ -271,7 +271,7 @@ test('test --failures-only keeps AI authorization and provider decisions unchang
   const fixture = await startDecisionFixture();
   context.after(() => fixture.close());
   fixture.answer = (_request, index) => ({ probability: index === 0 ? 0.1 : 0.9 });
-  const path = writeFile(join(target.cwd, '.rulekeeper/mixed.rule.ts'), `import { Rule, pass, test } from 'rulekeeper';
+  const path = writeFile(join(target.cwd, '.rulekeeper/mixed.rule.ts'), `import { Rule, pass, test } from '@alex-dbs/rulekeeper';
 export default class Mixed extends Rule {
   files = ['inputs/*.txt'];
   check = (subject, context) => subject.source === 'LOCAL' ? pass() : context.ai({ rule: 'The input must be good.' });

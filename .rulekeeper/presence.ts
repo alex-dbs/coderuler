@@ -1,4 +1,4 @@
-import type { JsonValue } from 'rulekeeper';
+import type { JsonValue } from '@alex-dbs/rulekeeper';
 
 export function isObject(value: JsonValue | undefined): value is { readonly [key: string]: JsonValue } {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

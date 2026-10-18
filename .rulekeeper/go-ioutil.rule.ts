@@ -1,4 +1,4 @@
-import { Rule, scopes, test, violation, type ProjectContext, type ScopeSubject } from 'rulekeeper';
+import { Rule, scopes, test, violation, type ProjectContext, type ScopeSubject } from '@alex-dbs/rulekeeper';
 import { goVersionAtLeast } from './go-version.ts';
 
 export default class GoIoutil extends Rule {

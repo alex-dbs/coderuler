@@ -1,5 +1,5 @@
-import { Rule, ai, scopes, test } from 'rulekeeper';
-import type { ScopeSubject } from 'rulekeeper';
+import { Rule, ai, scopes, test } from '@alex-dbs/rulekeeper';
+import type { ScopeSubject } from '@alex-dbs/rulekeeper';
 
 export default class HttpResponseSplitting extends Rule {
   enabled = false;

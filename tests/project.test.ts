@@ -901,7 +901,7 @@ test('CLI custom selection rejects a casefold alias into the archived tree', asy
   }
   writeSandboxFile(join(target.cwd, 'old/legacy.txt'), 'legacy');
   for (const filepath of ['old/legacy.txt', 'OLD/legacy.txt']) {
-    writeSandboxFile(join(target.cwd, '.rulekeeper/custom.rule.ts'), `import { Rule, pass } from 'rulekeeper';
+    writeSandboxFile(join(target.cwd, '.rulekeeper/custom.rule.ts'), `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class Custom extends Rule {
   select = () => [{ kind: 'scope' as const, filepath: '${filepath}', id: '$', source: 'legacy' }];
   check = pass;
@@ -920,7 +920,7 @@ test('CLI custom selection accepts a casefold alias into an actual uppercase eli
     return;
   }
   writeSandboxFile(join(target.cwd, 'OLD/file.txt'), 'eligible');
-  writeSandboxFile(join(target.cwd, '.rulekeeper/custom.rule.ts'), `import { Rule, pass } from 'rulekeeper';
+  writeSandboxFile(join(target.cwd, '.rulekeeper/custom.rule.ts'), `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class Custom extends Rule {
   select = () => [{ kind: 'scope' as const, filepath: 'old/file.txt', id: '$', source: 'eligible' }];
   check = pass;

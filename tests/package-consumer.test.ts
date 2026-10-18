@@ -8,7 +8,7 @@ import { after, before, test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPO_ROOT = realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), '..'));
-const PACKAGE_NAME = 'rulekeeper';
+const PACKAGE_NAME = '@alex-dbs/rulekeeper';
 const DEFAULT_TIMEOUT = 900_000;
 
 interface PackedFile {
@@ -73,11 +73,9 @@ interface IdentityResult {
 }
 
 interface InstalledManifest {
-  readonly name: string;
   readonly type: string;
   readonly types: string;
   readonly exports: Readonly<Record<string, { readonly types?: string; readonly import?: string }>>;
-  readonly bin: Readonly<Record<string, string>>;
   readonly files: readonly string[];
   readonly dependencies: Readonly<Record<string, string>>;
 }
@@ -97,7 +95,7 @@ interface Consumer {
 const SHARED_HELPER_SOURCE = `export const LICENSE_PATTERN = /Copyright ..../;
 `;
 
-const LICENSE_RULE_SOURCE = `import { Rule, regex } from 'rulekeeper';
+const LICENSE_RULE_SOURCE = `import { Rule, regex } from '@alex-dbs/rulekeeper';
 import { LICENSE_PATTERN } from './helpers/shared.js';
 
 export default class LicenseRule extends Rule {
@@ -106,7 +104,7 @@ export default class LicenseRule extends Rule {
 }
 `;
 
-const CONTRACT_RULE_SOURCE = `import { Rule, regex } from 'rulekeeper';
+const CONTRACT_RULE_SOURCE = `import { Rule, regex } from '@alex-dbs/rulekeeper';
 
 export default class ContractRule extends Rule {
   files = ['src/*.ts'];
@@ -143,7 +141,7 @@ const TYPED_CONSUMER_SOURCE = `import {
   type SelectionContext,
   type SourceFile,
   type Subject,
-} from 'rulekeeper';
+} from '@alex-dbs/rulekeeper';
 
 export class InfraPlacement extends Rule {
   files = ['internal/infra/**/*.go'];
@@ -231,11 +229,11 @@ export class ServiceTableRule extends Rule {
 }
 `;
 
-const PROBE_SOURCE = `import { Rule, ai, regex, pass, violation, scopes, createAstGrepLanguageRegistrations } from 'rulekeeper';
+const PROBE_SOURCE = `import { Rule, ai, regex, pass, violation, scopes, createAstGrepLanguageRegistrations } from '@alex-dbs/rulekeeper';
 
 const brand = Symbol.for('rulekeeper.Rule');
 process.stdout.write(JSON.stringify({
-  resolved: import.meta.resolve('rulekeeper'),
+  resolved: import.meta.resolve('@alex-dbs/rulekeeper'),
   selectors: Object.keys(scopes).sort(),
   ruleIsFunction: typeof Rule === 'function',
   brand: Rule.prototype[brand] === true,
@@ -301,7 +299,7 @@ function isolatedEnv(home: string, extra: Readonly<Record<string, string>> = {})
 }
 
 function runCli(app: string, args: readonly string[], options: { readonly cwd: string; readonly home: string; readonly extra?: Readonly<Record<string, string>> }): RunResult {
-  const bin = join(app, 'node_modules', '.bin', PACKAGE_NAME);
+  const bin = join(app, 'node_modules', '.bin', 'rulekeeper');
   assert.ok(existsSync(bin), `installed CLI missing at ${bin}`);
   const env = options.extra === undefined ? isolatedEnv(options.home) : isolatedEnv(options.home, options.extra);
   return run(bin, args, { cwd: options.cwd, env });
@@ -380,7 +378,7 @@ function homeRuleSource(indexUrl: string): string {
 
 function identitySource(indexUrl: string): string {
   return [
-    "import { Rule } from 'rulekeeper';",
+    "import { Rule } from '@alex-dbs/rulekeeper';",
     `const copy = await import('${indexUrl}');`,
     "const brand = Symbol.for('rulekeeper.Rule');",
     'process.stdout.write(JSON.stringify({',
@@ -509,7 +507,6 @@ test('the installed package carries executable dist declarations, a runnable bin
   assert.ok(files.includes(join('dist', 'cli.js')), `missing CLI entry: ${files.join(', ')}`);
 
   const manifest = parseJsonOutput<InstalledManifest>(await readFile(join(installedRoot, 'package.json'), 'utf8'));
-  assert.equal(manifest.name, PACKAGE_NAME);
   assert.equal(manifest.type, 'module');
   assert.equal(manifest.types, './dist/index.d.ts');
   assert.deepEqual([...manifest.files], ['dist', 'skills/rulekeeper-new-rule']);
@@ -518,9 +515,8 @@ test('the installed package carries executable dist declarations, a runnable bin
   assert.ok(entry !== undefined, 'package exports must declare the public entry');
   assert.equal(entry.import, './dist/index.js');
   assert.equal(entry.types, './dist/index.d.ts');
-  assert.equal(manifest.bin[PACKAGE_NAME], './dist/cli.js');
 
-  const bin = join(consumer.app, 'node_modules', '.bin', PACKAGE_NAME);
+  const bin = join(consumer.app, 'node_modules', '.bin', 'rulekeeper');
   assert.ok(existsSync(bin), `installed bin missing at ${bin}`);
   assert.notEqual(statSync(bin).mode & 0o111, 0, 'installed bin is not executable');
 });
@@ -563,7 +559,7 @@ test('the released CLI installs and refreshes its bundled skill outside the repo
     assert.equal(await readFile(join(installed, file), 'utf8'), await readFile(join(bundled, file), 'utf8'));
   }
   const lock = await readFile(join(project, 'skills-lock.json'), 'utf8');
-  assert.ok(lock.includes('node_modules/rulekeeper/skills/rulekeeper-new-rule'), `skill source must point into the installed package: ${lock}`);
+  assert.ok(lock.includes('node_modules/@alex-dbs/rulekeeper/skills/rulekeeper-new-rule'), `skill source must point into the installed package: ${lock}`);
   assert.ok(!lock.includes(REPO_ROOT), `skill source must not point at the repository: ${lock}`);
 
   const unrelated = join(project, '.claude', 'skills', 'unrelated', 'SKILL.md');

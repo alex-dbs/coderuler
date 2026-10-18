@@ -42,20 +42,20 @@ function project(label: string, rule: string, source = 'Unicode α 日本語\nse
   return target;
 }
 
-const MIXED_RULE = `import { Rule, pass, violation } from 'rulekeeper';
+const MIXED_RULE = `import { Rule, pass, violation } from '@alex-dbs/rulekeeper';
 export default class Example extends Rule {
   files = ['src/*.txt'];
   check = subject => subject.source.includes('BAD') ? violation('Rejected source') : pass();
 }
 `;
-const AI_RULE = `import { Rule, ai } from 'rulekeeper';
+const AI_RULE = `import { Rule, ai } from '@alex-dbs/rulekeeper';
 export default class Example extends Rule {
   files = ['src/*.txt'];
   settings = { threshold: 0.8 };
   check = ai({ rule: 'All text must be tidy.' });
 }
 `;
-const DISABLED_RULE = `import { Rule, pass } from 'rulekeeper';
+const DISABLED_RULE = `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class Example extends Rule {
   enabled = false;
   files = ['src/*.txt'];
@@ -285,7 +285,7 @@ test('inspect machine formats retain valid diagnostics on a refused local connec
 test('inspect rejects every pair of formats before selector resolution, loading, hooks or HTTP', async () => {
   const backend = await fixture();
   const target = project('conflicts', `import { writeFileSync } from 'node:fs';
-import { Rule, ai } from 'rulekeeper';
+import { Rule, ai } from '@alex-dbs/rulekeeper';
 writeFileSync('loaded-marker', 'loaded');
 export default class Example extends Rule {
   files = ['src/*.txt'];
@@ -374,7 +374,7 @@ test('inspect diagnostics redact credentials while check machine reports remain 
     assert.equal(all.status, 0, all.stderr);
     assert.ok(all.stdout.includes(JSON.stringify(secret).slice(1, -1)), all.stdout);
   }
-  writeFile(join(target.cwd, '.rulekeeper/example.rule.ts'), `import { Rule } from 'rulekeeper';
+  writeFile(join(target.cwd, '.rulekeeper/example.rule.ts'), `import { Rule } from '@alex-dbs/rulekeeper';
 export default class Example extends Rule {
   files = ['src/*.txt'];
   check = () => { throw new Error('check exploded ' + process.env.TYPESAFE_API_KEY); };
@@ -454,7 +454,7 @@ test('inspect recaps multiple actual calls and earlier verifications after a lat
   const backend = await fixture();
   let calls = 0;
   backend.answer = () => ++calls === 3 ? { status: 503, body: 'stopped' } : {};
-  const target = project('multi-partial', `import { Rule, pass } from 'rulekeeper';
+  const target = project('multi-partial', `import { Rule, pass } from '@alex-dbs/rulekeeper';
 export default class Example extends Rule {
   files = ['src/*.txt'];
   async check(subject, context) {
