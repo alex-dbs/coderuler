@@ -192,7 +192,7 @@ npm run typecheck
 
 Add or update tests for changes to rule behavior. The [rule-writing skill](skills/rulekeeper-new-rule/SKILL.md) explains how to create rules, add inline tests, and inspect rule behavior.
 
-Local and CI runs both use `npm test`, with up to four isolated test files running concurrently.
+To reproduce CI's test scheduling, run `npm test -- --test-concurrency=4`. Test files stay isolated, with up to four running concurrently.
 
 ### Publishing to npm
 

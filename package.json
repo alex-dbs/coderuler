@@ -31,7 +31,7 @@
     "build": "tsc -p tsconfig.build.json",
     "dev": "npx tsx src/cli.ts",
     "start": "node dist/cli.js",
-    "test": "npm run build && node --test --test-concurrency=4 tests/*.test.ts",
+    "test": "npm run build && node --test tests/*.test.ts",
     "test:golden": "npm run build && node --test tests/golden.test.ts",
     "typecheck": "tsc --noEmit"
   },
