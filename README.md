@@ -192,37 +192,6 @@ npm run typecheck
 
 Add or update tests for changes to rule behavior. The [rule-writing skill](skills/rulekeeper-new-rule/SKILL.md) explains how to create rules, add inline tests, and inspect rule behavior.
 
-To reproduce CI's test scheduling, run `npm test -- --test-concurrency=4`. Test files stay isolated, with up to four running concurrently.
-
-### Publishing to npm
-
-CI runs typechecking and the complete test suite, including installing and exercising the packed CLI, on pushes to `main` and on pull requests. Feature-branch pushes do not trigger a separate run. Pushing a `v*` tag runs the same checks before publishing to npm. The tag must match `package.json` exactly, for example `v0.1.0` for version `0.1.0`. Stable versions use npm's `latest` tag; prereleases use `next`.
-
-One-time setup:
-
-1. Own the `alex-dbs` account or organization scope on npm. npm scope ownership is separate from the GitHub account `alex-dbs`.
-2. Publish the first version from a checked-out, tested release:
-
-   ```sh
-   npm login
-   npm ci
-   npm version 0.1.0 --no-git-tag-version
-   npm test
-   npm run typecheck
-   npm publish --access public
-   ```
-
-   Commit the updated `package.json` and `package-lock.json`. The first manual publish creates the package so its trusted publisher can be configured.
-3. In the npm package settings, add a [GitHub Actions trusted publisher](https://docs.npmjs.com/trusted-publishers/) for owner `alex-dbs`, repository `rulekeeper`, workflow filename `publish.yml`, with no environment name. Allow direct `npm publish`. The workflow uses OIDC; no `NPM_TOKEN` secret is needed.
-
-For subsequent releases, start from a clean checkout with the version changes on your release branch:
-
-```sh
-npm version patch
-git push --follow-tags
-```
-
-If the GitHub repository is renamed or transferred, update both `repository.url` in `package.json` and the npm trusted publisher configuration.
 
 ## License
 

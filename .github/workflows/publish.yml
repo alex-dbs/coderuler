@@ -25,16 +25,13 @@ jobs:
           check-latest: true
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
-      - name: Validate release tag
+      - name: Set package version from release tag
         run: |
+          npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version --allow-same-version --ignore-scripts
           node --input-type=module <<'NODE'
           import { appendFileSync, readFileSync } from 'node:fs';
 
           const { version } = JSON.parse(readFileSync('package.json', 'utf8'));
-          const expectedTag = `v${version}`;
-          if (process.env.GITHUB_REF_NAME !== expectedTag) {
-            throw new Error(`Release tag must equal ${expectedTag}`);
-          }
 
           const distTag = version.split('+')[0].includes('-') ? 'next' : 'latest';
           appendFileSync(process.env.GITHUB_ENV, `NPM_DIST_TAG=${distTag}\n`);
