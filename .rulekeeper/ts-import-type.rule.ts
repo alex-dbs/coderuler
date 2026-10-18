@@ -1,11 +1,11 @@
-import { Rule, test, violation } from 'rulekeeper';
-import { typescriptScope } from './typescript-scope.ts';
+import { Rule, scopes, test, violation } from 'rulekeeper';
 
 export default class TsImportType extends Rule {
   files = ['**/*.{ts,tsx,mts,cts}'];
   exclude = ['**/*.d.{ts,mts,cts}'];
 
-  scope = typescriptScope({
+  scope = scopes.astGrep({
+    language: 'typescript',
     utils: {
       'import-call': {
         kind: 'call_expression',

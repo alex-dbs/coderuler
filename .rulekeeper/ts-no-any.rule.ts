@@ -1,10 +1,10 @@
-import { Rule, test, violation } from 'rulekeeper';
-import { typescriptScope } from './typescript-scope.ts';
+import { Rule, scopes, test, violation } from 'rulekeeper';
 
 export default class TsNoAny extends Rule {
   files = ['**/*.{ts,tsx,mts,cts}'];
 
-  scope = typescriptScope({
+  scope = scopes.astGrep({
+    language: 'typescript',
     rule: {
       kind: 'predefined_type',
       pattern: { context: 'type ExplicitAny = any;', selector: 'predefined_type' },

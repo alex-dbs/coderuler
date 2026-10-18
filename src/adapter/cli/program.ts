@@ -69,6 +69,7 @@ export interface CliServices {
     onResult: (result: RuleTestResult, lastInRule: boolean) => void,
     timeoutMs: number,
     concurrency: number,
+    includeAI: boolean,
   ) => Promise<readonly RuleTestResult[]>;
   readonly createProject: (
     root: string,
@@ -109,6 +110,8 @@ interface InspectOptions {
 interface TestOptions {
   readonly timeout: number;
   readonly concurrency: number;
+  readonly ai?: boolean;
+  readonly failuresOnly?: boolean;
 }
 
 interface RuleChoice {
@@ -225,6 +228,8 @@ export function createProgram(services: CliServices): Command {
     .command('test')
     .description('Run the declared test cases for the selected rules')
     .argument('[rule-path]', 'explicit rule module or directory instead of discovery')
+    .option('--ai', 'include aiTests that use the configured decision backend')
+    .option('--failures-only', 'show only failed test cases')
     .addOption(
       new Option('--timeout <duration>', 'per-test timeout (ms, s, or m)')
         .argParser(parseTimeout)
@@ -245,6 +250,24 @@ export function createProgram(services: CliServices): Command {
       let failed = 0;
       let durationMs = 0;
       let previousRuleName: string | undefined;
+      const failures: RuleTestResult[] | undefined = options.failuresOnly ? [] : undefined;
+      let testsStarted = false;
+      const flushFailures = () => {
+        if (failures === undefined || failures.length === 0) return;
+        if (previousRuleName !== undefined) services.write('\n');
+        const ruleName = failures[0]!.ruleName;
+        services.write(renderRuleTestHeading(ruleName, services.redact, color));
+        previousRuleName = ruleName;
+        for (let index = 0; index < failures.length; index += 1) {
+          services.write(renderRuleTestResult(
+            failures[index]!,
+            services.redact,
+            color,
+            index === failures.length - 1,
+          ));
+        }
+        failures.length = 0;
+      };
       try {
         const rules = await services.loadRules(
           ruleSelection(
@@ -254,24 +277,37 @@ export function createProgram(services: CliServices): Command {
           ),
         );
         progress?.message('Running tests');
+        testsStarted = true;
         await services.testRules(rules, (result, lastInRule) => {
           progress?.clear();
-          if (result.ruleName !== previousRuleName) {
-            if (previousRuleName !== undefined) services.write('\n');
-            services.write(renderRuleTestHeading(result.ruleName, services.redact, color));
-            previousRuleName = result.ruleName;
-          }
-          services.write(renderRuleTestResult(result, services.redact, color, lastInRule));
           if (result.expected === result.actual) passed += 1;
           else failed += 1;
           durationMs += result.durationMs;
+          if (failures !== undefined) {
+            if (result.expected !== result.actual) failures.push(result);
+            if (lastInRule) flushFailures();
+          } else {
+            if (result.ruleName !== previousRuleName) {
+              if (previousRuleName !== undefined) services.write('\n');
+              services.write(renderRuleTestHeading(result.ruleName, services.redact, color));
+              previousRuleName = result.ruleName;
+            }
+            services.write(renderRuleTestResult(result, services.redact, color, lastInRule));
+          }
           progress?.message(`Running tests (${passed + failed} completed)`);
-        }, options.timeout, options.concurrency);
+        }, options.timeout, options.concurrency, options.ai === true);
       } finally {
         progress?.stop();
+        if (failures !== undefined && testsStarted) {
+          flushFailures();
+          if (previousRuleName !== undefined) services.write('\n');
+          services.write(renderRuleTestSummary(passed, failed, durationMs, services.redact, color));
+        }
       }
-      if (previousRuleName !== undefined) services.write('\n');
-      services.write(renderRuleTestSummary(passed, failed, durationMs, services.redact, color));
+      if (failures === undefined) {
+        if (previousRuleName !== undefined) services.write('\n');
+        services.write(renderRuleTestSummary(passed, failed, durationMs, services.redact, color));
+      }
       if (failed > 0) throw new CliExit(EXIT_VIOLATION);
     });
 

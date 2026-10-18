@@ -126,6 +126,7 @@ async function stopSession(session: RuleTestSession): Promise<void> {
 async function runCase(
   entry: LoadedRule,
   example: RuleTestCase,
+  ai: boolean,
   timeoutMs: number,
   session: RuleTestSession,
   onFailure: (error: unknown) => void,
@@ -149,7 +150,7 @@ async function runCase(
       if (performance.now() >= deadline) actual = 'timeout';
       else {
         active = session.current ??= new RuleTestWorkerSession();
-        actual = await active.run({ root, ruleFile: entry.ruleFile, files: example.files }, deadline, failCase);
+        actual = await active.run({ root, ruleFile: entry.ruleFile, files: example.files, ai }, deadline, failCase);
       }
     } catch (error) {
       throw failCase(error);
@@ -180,6 +181,7 @@ export async function runRuleTests(
   onResult?: (result: RuleTestResult, lastInRule: boolean) => void,
   timeoutMs = 10_000,
   concurrency = 1,
+  includeAI = false,
 ): Promise<readonly RuleTestResult[]> {
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) {
     throw new RangeError(`--concurrency must be a positive safe integer, received ${String(concurrency)}`);
@@ -187,6 +189,7 @@ export async function runRuleTests(
   const results: RuleTestResult[] = [];
   const sessions: RuleTestSession[] = [];
   let failureObserved = false;
+  let hasExcludedAITests = false;
   let failure: unknown;
   let cancellation: Promise<unknown> | undefined;
   const fail = (error: unknown): void => {
@@ -203,27 +206,41 @@ export async function runRuleTests(
     for (const rule of rules) {
       if (failureObserved) throw failure;
       // Discovery selects the rule module path at runtime.
-      const { tests } = await import(pathToFileURL(rule.ruleFile).href) as { readonly tests?: unknown };
+      const { tests, aiTests } = await import(pathToFileURL(rule.ruleFile).href) as {
+        readonly tests?: unknown;
+        readonly aiTests?: unknown;
+      };
       if (failureObserved) throw failure;
-      if (tests === undefined) continue;
-      const label = `Rule "${rule.name}" tests`;
-      if (!Array.isArray(tests)) throw new Error(`${label}: expected an array of test cases`);
-      const completed = new Array<RuleTestResult | undefined>(tests.length);
+      if (!includeAI && aiTests !== undefined) hasExcludedAITests = true;
+      const selectedAI = includeAI ? aiTests : undefined;
+      const label = `Rule "${rule.name}"`;
+      if (tests !== undefined && !Array.isArray(tests)) {
+        throw new Error(`${label} tests: expected an array of test cases`);
+      }
+      if (selectedAI !== undefined && !Array.isArray(selectedAI)) {
+        throw new Error(`${label} aiTests: expected an array of test cases`);
+      }
+      const regularCount = tests?.length ?? 0;
+      const count = regularCount + (selectedAI?.length ?? 0);
+      const completed = new Array<RuleTestResult | undefined>(count);
       let nextIndex = 0;
       let nextResult = 0;
       const runWorker = async (session: RuleTestSession): Promise<void> => {
         while (!failureObserved) {
           const index = nextIndex++;
-          if (index >= tests.length) return;
+          if (index >= count) return;
           try {
-            const example = validateCase(tests[index], `${label}[${index}]`);
-            completed[index] = await runCase(rule, example, timeoutMs, session, fail);
+            const ai = index >= regularCount;
+            const caseIndex = ai ? index - regularCount : index;
+            const value = ai ? selectedAI![caseIndex] : tests![caseIndex];
+            const example = validateCase(value, `${label} ${ai ? 'aiTests' : 'tests'}[${caseIndex}]`);
+            completed[index] = await runCase(rule, example, ai, timeoutMs, session, fail);
             if (failureObserved) return;
             while (completed[nextResult] !== undefined) {
               const result = completed[nextResult]!;
               results.push(result);
               nextResult += 1;
-              onResult?.(result, nextResult === tests.length);
+              onResult?.(result, nextResult === count);
             }
           } catch (error) {
             fail(error);
@@ -231,7 +248,7 @@ export async function runRuleTests(
         }
       };
       const workers: Promise<void>[] = [];
-      const workerCount = Math.min(concurrency, tests.length);
+      const workerCount = Math.min(concurrency, count);
       for (let index = 0; index < workerCount && !failureObserved; index += 1) {
         const session = sessions[index] ??= { current: undefined, cancelled: false };
         workers.push(runWorker(session));
@@ -239,7 +256,11 @@ export async function runRuleTests(
       await Promise.all(workers);
       if (failureObserved) throw failure;
     }
-    if (results.length === 0) throw new Error('No rule test cases found in the selected rules');
+    if (results.length === 0) {
+      throw new Error(hasExcludedAITests
+        ? 'No ordinary rule test cases found in the selected rules; run with --ai to include aiTests'
+        : 'No rule test cases found in the selected rules');
+    }
     return results;
   } finally {
     await cancellation;

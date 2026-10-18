@@ -176,7 +176,7 @@ selection, filters, grouping, and check with its own temporary project and fresh
 Cases within a rule can run concurrently on a reusable worker pool; rule suites run in discovery order.
 Each worker caches imported modules across cases and rules, so do not rely on module-level state
 being isolated or ordered between cases. Await all asynchronous work before returning from a check.
-The working tree is not modified. Tests run offline; AI calls fail rather than contact a provider.
+The working tree is not modified. Ordinary `tests` run offline; AI calls fail rather than contact a provider.
 
 These chains only declare cases. Ordinary `check` and `validate` do not execute them. Use the
 [`test` command](#test-rule-path) to run them; the repository's `npm test` also runs its inline cases.
@@ -184,6 +184,12 @@ These chains only declare cases. Ordinary `check` and `validate` do not execute 
 Run `npm start -- test .rulekeeper` to test the repository's local rules. Cases cover environment
 duplicates, memory-ratio boundaries, and public/internal protobuf URLs. The Go append rule has only
 offline scope-selection cases; its AI policy is not evaluated.
+
+For live AI outcome assertions, export `aiTests` using the same `test(...)` builder and
+`.passes()` / `.violates()` declarations. These are separate from the examples conditioning
+`ai(...)`: they exercise the actual rule against independent datasets. The
+[AI-backed TypeScript rules](#ai-backed-typescript-policies) contain complete examples.
+`test --ai` opts into these cases; ordinary `test` and `npm test` remain offline.
 
 ### Execution order and concurrency
 
@@ -225,7 +231,7 @@ selections. A genuine `[]` remains a valid no-match result, and dense results re
 | `scopes.json<T>({ path?, key? })`                          | `path` default `$`                                | Strict JSON only (no comments, trailing commas, or empty input); duplicate keys and non-finite numbers are rejected. `id` is the RFC 6901 pointer (`$` at root) or the `key` value.                       |
 | `scopes.yaml<T>({ path?, key? })`                          | `path` default `$`                                | Every nonempty YAML document, in order, with aliases/merge keys resolved and a bounded alias count. `id` is `<doc-index>:<pointer-or-key>`; empty/comment-only documents are skipped without renumbering. |
 | `scopes.csv({ headers?, delimiter?, key? })`               | `headers` default `true`, `delimiter` default `,` | One scope per data record; ids are `row:<n>` (1-based) or a `key` column value. Handles quoting, multiline fields, BOM, LF/CRLF/CR, and blank lines; strict record widths.                                |
-| `scopes.astGrep({ language, rule, constraints?, utils? })` | —                                                 | Native ast-grep matches with captures (pattern metavariables plus named-declaration/Go-receiver identities) and line spans. The native query is compiled and validated at factory construction.           |
+| `scopes.astGrep({ language, rule, constraints?, utils?, tsx? })` | —                                              | Native ast-grep matches with captures (pattern metavariables plus named-declaration/Go-receiver identities) and line spans. Queries are validated at factory construction. TypeScript selects its grammar by filepath. |
 | `scopes.protobuf<T>({ path? })`                            | `path` default `$.rpcs[*]`                        | RPC records or their `google.api.http` subtrees. Data is `{ id, package, service, name, http: { bindings: [{ method, url }] } }`.                                                                         |
 
 
@@ -247,6 +253,25 @@ apply the same option rules and preserve exact source slices for multibyte delim
 `cs`/`kt`/`md`/`yml`/`golang`/`hs`/`ex`/`cc`/`c++`/`cxx`. Names are case-insensitive; bundled grammars
 register lazily on first use, and a host composing custom grammars can merge
 `createAstGrepLanguageRegistrations()` into its own single `registerDynamicLanguage` call.
+
+With `language: 'typescript'` (or alias `ts`), `astGrep` uses the TSX grammar for `.tsx` files and
+the TypeScript grammar otherwise, including `.ts`, `.mts`, and `.cts`. Other explicitly selected
+languages remain fixed; `language: 'tsx'` always uses TSX regardless of filepath.
+
+Both TypeScript grammar variants validate eagerly. Queries using TypeScript-only kinds, such as
+angle-bracket `type_assertion`, need a `tsx` replacement query:
+
+```ts
+scopes.astGrep({
+  language: 'typescript',
+  rule: { any: [{ kind: 'as_expression' }, { kind: 'type_assertion' }] },
+  tsx: { rule: { kind: 'as_expression' } },
+});
+```
+
+`tsx` accepts `{ rule, constraints?, utils? }` and replaces the complete query rather than merging
+it: omitted constraints and utilities are not inherited. Captures come from the selected query.
+The option is only valid with a TypeScript language selection.
 
 ### Grouping
 
@@ -412,16 +437,28 @@ on error.
 
 ### `test [rule-path]`
 
-Run the named `tests` exports from selected rules. With no path, discovery reads the working root's
-`.rulekeeper` and home rules; an explicit file or directory replaces discovery and resolves relative
-to the invocation cwd.
+Run the named `tests` exports from selected rules. Add `--ai` to include their `aiTests` exports
+after ordinary cases in each rule. With no path, discovery reads the working root's `.rulekeeper`
+and home rules; an explicit file or directory replaces discovery and resolves relative to the
+invocation cwd.
 
 ```sh
 node dist/cli.js test
 node dist/cli.js test .rulekeeper/duplicated-env.rule.ts
 node dist/cli.js test --timeout 30s
 node dist/cli.js test --concurrency 4
+node dist/cli.js test .rulekeeper --ai --timeout 45s --failures-only
 ```
+
+`--ai` authorizes provider calls only for `aiTests`; ordinary `tests` remain offline even in that
+mode and in reused workers. Live cases use the same rule settings and environment configuration
+as `check`, including `TYPESAFE_API_KEY`, and may incur provider charges. Outcomes are
+probabilistic. No model responses are mocked or substituted by the runner.
+Selecting an AI-only rule without `--ai` reports how to enable its cases.
+
+Use a suitable per-case deadline for live evaluation; `45s` allows more time than the default
+`10s`, but does not override the provider adapter's own request timeout. Provider failures are
+reported as errors, not passing or skipped assertions.
 
 Streams results in declaration order as a tree under each rule heading, followed by passed/failed
 totals. Later cases can finish first, but their results wait for earlier cases before printing.
@@ -433,6 +470,12 @@ rule discovery, and output rendering are excluded. Durations use the same two-de
 
 Passing labels are green and failing labels red; assertion mismatches show expected and actual
 statuses and do not prevent later cases from running.
+
+`--failures-only` hides passing rows and headings for rules with no failures, while retaining the
+full summary and runtime diagnostics. All selected cases still run, including AI calls; counts,
+total case time, provider usage, and exit status are unchanged. Filtered rows are emitted when
+their rule completes, or flushed if it aborts. On an error, the filtered summary counts completed
+cases only, not the interrupted case.
 
 `--concurrency <number>` sets the maximum number of reusable workers, defaulting to `1`. It must be a
 positive safe integer. Workers start lazily and remain available across rule files. Increase the
@@ -451,9 +494,9 @@ Rules with no cases are ignored; selecting no cases is an error. A `.skips()` ca
 rule is skipped, including when filtering or file selection leaves no subjects.
 
 Exit `0` when all assertions match, `1` for assertion mismatches or timeouts, or `2` for invalid
-declarations, loading/runtime errors, unsafe fixture paths, AI calls, or no test cases. Runtime errors
-identify the rule and case and abort the run; already printed results remain visible, and temporary
-projects are removed even on failure.
+declarations, loading/runtime errors, unsafe fixture paths, AI calls from ordinary `tests`, or no test
+cases. Runtime errors identify the rule and case and abort the run; already printed results remain
+visible, and temporary projects are removed even on failure.
 
 ### `check [path]`
 
@@ -717,10 +760,50 @@ value per document) and the collected service names both travel with the request
 grouped scopes alone, and the documented services are never sent. The first example is a deterministic
 check and never contacts the provider.
 
+### AI-backed TypeScript policies
+
+These local examples use ASTs to select candidate-bearing files, then ask AI to assess intent.
+Each selected file is evaluated once, with its complete source and filepath so local uses,
+comments, and exports remain visible. Candidate presence alone is not a violation.
+
+| Rule | Review focus |
+|---|---|
+| [ts-no-deprecated-leftovers](.rulekeeper/ts-no-deprecated-leftovers.rule.ts) | Obsolete internal deprecated aliases/wrappers, preserving supported public migrations and compatibility tests. |
+| [ts-no-tiny-functions](.rulekeeper/ts-no-tiny-functions.rule.ts) | Unnecessary named expression/single-return wrappers, preserving domain concepts, contracts, type guards, identity, and useful reuse. |
+| [ts-no-local-is-record](.rulekeeper/ts-no-local-is-record.rule.ts) | Redundant local guards or object checks misused as domain validation, preserving canonical guards and sound staged narrowing. |
+| [ts-no-dynamic-import](.rulekeeper/ts-no-dynamic-import.rule.ts) | Directly awaited literal imports with no loading purpose, preserving intentional laziness, optional/platform dependencies, initialization constraints, and module-boundary tests. |
+| [ts-set-map](.rulekeeper/ts-set-map.rule.ts) | Small fixed string-keyed value lookups initialized from literal arrays, preserving membership, mutation, iteration, identity, non-string keys, and unknown consumers. |
+
+All five support `.ts`, `.tsx`, `.mts`, and `.cts`, and exclude declaration files.
+The dynamic-import selector ignores computed specifiers and non-awaited imports; the collection
+selector ignores constructors without literal-array initializers. `ts-no-test-timers` is not included.
+
+These checks see only the selected file, not arbitrary callers or migration documents elsewhere.
+Their policies require visible evidence and preserve legitimate exceptions rather than invent
+missing context. AI judgments remain probabilistic. Full file contents are sent to the configured
+decision provider; use `exclude` for generated or otherwise unsuitable paths.
+
+The five rules export 23 live `aiTests`, covering expected violations and legitimate exceptions.
+These include regression cases preserving public primitive adapters and conditional runtime
+loading after a type-only import. Each fixture contains an AST candidate, so a passing assertion
+requires an actual AI decision rather than no selection. Run them with
+[`test --ai`](#test-rule-path). Their deterministic candidate-selection goldens remain offline:
+
+```sh
+npm run build
+node --test tests/typescript-ai-rules.test.ts
+```
+
+To exercise an actual judgment with configured AI credentials:
+
+```sh
+node dist/cli.js inspect .rulekeeper/ts-no-dynamic-import.rule.ts path/to/project
+```
+
 ### Example boundaries and usage
 
-- The TypeScript examples support `.ts`, `.tsx`, `.mts`, and `.cts`, choosing the appropriate
-TypeScript or TSX grammar. The import policy excludes `.d.ts`, `.d.mts`, and `.d.cts`.
+- The TypeScript examples support `.ts`, `.tsx`, `.mts`, and `.cts` through `scopes.astGrep`'s
+built-in grammar dispatch. The import policy excludes `.d.ts`, `.d.mts`, and `.d.cts`.
 Generated code is not automatically detected; configure `exclude` for project-owned generated paths.
 - AST parsing is not full TypeScript type checking. In particular, the bundled grammar loses type
 context for some valid inline-import forms, including `keyof import("x").T` and
@@ -731,8 +814,9 @@ access through an intervening operation. Allowing a named assertion does not est
 and grouped imports. Version gates read the nearest ancestor `go.mod` within the project;
 nested modules override parents. Missing modules/directives skip, and `toolchain` is not the
 module's language target. Import rules flag a chosen migration policy, not semantic equivalence.
-- These selectors identify violations. Compliant files select no scopes and report `skipped`.
-Each rule exports offline inline cases covering violations and exclusions.
+- Deterministic selectors identify violations; compliant files select no scopes and report `skipped`.
+AI selectors identify review candidates, which may pass after evaluation. Offline selection tests
+do not establish the correctness of model judgments.
 
 For example, after building:
 
@@ -743,6 +827,16 @@ node dist/cli.js check src --rules .rulekeeper/ts-no-any.rule.ts
 
 ## Release notes
 
+- Clarified the tiny-helper and dynamic-import AI policies without changing thresholds or existing
+expectations; added contrastive public-adapter and type-only/runtime-import exception regressions.
+- Added `test --failures-only` to filter case output without changing execution, complete totals,
+or exit codes; filtered failures and completed totals remain visible on runtime errors.
+- Added independent live outcome datasets for the five AI TypeScript rules and `test --ai` support
+for opt-in `aiTests`; ordinary tests and `npm test` remain offline.
+- Moved TypeScript/TSX grammar dispatch into `scopes.astGrep`, with an optional complete `tsx` query
+replacement; local rules now call the SDK directly without a TypeScript wrapper.
+- Added five AST-gated AI TypeScript policies with full-file context, legitimate-exception examples,
+and offline candidate-selection goldens; test-timer policy remains excluded.
 - Added six deterministic AST-based local TypeScript/Go rules with inline datasets, nearest-module
 Go-version gates, and a documented assessment of all 26 upstream policies and their limitations.
 - Rules can declare fluent inline datasets with `test(name).withFiles(files).passes()`, `.violates()`,

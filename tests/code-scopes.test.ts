@@ -250,6 +250,90 @@ test('ast-grep composes nested declaration identities and omits absent data', as
   ]);
 });
 
+test('ast-grep uses TypeScript for angle assertions and TSX for JSX calls by filepath', async () => {
+  const selector = astGrep({
+    language: 'typescript',
+    rule: { pattern: '$FUNCTION($$$ARGS)' },
+  });
+  const fixtures = [
+    { filepath: 'value.ts', source: 'const value = <number>read(input);', functionName: 'read', args: ['input'] },
+    { filepath: 'value.mts', source: 'const value = <number>read(input);', functionName: 'read', args: ['input'] },
+    { filepath: 'value.cts', source: 'const value = <number>read(input);', functionName: 'read', args: ['input'] },
+    { filepath: 'view.tsx', source: 'const view = <Widget title={format(name)} />;', functionName: 'format', args: ['name'] },
+  ];
+
+  for (const { filepath, source, functionName, args } of fixtures) {
+    const matches = await select(selector, filepath, source);
+    assert.deepEqual(matches.map(match => match.captures), [{ FUNCTION: functionName, ARGS: args }], filepath);
+    assert.deepEqual(matches.map(match => match.lines), [{ start: 1, end: 1 }], filepath);
+  }
+});
+
+test('ast-grep dispatches TypeScript aliases but preserves explicitly selected other grammars', async () => {
+  const aliased = astGrep({ language: 'TS', rule: { pattern: '$FUNCTION($$$ARGS)' } });
+  const fixedTsx = astGrep({ language: 'tsx', rule: { pattern: '$FUNCTION($$$ARGS)' } });
+  const fixedGo = astGrep({ language: 'go', rule: { pattern: 'append($SLICE, $$$ARGS)' } });
+  const jsx = 'const view = <Widget title={format(name)} />;';
+  assert.deepEqual(
+    (await select(aliased, 'view.tsx', jsx)).map(match => match.captures),
+    [{ FUNCTION: 'format', ARGS: ['name'] }],
+  );
+  assert.deepEqual(
+    (await select(fixedTsx, 'view.ts', jsx)).map(match => match.captures),
+    [{ FUNCTION: 'format', ARGS: ['name'] }],
+  );
+  assert.deepEqual(
+    (await select(fixedGo, 'values.tsx', 'package example\nvar values = append(items, next)'))
+      .map(match => match.captures),
+    [{ SLICE: 'items', ARGS: ['next'] }],
+  );
+});
+
+test('ast-grep TSX overrides replace rules, utilities, constraints, and capture names together', async () => {
+  const selector = astGrep({
+    language: 'typescript',
+    rule: { matches: 'ANGLE' },
+    utils: { ANGLE: { kind: 'type_assertion', pattern: '<number>$VALUE' } },
+    constraints: { VALUE: { regex: '^read\\(' } },
+    tsx: {
+      rule: { matches: 'CALL' },
+      utils: { CALL: { pattern: '$FUNCTION($$$ARGS)' } },
+      constraints: { FUNCTION: { regex: '^format$' } },
+    },
+  });
+
+  assert.deepEqual(
+    (await select(selector, 'value.ts', 'const first = <number>read();\nconst second = <number>ignore();'))
+      .map(match => ({ captures: match.captures, lines: match.lines })),
+    [{ captures: { VALUE: 'read()' }, lines: { start: 1, end: 1 } }],
+  );
+  assert.deepEqual(
+    (await select(selector, 'view.tsx', 'const view = <Widget title={format(name)} other={ignore()} />;'))
+      .map(match => ({ captures: match.captures, lines: match.lines })),
+    [{ captures: { FUNCTION: 'format', ARGS: ['name'] }, lines: { start: 1, end: 1 } }],
+  );
+});
+
+test('ast-grep rejects malformed or inapplicable TSX overrides before selection', () => {
+  const base = { language: 'typescript', rule: { kind: 'call_expression' } };
+  for (const tsx of [
+    null,
+    [],
+    {},
+    { rule: [] },
+    { rule: { kind: 'call_expression' }, constraints: [] },
+    { rule: { kind: 'call_expression' }, utils: null },
+    { rule: { kind: 'type_assertion' } },
+  ]) {
+    assert.throws(() => astGrepWith({ ...base, tsx }));
+  }
+  assert.throws(() => astGrepWith({
+    language: 'go',
+    rule: { kind: 'function_declaration' },
+    tsx: { rule: { kind: 'call_expression' } },
+  }));
+});
+
 test('ast-grep omits anonymous metavariables from captures', async () => {
   assert.deepEqual(
     await select(astGrep({ language: 'go', rule: { pattern: 'append($_, $_A)' } }), 'internal/store/cart.go', GO_SOURCE),

@@ -1,5 +1,4 @@
-import { Rule, test, violation } from 'rulekeeper';
-import { typescriptScope } from './typescript-scope.ts';
+import { Rule, scopes, test, violation } from 'rulekeeper';
 
 const asObject = {
   kind: 'as_expression',
@@ -18,7 +17,8 @@ const immediateAccess = {
 export default class TsNoInlineCastAccess extends Rule {
   files = ['**/*.{ts,tsx,mts,cts}'];
 
-  scope = typescriptScope({
+  scope = scopes.astGrep({
+    language: 'typescript',
     rule: {
       any: [
         asObject,
@@ -35,8 +35,9 @@ export default class TsNoInlineCastAccess extends Rule {
       ],
       inside: immediateAccess,
     },
-  }, {
-    rule: { ...asObject, inside: immediateAccess },
+    tsx: {
+      rule: { ...asObject, inside: immediateAccess },
+    },
   });
 
   check = () => violation('Narrow or validate the value before accessing it instead of asserting an inline object type.');

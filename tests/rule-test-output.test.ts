@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { stripVTControlCharacters } from 'node:util';
 
-import { CLI, createSandbox, runCli, writeFile } from './support.ts';
+import { CLI, createSandbox, runCli, startDecisionFixture, writeFile } from './support.ts';
 
 const sandbox = createSandbox('rulekeeper-test-output-');
 after(() => sandbox.cleanup());
@@ -166,4 +166,133 @@ export const tests = [test('case-1').withFiles({ 'inputs/one.txt': 'BAD' }).pass
   assert.equal(text.includes('rule-1'), false);
   assert.equal(text.includes('case-1'), false);
   assert.equal(result.stderr, '');
+});
+
+test('test --failures-only prints just the summary for passing cases and includes their duration', async () => {
+  const target = sandbox.isolated('failures-only-passes');
+  writeFile(join(target.cwd, '.rulekeeper/all-pass.rule.ts'), `${RULE}
+export const tests = [
+  test('hidden first pass').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
+  test('hidden second pass').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
+];`);
+  const result = await runCli(['test', '--failures-only', '--concurrency', '1'], target);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.equal(result.stderr, '');
+  assert.equal(withoutTimings(result.stdout), '2 passed, 0 failed  Time: <duration>\n');
+  const duration = /Time: (\d+\.\d{2})(ms|s|min|h|d)\n$/.exec(result.stdout);
+  assert.ok(duration, result.stdout);
+  assert.ok(Number(duration[1]) > 0, result.stdout);
+});
+
+test('test --failures-only hides passing rules and closes failure trees before trailing passes', async () => {
+  const target = sandbox.isolated('failures-only-trees');
+  writeFile(join(target.cwd, '.rulekeeper/alpha.rule.ts'), `${RULE}
+export const tests = [
+  test('all-pass rule case').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
+];`);
+  writeFile(join(target.cwd, '.rulekeeper/beta.rule.ts'), `${RULE}
+export const tests = [
+  test('first mismatch').withFiles({ 'inputs/one.txt': 'BAD' }).passes(),
+  test('hidden middle pass').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
+  test('last mismatch').withFiles({ 'inputs/one.txt': 'GOOD' }).violates(),
+  test('hidden trailing pass').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
+];`);
+  writeFile(join(target.cwd, '.rulekeeper/gamma.rule.ts'), `${RULE}
+export const tests = [
+  test('only mismatch').withFiles({ 'inputs/one.txt': 'BAD' }).passes(),
+  test('another hidden trailing pass').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
+];`);
+  const result = await runCli(['test', '--failures-only', '--concurrency', '2'], target);
+  assert.equal(result.status, 1, result.stderr || result.stdout);
+  assert.equal(result.stderr, '');
+  assert.deepEqual(withoutTimings(result.stdout).split('\n').filter(Boolean), [
+    'beta',
+    '├─ FAIL first mismatch (expected pass, actual violation)',
+    '└─ FAIL last mismatch (expected violation, actual pass)',
+    'gamma',
+    '└─ FAIL only mismatch (expected pass, actual violation)',
+    '4 passed, 3 failed  Time: <duration>',
+  ]);
+});
+
+test('test --failures-only flushes completed failures and totals before reporting a runtime error', async () => {
+  const target = sandbox.isolated('failures-only-error');
+  writeFile(join(target.cwd, '.rulekeeper/example.rule.ts'), `${RULE}
+export const tests = [
+  test('hidden completed pass').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
+  test('completed mismatch').withFiles({ 'inputs/one.txt': 'BAD' }).passes(),
+  test('hidden later pass').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
+  test('exploding later case').withFiles({ 'inputs/one.txt': 'THROW' }).passes(),
+  test('never reached').withFiles({ 'inputs/one.txt': 'BAD' }).passes(),
+];`);
+  const result = await runCli(['test', '--failures-only', '--concurrency', '1'], target);
+  assert.equal(result.status, 2, result.stderr || result.stdout);
+  assert.deepEqual(withoutTimings(result.stdout).split('\n').filter(Boolean), [
+    'example',
+    '└─ FAIL completed mismatch (expected pass, actual violation)',
+    '2 passed, 1 failed  Time: <duration>',
+  ]);
+  assert.ok(result.stderr.includes('exploding later case'), result.stderr);
+  assert.ok(result.stderr.includes('later case exploded'), result.stderr);
+  assert.equal(result.stderr.includes('never reached'), false, result.stderr);
+});
+
+test('test --failures-only displays timeouts as failures and continues counting later passes', { timeout: 15_000 }, async context => {
+  const target = sandbox.isolated('failures-only-timeout');
+  writeFile(join(target.cwd, '.rulekeeper/deadline.rule.ts'), `import { Rule, pass, test } from 'rulekeeper';
+export default class Deadline extends Rule {
+  files = ['inputs/*.txt'];
+  check = subject => {
+    if (subject.source === 'HANG') {
+      while (true) {}
+    }
+    return pass();
+  };
+}
+export const tests = [
+  test('hidden before timeout').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
+  test('deadline exceeded').withFiles({ 'inputs/one.txt': 'HANG' }).passes(),
+  test('hidden after timeout').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
+];`);
+  const pending = runCli(['test', '--failures-only', '--timeout', '2s', '--concurrency', '1'], target);
+  context.signal.addEventListener('abort', () => pending.terminate(), { once: true });
+  const result = await pending;
+  assert.equal(result.status, 1, result.stderr || result.stdout);
+  assert.equal(result.stderr, '');
+  assert.deepEqual(withoutTimings(result.stdout).split('\n').filter(Boolean), [
+    'deadline',
+    '└─ FAIL deadline exceeded (expected pass, actual timeout)',
+    '2 passed, 1 failed  Time: <duration>',
+  ]);
+});
+
+test('test --failures-only keeps AI authorization and provider decisions unchanged', async context => {
+  const target = sandbox.isolated('failures-only-ai');
+  const fixture = await startDecisionFixture();
+  context.after(() => fixture.close());
+  fixture.answer = (_request, index) => ({ probability: index === 0 ? 0.1 : 0.9 });
+  const path = writeFile(join(target.cwd, '.rulekeeper/mixed.rule.ts'), `import { Rule, pass, test } from 'rulekeeper';
+export default class Mixed extends Rule {
+  files = ['inputs/*.txt'];
+  check = (subject, context) => subject.source === 'LOCAL' ? pass() : context.ai({ rule: 'The input must be good.' });
+}
+export const tests = [test('hidden local pass').withFiles({ 'inputs/one.txt': 'LOCAL' }).passes()];
+export const aiTests = [
+  test('provider mismatch').withFiles({ 'inputs/one.txt': 'BAD' }).passes(),
+  test('hidden provider pass').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
+];`);
+  const local = await runCli(['test', '--failures-only', path], target, fixture.env);
+  assert.equal(local.status, 0, local.stderr || local.stdout);
+  assert.equal(local.stderr, '');
+  assert.equal(withoutTimings(local.stdout), '1 passed, 0 failed  Time: <duration>\n');
+  assert.equal(fixture.requests.length, 0);
+  const live = await runCli(['test', '--failures-only', '--ai', '--concurrency', '1', path], target, fixture.env);
+  assert.equal(live.status, 1, live.stderr || live.stdout);
+  assert.equal(live.stderr, '');
+  assert.deepEqual(withoutTimings(live.stdout).split('\n').filter(Boolean), [
+    'mixed',
+    '└─ FAIL provider mismatch (expected pass, actual violation)',
+    '2 passed, 1 failed  Time: <duration>',
+  ]);
+  assert.equal(fixture.requests.length, 2);
 });

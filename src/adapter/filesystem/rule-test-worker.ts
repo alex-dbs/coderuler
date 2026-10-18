@@ -4,6 +4,7 @@ import { parentPort } from 'node:worker_threads';
 
 import { executeRules } from '../../app/execute.js';
 import type { RuleTestCase } from '../../app/rule-tests.js';
+import { createDecisionResolver } from '../../infra/settings.js';
 import { createProject } from './project.js';
 import { createRuleLoader } from './rules.js';
 
@@ -12,6 +13,7 @@ export interface RuleTestWorkerRequest {
   readonly root: string;
   readonly ruleFile: string;
   readonly files: RuleTestCase['files'];
+  readonly ai: boolean;
 }
 
 export type RuleTestWorkerMessage =
@@ -26,7 +28,7 @@ function fixturePath(root: string, filepath: string): string {
   return target;
 }
 
-async function runCase({ root, ruleFile, files }: RuleTestWorkerRequest): Promise<RuleTestCase['expected']> {
+async function runCase({ root, ruleFile, files, ai }: RuleTestWorkerRequest): Promise<RuleTestCase['expected']> {
   for (const [filepath, source] of Object.entries(files)) {
     const target = fixturePath(root, filepath);
     await mkdir(dirname(target), { recursive: true });
@@ -38,7 +40,7 @@ async function runCase({ root, ruleFile, files }: RuleTestWorkerRequest): Promis
     project: createProject(root, { excludeFiles: [ruleFile] }),
     isTarget: () => true,
     concurrency: 1,
-    resolveDecision: () => {
+    resolveDecision: ai ? createDecisionResolver(process.env) : () => {
       throw new Error('Inline rule tests must not call the decision backend');
     },
   });

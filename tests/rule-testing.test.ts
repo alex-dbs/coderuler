@@ -188,3 +188,116 @@ export const tests = [test('offline case').withFiles({ 'inputs/a.txt': 'GOOD' })
   assert.ok(result.stderr.includes('offline case'), result.stderr);
   assert.equal(fixture.requests.length, 0);
 });
+
+test('test runs ordinary cases by default without executing opt-in AI cases', async t => {
+  const target = sandbox.isolated('ai-opt-in');
+  const fixture = await startDecisionFixture();
+  t.after(() => fixture.close());
+  writeFile(join(target.cwd, '.rulekeeper/mixed.rule.ts'), `import { Rule, pass, test } from 'rulekeeper';
+export default class Mixed extends Rule {
+  files = ['inputs/*.txt'];
+  check = (subject, context) => subject.source === 'LOCAL' ? pass() : context.ai({ rule: 'The input must be good.' });
+}
+export const tests = [test('ordinary case').withFiles({ 'inputs/a.txt': 'LOCAL' }).passes()];
+export const aiTests = [test('opt-in provider case').withFiles({ 'inputs/a.txt': 'GOOD' }).passes()];`);
+
+  const result = await runCli(['test'], target, fixture.env);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /PASS ordinary case/);
+  assert.equal(result.stdout.includes('opt-in provider case'), false);
+  assert.equal(fixture.requests.length, 0);
+});
+
+test('test explains how to enable an explicitly selected AI-only rule', async t => {
+  const target = sandbox.isolated('ai-only');
+  const fixture = await startDecisionFixture();
+  t.after(() => fixture.close());
+  const path = writeFile(join(target.cwd, '.rulekeeper/live.rule.ts'), `import { Rule, ai, test } from 'rulekeeper';
+export default class Live extends Rule {
+  files = ['inputs/*.txt'];
+  check = ai({ rule: 'The input must be good.' });
+}
+export const aiTests = [test('live case').withFiles({ 'inputs/a.txt': 'GOOD' }).passes()];`);
+
+  const result = await runCli(['test', path], target, fixture.env);
+  assert.equal(result.status, 2, result.stdout || result.stderr);
+  assert.match(result.stderr, /--ai/);
+  assert.equal(fixture.requests.length, 0);
+});
+
+test('test --ai compares HTTP decisions with expectations and preserves mixed case ordering', async t => {
+  const target = sandbox.isolated('ai-decisions');
+  const fixture = await startDecisionFixture();
+  t.after(() => fixture.close());
+  fixture.answer = (_request, index) => ({ probability: index === 0 ? 0.9 : 0.1 });
+  const path = writeFile(join(target.cwd, '.rulekeeper/mixed.rule.ts'), `import { Rule, pass, test } from 'rulekeeper';
+export default class Mixed extends Rule {
+  files = ['inputs/*.txt'];
+  check = (subject, context) => subject.source === 'LOCAL' ? pass() : context.ai({ rule: 'The input must be good.' });
+}
+export const tests = [test('local assertion').withFiles({ 'inputs/local.txt': 'LOCAL' }).passes()];
+export const aiTests = [
+  test('provider pass assertion').withFiles({ 'inputs/good.txt': 'GOOD' }).passes(),
+  test('provider violation assertion').withFiles({ 'inputs/bad.txt': 'BAD' }).violates(),
+];`);
+
+  const matching = await runCli(['test', '--ai', '--concurrency', '1', path], target, fixture.env);
+  assert.equal(matching.status, 0, matching.stderr || matching.stdout);
+  assert.equal(fixture.requests.length, 2);
+  for (const request of fixture.requests) {
+    assert.equal(request.method, 'POST');
+    assert.equal(request.path, '/v1/systemone');
+    assert.equal(request.authorization, `Bearer ${fixture.apiKey}`);
+  }
+  assert.match(matching.stdout, /├─ PASS local assertion /);
+  assert.match(matching.stdout, /├─ PASS provider pass assertion /);
+  assert.match(matching.stdout, /└─ PASS provider violation assertion /);
+  assert.ok(matching.stdout.indexOf('local assertion') < matching.stdout.indexOf('provider pass assertion'), matching.stdout);
+  assert.ok(matching.stdout.indexOf('provider pass assertion') < matching.stdout.indexOf('provider violation assertion'), matching.stdout);
+
+  fixture.probability = 0.1;
+  fixture.answer = () => ({});
+  const mismatch = await runCli(['test', '--ai', '--concurrency', '1', path], target, fixture.env);
+  assert.equal(mismatch.status, 1, mismatch.stderr || mismatch.stdout);
+  assert.equal(fixture.requests.length, 4);
+  assert.match(mismatch.stdout, /FAIL provider pass assertion /);
+  assert.match(mismatch.stdout, /└─ PASS provider violation assertion /);
+  assert.match(mismatch.stdout, /expected pass.*(?:got|actual).*violation/i);
+});
+
+test('test --ai never authorizes ordinary cases after a live case used the same worker', async t => {
+  const target = sandbox.isolated('ai-permission');
+  const fixture = await startDecisionFixture();
+  t.after(() => fixture.close());
+  const rule = `import { Rule, ai, test } from 'rulekeeper';
+export default class Live extends Rule {
+  files = ['inputs/*.txt'];
+  check = ai({ rule: 'The input must be good.' });
+}
+`;
+  writeFile(join(target.cwd, '.rulekeeper/a-live.rule.ts'), `${rule}
+export const aiTests = [test('authorized live case').withFiles({ 'inputs/a.txt': 'GOOD' }).passes()];`);
+  writeFile(join(target.cwd, '.rulekeeper/b-offline.rule.ts'), `${rule}
+export const tests = [test('ordinary AI call').withFiles({ 'inputs/a.txt': 'GOOD' }).passes()];`);
+
+  const result = await runCli(['test', '--ai', '--concurrency', '1'], target, fixture.env);
+  assert.equal(result.status, 2, result.stdout || result.stderr);
+  assert.match(result.stdout, /PASS authorized live case /);
+  assert.ok(result.stderr.includes('ordinary AI call'), result.stderr);
+  assert.equal(fixture.requests.length, 1);
+});
+
+test('test validates the aiTests export only when AI cases are selected', async () => {
+  const target = sandbox.isolated('invalid-ai-tests');
+  const path = writeFile(join(target.cwd, '.rulekeeper/invalid-ai.rule.ts'), `${TEXT_RULE}
+export const tests = [test('ordinary valid case').withFiles({ 'inputs/a.txt': 'GOOD' }).passes()];
+export const aiTests = {};
+`);
+
+  const ordinary = await runCli(['test', path], target);
+  assert.equal(ordinary.status, 0, ordinary.stderr || ordinary.stdout);
+  assert.match(ordinary.stdout, /PASS ordinary valid case/);
+  const selected = await runCli(['test', '--ai', path], target);
+  assert.equal(selected.status, 2, selected.stdout || selected.stderr);
+  assert.match(selected.stderr, /aiTests.*array/i);
+});
