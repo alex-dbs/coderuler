@@ -18,7 +18,13 @@ npm install -g @alex-dbs/rulekeeper
 rulekeeper --help
 ```
 
-The npm package is scoped; the command is simply `rulekeeper`. Rules import the package API, so also install it in each project where you write rules. This provides TypeScript editor support too:
+The npm package is scoped. The command is `rulekeeper`. A global installation can load rules without a project-local dependency.
+
+Node resolves dependencies relative to the importing module. Rulekeeper and its dependencies use their own installed dependency trees. Your rules and helpers do not borrow arbitrary packages from Rulekeeper.
+
+Only missing ESM imports of `@alex-dbs/rulekeeper` fall back to the running Rulekeeper's public API. Normal local resolution keeps priority. This works for home rules and `rulekeeper test` workers. Other missing packages fail normally. Relative file imports and package export restrictions remain unchanged.
+
+For TypeScript editor support and a project-specific version, install it locally:
 
 ```sh
 npm install --save-dev @alex-dbs/rulekeeper
