@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { after, before, test } from 'node:test';
@@ -90,6 +91,14 @@ interface Consumer {
   readonly gitless: string;
   readonly tarball: string;
   readonly packedPaths: readonly string[];
+  readonly globalPrefix: string;
+  readonly globalModules: string;
+  readonly globalApp: string;
+  readonly globalHome: string;
+  readonly localPreferenceApp: string;
+  readonly globalIsolationApp: string;
+  readonly missingImportApp: string;
+  readonly missingHome: string;
 }
 
 const SHARED_HELPER_SOURCE = `export const LICENSE_PATTERN = /Copyright ..../;
@@ -242,6 +251,145 @@ process.stdout.write(JSON.stringify({
 }));
 `;
 
+const GLOBAL_RULE_SOURCE = `import { Rule, pass, scopes, test, violation } from '@alex-dbs/rulekeeper';
+
+export default class GlobalRule extends Rule {
+  files = ['src/*.txt'];
+  scope = scopes.yaml({ path: '$' });
+
+  check = (subject) => (subject.data?.verdict === 'BAD' ? violation('bad global input') : pass());
+}
+
+export const tests = [
+  test('global pass').withFiles({ 'src/ok.txt': 'verdict: GOOD' }).passes(),
+  test('global violation').withFiles({ 'src/bad.txt': 'verdict: BAD' }).violates(),
+];
+`;
+
+const GLOBAL_HOME_RULE_SOURCE = `import { Rule, pass, test, violation } from '@alex-dbs/rulekeeper';
+
+export default class GlobalHomeRule extends Rule {
+  files = ['notes/*.txt'];
+  check = (subject) => (subject.source.includes('BAD') ? violation('bad home input') : pass());
+}
+
+export const tests = [
+  test('home global pass').withFiles({ 'notes/ok.txt': 'GOOD' }).passes(),
+  test('home global violation').withFiles({ 'notes/bad.txt': 'BAD' }).violates(),
+];
+`;
+
+const LOCAL_PREFERENCE_RULE_SOURCE = `import { Rule, FIXTURE_LOCAL_MARKER, pass, scopes, test, violation } from '@alex-dbs/rulekeeper';
+import { parse } from 'yaml';
+
+if (FIXTURE_LOCAL_MARKER !== 'fixture-local-copy') {
+  throw new Error('rule import resolved outside the project-local SDK: ' + String(FIXTURE_LOCAL_MARKER));
+}
+
+export default class LocalPreferenceRule extends Rule {
+  files = ['src/*.txt'];
+  scope = scopes.yaml({ path: '$' });
+
+  check = (subject) => {
+    const local = parse(subject.source);
+    if (local.localYamlMarker !== 'fixture-local-yaml') {
+      throw new Error('direct yaml import resolved outside the rule location');
+    }
+    return subject.data?.verdict === 'BAD' ? violation('bad local input') : pass();
+  };
+}
+
+export const tests = [
+  test('project-local SDK and dependency case').withFiles({ 'src/ok.txt': 'verdict: GOOD' }).passes(),
+  test('project-local SDK parses YAML with its own dependency').withFiles({ 'src/bad.txt': 'verdict: BAD' }).violates(),
+];
+`;
+
+const LOCAL_YAML_PACKAGE_JSON = `${JSON.stringify(
+  { name: 'yaml', version: '0.0.0-fixture', type: 'module', exports: { '.': './index.js' } },
+  null,
+  2,
+)}\n`;
+const LOCAL_YAML_INDEX_SOURCE = `export const parse = (source) => ({ localYamlMarker: 'fixture-local-yaml', source });
+`;
+
+const MISSING_IMPORT_RULE_SOURCE = `import '@alex-dbs/rulekeeper-fixture-missing';
+import { Rule } from '@alex-dbs/rulekeeper';
+
+export default class MissingImportRule extends Rule {
+  files = ['src/*.txt'];
+  check = () => ({ status: 'pass' });
+}
+`;
+
+const MISSING_RELATIVE_RULE_SOURCE = `import './rules.js';
+import { Rule } from '@alex-dbs/rulekeeper';
+
+export default class MissingRelativeRule extends Rule {
+  files = ['src/*.txt'];
+  check = () => ({ status: 'pass' });
+}
+`;
+
+const EXPORT_RESTRICTION_RULE_SOURCE = `import 'yaml/util';
+import { Rule } from '@alex-dbs/rulekeeper';
+
+export default class ExportRestrictionRule extends Rule {
+  files = ['src/*.txt'];
+  check = () => ({ status: 'pass' });
+}
+`;
+
+const DIRECT_YAML_RULE_SOURCE = `import 'yaml';
+import { Rule } from '@alex-dbs/rulekeeper';
+
+export default class DirectYamlRule extends Rule {
+  files = ['src/*.txt'];
+  check = () => ({ status: 'pass' });
+}
+`;
+
+const REQUIRED_YAML_RULE_SOURCE = `import './helpers/required-yaml.js';
+import { Rule } from '@alex-dbs/rulekeeper';
+
+export default class RequiredYamlRule extends Rule {
+  files = ['src/*.txt'];
+  check = () => ({ status: 'pass' });
+}
+`;
+
+const REQUIRED_YAML_HELPER_SOURCE = `import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+
+export const requiredYaml = require('yaml');
+`;
+
+const BORROWER_RULE_SOURCE = `import 'rulekeeper-fixture-borrower';
+import { Rule } from '@alex-dbs/rulekeeper';
+
+export default class BorrowerRule extends Rule {
+  files = ['src/*.txt'];
+  check = () => ({ status: 'pass' });
+}
+`;
+
+const BORROWER_PACKAGE_JSON = `${JSON.stringify(
+  { name: 'rulekeeper-fixture-borrower', version: '0.0.0-fixture', type: 'module', exports: { '.': './index.js' } },
+  null,
+  2,
+)}\n`;
+const BORROWER_INDEX_SOURCE = `import { parseDocument } from 'yaml';
+
+export const borrowedParser = typeof parseDocument;
+`;
+
+async function writeLocalYamlPackage(directory: string): Promise<void> {
+  await mkdir(directory, { recursive: true });
+  await writeFile(join(directory, 'package.json'), LOCAL_YAML_PACKAGE_JSON);
+  await writeFile(join(directory, 'index.js'), LOCAL_YAML_INDEX_SOURCE);
+}
+
 const cleanupPaths: string[] = [];
 let consumer: Consumer;
 
@@ -302,6 +450,19 @@ function runCli(app: string, args: readonly string[], options: { readonly cwd: s
   const bin = join(app, 'node_modules', '.bin', 'rulekeeper');
   assert.ok(existsSync(bin), `installed CLI missing at ${bin}`);
   const env = options.extra === undefined ? isolatedEnv(options.home) : isolatedEnv(options.home, options.extra);
+  return run(bin, args, { cwd: options.cwd, env });
+}
+
+function runGlobalCli(args: readonly string[], options: { readonly cwd: string; readonly home: string; readonly extra?: Readonly<Record<string, string>> }): RunResult {
+  const env = options.extra === undefined ? isolatedEnv(options.home) : isolatedEnv(options.home, options.extra);
+  if (process.platform === 'win32') {
+    const bin = join(consumer.globalPrefix, 'rulekeeper.cmd');
+    assert.ok(existsSync(bin), `globally installed CLI missing at ${bin}`);
+    const cli = join(consumer.globalModules, PACKAGE_NAME, 'dist', 'cli.js');
+    return run(process.execPath, [cli, ...args], { cwd: options.cwd, env });
+  }
+  const bin = join(consumer.globalPrefix, 'bin', 'rulekeeper');
+  assert.ok(existsSync(bin), `globally installed CLI missing at ${bin}`);
   return run(bin, args, { cwd: options.cwd, env });
 }
 
@@ -407,6 +568,13 @@ before(async () => {
   const cleanHome = join(root, 'clean-home');
   const ruleHome = join(root, 'rule-home');
   const gitless = join(root, 'gitless');
+  const globalPrefix = join(root, 'global-prefix');
+  const globalApp = join(root, 'global-app');
+  const globalHome = join(root, 'global-home');
+  const localPreferenceApp = join(root, 'local-preference-app');
+  const globalIsolationApp = join(root, 'global-isolation-app');
+  const missingImportApp = join(root, 'missing-import-app');
+  const missingHome = join(root, 'missing-home');
 
   await mkdir(app, { recursive: true });
   await mkdir(join(app, '.rulekeeper', 'helpers'), { recursive: true });
@@ -415,6 +583,17 @@ before(async () => {
   await mkdir(join(ruleHome, '.rulekeeper'), { recursive: true });
   await mkdir(join(gitless, 'src'), { recursive: true });
   await mkdir(cleanHome, { recursive: true });
+  await mkdir(globalPrefix, { recursive: true });
+  await mkdir(join(globalApp, '.rulekeeper'), { recursive: true });
+  await mkdir(join(globalHome, '.rulekeeper'), { recursive: true });
+  await mkdir(join(localPreferenceApp, '.rulekeeper'), { recursive: true });
+  await mkdir(join(globalIsolationApp, '.rulekeeper', 'helpers'), { recursive: true });
+  await mkdir(join(globalIsolationApp, '.rulekeeper', 'node_modules', 'rulekeeper-fixture-borrower'), { recursive: true });
+  await mkdir(join(missingImportApp, '.rulekeeper'), { recursive: true });
+  await mkdir(missingHome, { recursive: true });
+
+  await writeLocalYamlPackage(join(localPreferenceApp, '.rulekeeper', 'node_modules', 'yaml'));
+  await writeLocalYamlPackage(join(missingImportApp, '.rulekeeper', 'node_modules', 'yaml'));
 
   const relativeTarball = relative(app, tarball).split(sep).join('/');
   await writeFile(
@@ -431,10 +610,67 @@ before(async () => {
   await writeFile(join(app, 'probe.mjs'), PROBE_SOURCE);
   await writeFile(join(homeApp, 'src', 'thing.ts'), HEADERLESS_SOURCE);
   await writeFile(join(gitless, 'src', 'bare.ts'), HEADERLESS_SOURCE);
+  await writeFile(join(globalApp, '.rulekeeper', 'global.rule.ts'), GLOBAL_RULE_SOURCE);
+  await writeFile(join(globalHome, '.rulekeeper', 'home.global.rule.mjs'), GLOBAL_HOME_RULE_SOURCE);
+  await writeFile(join(localPreferenceApp, '.rulekeeper', 'preference.rule.mjs'), LOCAL_PREFERENCE_RULE_SOURCE);
+  await writeFile(join(globalIsolationApp, '.rulekeeper', 'direct-yaml.rule.mjs'), DIRECT_YAML_RULE_SOURCE);
+  await writeFile(join(globalIsolationApp, '.rulekeeper', 'required-yaml.rule.mjs'), REQUIRED_YAML_RULE_SOURCE);
+  await writeFile(join(globalIsolationApp, '.rulekeeper', 'helpers', 'required-yaml.js'), REQUIRED_YAML_HELPER_SOURCE);
+  await writeFile(join(globalIsolationApp, '.rulekeeper', 'borrower.rule.mjs'), BORROWER_RULE_SOURCE);
+  await writeFile(
+    join(globalIsolationApp, '.rulekeeper', 'node_modules', 'rulekeeper-fixture-borrower', 'package.json'),
+    BORROWER_PACKAGE_JSON,
+  );
+  await writeFile(
+    join(globalIsolationApp, '.rulekeeper', 'node_modules', 'rulekeeper-fixture-borrower', 'index.js'),
+    BORROWER_INDEX_SOURCE,
+  );
+  await writeFile(join(missingImportApp, '.rulekeeper', 'broken.rule.mjs'), MISSING_IMPORT_RULE_SOURCE);
+  await writeFile(join(missingImportApp, '.rulekeeper', 'missing-relative.rule.mjs'), MISSING_RELATIVE_RULE_SOURCE);
+  await writeFile(join(missingImportApp, '.rulekeeper', 'restricted.rule.mjs'), EXPORT_RESTRICTION_RULE_SOURCE);
+  assert.equal(
+    existsSync(join(globalIsolationApp, '.rulekeeper', 'node_modules', 'yaml')),
+    false,
+    'the isolation fixture must not carry a local yaml package',
+  );
+  for (const project of [globalApp, localPreferenceApp, globalIsolationApp, missingImportApp]) {
+    await writeFile(
+      join(project, 'package.json'),
+      `${JSON.stringify({ name: 'rulekeeper-global-fixture', private: true, type: 'module' }, null, 2)}\n`,
+    );
+  }
 
   const install = runNpm(['install', '--no-audit', '--no-fund', '--prefer-offline', '--loglevel', 'error'], app, DEFAULT_TIMEOUT);
   assert.equal(install.status, 0, `npm install failed: ${install.stderr}`);
   assert.ok(existsSync(join(app, 'node_modules', PACKAGE_NAME, 'dist', 'index.js')), 'installed package is missing dist/index.js');
+
+  const installGlobal = runNpm(
+    ['install', '--global', '--prefix', globalPrefix, '--no-audit', '--no-fund', '--prefer-offline', '--loglevel', 'error', tarball],
+    root,
+    DEFAULT_TIMEOUT,
+  );
+  assert.equal(installGlobal.status, 0, `npm install --global failed: ${installGlobal.stderr}`);
+  const globalRoot = runNpm(['root', '--global', '--prefix', globalPrefix], root);
+  assert.equal(globalRoot.status, 0, `npm root --global failed: ${globalRoot.stderr}`);
+  const globalModules = globalRoot.stdout.trim();
+  assert.ok(globalModules !== '', 'npm root --global printed no path');
+  assert.ok(
+    existsSync(join(globalModules, PACKAGE_NAME, 'dist', 'cli.js')),
+    `globally installed package missing under ${globalModules}`,
+  );
+  const globalSdkEntry = join(globalModules, PACKAGE_NAME, 'dist', 'index.js');
+  const globalSdkYaml = createRequire(pathToFileURL(globalSdkEntry)).resolve('yaml');
+  assert.ok(globalSdkYaml.startsWith(globalModules), `global SDK must resolve yaml from its installation: ${globalSdkYaml}`);
+
+  const localSdk = join(localPreferenceApp, '.rulekeeper', 'node_modules', PACKAGE_NAME);
+  await cp(join(globalModules, PACKAGE_NAME), localSdk, { recursive: true, dereference: true });
+  const localIndex = join(localSdk, 'dist', 'index.js');
+  const localSdkYaml = createRequire(pathToFileURL(localIndex)).resolve('yaml');
+  assert.ok(localSdkYaml.startsWith(localSdk), `project-local SDK must resolve yaml from its own tree: ${localSdkYaml}`);
+  await writeFile(
+    localIndex,
+    `${await readFile(localIndex, 'utf8')}\nexport const FIXTURE_LOCAL_MARKER = 'fixture-local-copy';\n`,
+  );
 
   await mkdir(dirname(vendorSdk), { recursive: true });
   await cp(join(app, 'node_modules', PACKAGE_NAME), vendorSdk, { recursive: true, dereference: true });
@@ -454,6 +690,14 @@ before(async () => {
     gitless,
     tarball,
     packedPaths: packEntry.files.map((file) => file.path),
+    globalPrefix,
+    globalModules,
+    globalApp,
+    globalHome,
+    localPreferenceApp,
+    globalIsolationApp,
+    missingImportApp,
+    missingHome,
   };
 });
 
@@ -688,6 +932,100 @@ test('the installed CLI runs in a project without Git or repository metadata', (
   const entry = reportFor(parseReport(runResult.stdout), 'license');
   assert.equal(entry.evaluations[0]?.subject.filepath, 'src/bare.ts');
   assert.equal(entry.evaluations[0]?.result.status, 'violation');
+});
+
+test('the globally installed CLI loads rules without local dependencies while the SDK resolves its own YAML parser', () => {
+  assert.equal(existsSync(join(consumer.globalApp, 'node_modules')), false, 'the global fixture project must not carry local dependencies');
+  const result = runGlobalCli(['test', '--concurrency', '2'], {
+    cwd: consumer.globalApp,
+    home: consumer.globalHome,
+    extra: { DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  for (const name of ['global pass', 'global violation', 'home global pass', 'home global violation']) {
+    assert.ok(result.stdout.includes(name), `${name} missing from output: ${result.stdout}`);
+  }
+  assert.match(result.stdout, /4 passed, 0 failed/);
+});
+
+test('the globally installed CLI prefers the project-local SDK while that SDK resolves dependencies from its own tree', () => {
+  const result = runGlobalCli(['test'], {
+    cwd: consumer.localPreferenceApp,
+    home: consumer.missingHome,
+    extra: { DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /project-local SDK and dependency case/);
+  assert.match(result.stdout, /project-local SDK parses YAML with its own dependency/);
+  assert.match(result.stdout, /2 passed, 0 failed/);
+});
+
+test('the globally installed CLI does not resolve direct bare rule imports from its own packages', () => {
+  const result = runGlobalCli(['validate', '.rulekeeper/direct-yaml.rule.mjs'], {
+    cwd: consumer.globalIsolationApp,
+    home: consumer.missingHome,
+    extra: { DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
+  });
+  assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stderr, /['\"]yaml['\"]/);
+  assert.ok(!result.stderr.includes(consumer.globalModules), `rule imports must not reach the CLI installation: ${result.stderr}`);
+});
+
+test('the globally installed CLI does not resolve bare helper require calls from its own packages', () => {
+  const result = runGlobalCli(['validate', '.rulekeeper/required-yaml.rule.mjs'], {
+    cwd: consumer.globalIsolationApp,
+    home: consumer.missingHome,
+    extra: { DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
+  });
+  assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stderr, /['\"]yaml['\"]/);
+  assert.ok(!result.stderr.includes(consumer.globalModules), `helper require calls must not reach the CLI installation: ${result.stderr}`);
+});
+
+test('the globally installed CLI does not resolve packages required by user dependencies', () => {
+  const result = runGlobalCli(['validate', '.rulekeeper/borrower.rule.mjs'], {
+    cwd: consumer.globalIsolationApp,
+    home: consumer.missingHome,
+    extra: { DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
+  });
+  assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stderr, /['\"]yaml['\"]/);
+  assert.ok(!result.stderr.includes(consumer.globalModules), `user dependencies must not reach the CLI installation: ${result.stderr}`);
+});
+
+test('the globally installed CLI reports bare imports missing from the rule location as failures', () => {
+  const result = runGlobalCli(['validate', '.rulekeeper/broken.rule.mjs'], {
+    cwd: consumer.missingImportApp,
+    home: consumer.missingHome,
+    extra: { DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
+  });
+  assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stderr, /@alex-dbs\/rulekeeper-fixture-missing/);
+  assert.ok(!result.stderr.includes(consumer.globalModules), `missing imports must not reach the CLI installation: ${result.stderr}`);
+});
+
+test('the globally installed CLI keeps missing relative rule imports relative to the rule file', () => {
+  const cliRules = join(consumer.globalModules, PACKAGE_NAME, 'dist', 'adapter', 'filesystem', 'rules.js');
+  assert.ok(existsSync(cliRules), `relative-boundary regression fixture missing at ${cliRules}`);
+  const result = runGlobalCli(['validate', '.rulekeeper/missing-relative.rule.mjs'], {
+    cwd: consumer.missingImportApp,
+    home: consumer.missingHome,
+    extra: { DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
+  });
+  assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
+  assert.ok(
+    result.stderr.includes(join(consumer.missingImportApp, '.rulekeeper', 'rules.js')),
+    `${result.stderr}\nrelative import must resolve beside the rule, not inside the CLI package`,
+  );
+});
+
+test('the globally installed CLI enforces project-local package export maps for rule imports', () => {
+  const result = runGlobalCli(['validate', '.rulekeeper/restricted.rule.mjs'], {
+    cwd: consumer.missingImportApp,
+    home: consumer.missingHome,
+    extra: { DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
+  });
+  assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
 });
 
 test('no statistics database or rule cache is created under the isolated home', async () => {
