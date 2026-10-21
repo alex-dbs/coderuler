@@ -1,5 +1,4 @@
 import { lstat, readdir, realpath } from 'node:fs/promises';
-import { registerHooks } from 'node:module';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -7,28 +6,19 @@ import { pathToFileURL } from 'node:url';
 import type { LoadedRule, RuleLoader, RuleSelection } from '../../app/ports.js';
 import type { Rule } from '../../app/rule.js';
 import { isRecord, isRuleBranded, validateRule } from '../../app/validate.js';
+import { createRuleDependencyManager, dependencyDirectory } from './dependencies.js';
+import type { PreparedRuleDependencies, RuleDependencyManager } from './dependencies.js';
+import { assertRuleDependenciesCurrent, getRuleDependencies, registerRuleDependencies } from './rule-resolution.js';
 
 const RULE_DIR = '.rulekeeper';
 const RULE_MODULE = /\.rule\.(?:ts|mts|js|mjs)$/;
 const PATH_LIKE = /[/\\]|\.rule\.(?:ts|mts|js|mjs)$/;
 const ARCHIVED_DIRECTORY = 'old';
-const SDK_ENTRY = new URL('../../index.js', import.meta.url).href;
-
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier !== '@alex-dbs/rulekeeper') return nextResolve(specifier, context);
-    try {
-      return nextResolve(specifier, context);
-    } catch (error) {
-      const resolutionError = error as NodeJS.ErrnoException;
-      if (resolutionError.code !== 'ERR_MODULE_NOT_FOUND') throw error;
-      return nextResolve(SDK_ENTRY, context);
-    }
-  },
-});
 
 export interface RuleLoaderOptions {
   readonly home?: string;
+  readonly dependencies?: RuleDependencyManager;
+  readonly preparedDependencies?: PreparedRuleDependencies;
 }
 
 export interface ResolvedRuleSelector {
@@ -55,7 +45,7 @@ async function collectModules(directory: string, files: string[]): Promise<void>
     if (entry.isSymbolicLink()) continue;
     const child = join(directory, entry.name);
     if (entry.isDirectory()) {
-      if (entry.name === ARCHIVED_DIRECTORY) continue;
+      if (entry.name === ARCHIVED_DIRECTORY || entry.name === 'node_modules') continue;
       await collectModules(child, files);
     } else if (entry.isFile() && RULE_MODULE.test(entry.name)) {
       files.push(child);
@@ -204,10 +194,27 @@ async function loadRule(modulePath: string): Promise<Rule<unknown>> {
   return validateRule(instance, modulePath);
 }
 
-async function loadEntries(entries: readonly RuleModule[]): Promise<readonly LoadedRule[]> {
+async function loadEntries(
+  entries: readonly RuleModule[],
+  dependencies: RuleDependencyManager,
+  preparedDependencies: PreparedRuleDependencies | undefined,
+): Promise<readonly LoadedRule[]> {
+  const prepared = new Map<string, PreparedRuleDependencies>();
+  for (const entry of entries) {
+    let context = preparedDependencies;
+    if (context === undefined) {
+      const directory = await dependencyDirectory(entry.modulePath);
+      context = prepared.get(directory) ?? await dependencies.prepare(directory);
+      prepared.set(directory, context);
+    }
+    registerRuleDependencies(entry.modulePath, context);
+  }
   const loaded: LoadedRule[] = [];
   for (const entry of entries) {
+    const context = getRuleDependencies(entry.modulePath)!;
+    assertRuleDependenciesCurrent(context);
     const rule = await loadRule(entry.modulePath);
+    assertRuleDependenciesCurrent(context);
     loaded.push({ name: entry.name, ruleFile: entry.modulePath, rule });
   }
   return loaded;
@@ -236,6 +243,7 @@ export async function resolveRuleSelector(
 
 export function createRuleLoader(options: RuleLoaderOptions = {}): RuleLoader {
   const home = options.home ?? homedir();
+  const dependencies = options.dependencies ?? createRuleDependencyManager();
   return {
     async load(selection: RuleSelection): Promise<readonly LoadedRule[]> {
       if (selection.explicit !== undefined && selection.name !== undefined) {
@@ -249,7 +257,7 @@ export function createRuleLoader(options: RuleLoaderOptions = {}): RuleLoader {
           modulePath,
         }));
         assertUniqueNames(entries);
-        return loadEntries(entries);
+        return loadEntries(entries, dependencies, options.preparedDependencies);
       }
       const discovered = await discover(roots);
       if (selection.name !== undefined) {
@@ -263,10 +271,10 @@ export function createRuleLoader(options: RuleLoaderOptions = {}): RuleLoader {
             matches.map((match) => match.modulePath),
           );
         }
-        return loadEntries(matches);
+        return loadEntries(matches, dependencies, options.preparedDependencies);
       }
       assertUniqueNames(discovered);
-      return loadEntries(discovered);
+      return loadEntries(discovered, dependencies, options.preparedDependencies);
     },
   };
 }

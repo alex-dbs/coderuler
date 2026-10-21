@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { after, test, type TestContext } from 'node:test';
-import { pathToFileURL } from 'node:url';
 
 import { createPullRequestCheckout, type PullRequestCheckout } from '../dist/adapter/github/pull-request.js';
 import { BASE_MESSAGE, commit, createPrFixture, git, interceptGithub, PR_NUMBER, PR_REPOSITORY, PR_TOKEN, PR_URL, type PrFixture } from './pr-support.ts';
@@ -22,10 +20,6 @@ function fixture(context: TestContext, label: string): PrFixture {
     if (previous === undefined) delete process.env.TMPDIR;
     else process.env.TMPDIR = previous;
   });
-  target.env.npm_config_offline = 'true';
-  target.env.npm_config_registry = 'http://127.0.0.1:1';
-  target.env.npm_config_cache = join(target.root, 'npm-cache');
-  target.env.npm_config_update_notifier = 'false';
   return target;
 }
 
@@ -64,49 +58,6 @@ function snapshot(target: PrFixture) {
 function cleanCaller(target: PrFixture): void {
   git(target, 'reset', '--hard', 'HEAD');
   rmSync(join(target.cwd, '.rulekeeper/caller-only.rule.ts'));
-}
-
-function publishMain(target: PrFixture): void {
-  commit(target, 'base dependency fixture');
-  git(target, 'push', target.remote, 'main:refs/heads/main');
-}
-
-function dependencyFixture(target: PrFixture, lock: 'locked' | 'unlocked' | 'shrinkwrap') {
-  cleanCaller(target);
-  git(target, 'checkout', 'main');
-  const marker = join(target.root, 'lifecycle-ran');
-  const lifecycle = `node -e ${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'unsafe')`)}`;
-  writeFile(join(target.cwd, 'deps/policy-helper/package.json'), JSON.stringify({
-    name: 'policy-helper', version: '1.0.0', type: 'module', exports: './index.js',
-    scripts: { preinstall: lifecycle, install: lifecycle, postinstall: lifecycle, prepare: lifecycle },
-  }));
-  writeFile(join(target.cwd, 'deps/policy-helper/index.js'), `export default 'Installed committed-base development dependency';\n`);
-  writeFile(join(target.cwd, 'package.json'), JSON.stringify({
-    name: 'committed-base-policy', private: true, type: 'module',
-    devDependencies: { 'policy-helper': 'file:deps/policy-helper' },
-    scripts: { preinstall: lifecycle, install: lifecycle, postinstall: lifecycle, prepare: lifecycle },
-  }));
-  writeFile(join(target.cwd, 'policy/installed-helper.mjs'), `import value from 'policy-helper'; export default value;\n`);
-  if (lock !== 'unlocked') {
-    execFileSync('npm', ['install', '--package-lock-only', '--include=dev', '--ignore-scripts', '--no-audit', '--no-fund'], {
-      cwd: target.cwd, env: target.env, stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    if (lock === 'shrinkwrap') {
-      writeFile(join(target.cwd, 'npm-shrinkwrap.json'), readFileSync(join(target.cwd, 'package-lock.json'), 'utf8'));
-      rmSync(join(target.cwd, 'package-lock.json'));
-    }
-  }
-  publishMain(target);
-  git(target, 'checkout', 'feature/pr-fixture');
-  writeFile(join(target.cwd, 'package.json'), JSON.stringify({
-    name: 'untrusted-pr-head', private: true,
-    dependencies: { 'head-must-not-install': 'file:missing-head-dependency' },
-    scripts: { preinstall: lifecycle, install: lifecycle, postinstall: lifecycle },
-  }));
-  const head = commit(target, 'head dependencies must never be installed');
-  git(target, 'push', target.remote, `${head}:refs/pull/42/head`);
-  git(target, 'checkout', 'main');
-  return marker;
 }
 
 test('numeric SSH origin materializes complete committed trees and only merge-base changes', async context => {
@@ -347,7 +298,7 @@ test('ordinary credential configuration survives both command-scope Git config c
   }
 });
 
-test('base and invocation-local core.worktree config are checked before checkout or installation', async context => {
+test('base and invocation-local core.worktree config are checked before checkout', async context => {
   await context.test('invocation local config', async child => {
     const target = fixture(child, 'local-worktree');
     await interceptGithub(child, target);
@@ -378,92 +329,5 @@ test('base and invocation-local core.worktree config are checked before checkout
     await assert.rejects(prepare(target)('42'), /core\.worktree.*unset/);
     assertClean(target);
     assert.deepEqual(snapshot(target), before);
-  });
-});
-
-test('locked, unlocked and shrinkwrap base installs include offline dev dependencies without lifecycle scripts or head installation', async context => {
-  for (const lock of ['locked', 'unlocked', 'shrinkwrap'] as const) {
-    await context.test(lock, async child => {
-      const target = fixture(child, `dependencies-${lock}`);
-      const marker = dependencyFixture(target, lock);
-      await interceptGithub(child, target);
-      const before = snapshot(target);
-      const result = await prepare(target, target.cwd, { ...target.env, NODE_ENV: 'production' })('42');
-      child.after(() => result.cleanup());
-      // The module lives in a newly allocated runtime-selected policy tree.
-      const imported = await import(pathToFileURL(join(result.rulesRoot, 'policy/installed-helper.mjs')).href);
-      assert.equal(imported.default, 'Installed committed-base development dependency');
-      assert.equal(existsSync(join(result.rulesRoot, 'node_modules/policy-helper')), true);
-      assert.equal(existsSync(join(result.root, 'node_modules')), false, 'never install dependencies in the PR head');
-      assert.equal(existsSync(marker), false, 'neither base-root nor dependency lifecycle scripts may run');
-      assert.equal(existsSync(join(result.rulesRoot, 'package-lock.json')), lock === 'locked', 'unlocked install must not generate a lockfile');
-      assert.equal(existsSync(join(result.rulesRoot, 'npm-shrinkwrap.json')), lock === 'shrinkwrap');
-      assert.deepEqual(snapshot(target), before);
-      await result.cleanup();
-      assertClean(target);
-    });
-  }
-});
-
-test('base without package.json skips npm while retaining its complete policy tree', async context => {
-  const target = fixture(context, 'no-manifest');
-  cleanCaller(target);
-  git(target, 'checkout', 'main');
-  rmSync(join(target.cwd, 'package.json'));
-  publishMain(target);
-  await interceptGithub(context, target);
-  const bin = join(target.root, 'git-only');
-  mkdirSync(bin);
-  const gitPath = execFileSync('/bin/sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
-  symlinkSync(gitPath, join(bin, 'git'));
-  const result = await prepare(target, target.cwd, { ...target.env, PATH: bin })('42');
-  context.after(() => result.cleanup());
-  assert.equal(existsSync(join(result.rulesRoot, 'package.json')), false);
-  assert.match(readFileSync(join(result.rulesRoot, 'policy/helper.ts'), 'utf8'), new RegExp(BASE_MESSAGE));
-  assert.deepEqual([...result.changedFiles].sort(), ['policy/helper.ts', 'src/changed.txt']);
-  await result.cleanup();
-  assertClean(target);
-});
-
-test('a stale committed lockfile fails without falling back to an unlocked install', async context => {
-  const target = fixture(context, 'locked-failure');
-  const marker = dependencyFixture(target, 'locked');
-  writeFile(join(target.cwd, 'package.json'), JSON.stringify({
-    name: 'committed-base-policy', private: true, type: 'module',
-    devDependencies: { 'policy-helper': 'file:deps/policy-helper', 'second-helper': 'file:deps/second-helper' },
-  }));
-  writeFile(join(target.cwd, 'deps/second-helper/package.json'), JSON.stringify({ name: 'second-helper', version: '1.0.0' }));
-  writeFile(join(target.cwd, 'deps/second-helper/index.js'), 'module.exports = 1;\n');
-  publishMain(target);
-  await interceptGithub(context, target);
-  const before = snapshot(target);
-  await assert.rejects(prepare(target)('42'), /npm|lock|install/i);
-  assert.equal(existsSync(marker), false);
-  assertClean(target);
-  assert.deepEqual(snapshot(target), before);
-});
-
-test('missing npm and invalid base manifests are preparation failures with complete cleanup', async context => {
-  await context.test('missing npm', async child => {
-    const target = fixture(child, 'missing-npm');
-    await interceptGithub(child, target);
-    const before = snapshot(target);
-    const bin = join(target.root, 'git-only');
-    mkdirSync(bin);
-    const gitPath = execFileSync('/bin/sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
-    symlinkSync(gitPath, join(bin, 'git'));
-    await assert.rejects(prepare(target, target.cwd, { ...target.env, PATH: bin })('42'), /npm|ENOENT/);
-    assertClean(target);
-    assert.deepEqual(snapshot(target), before);
-  });
-  await context.test('invalid manifest', async child => {
-    const target = fixture(child, 'invalid-manifest');
-    cleanCaller(target);
-    git(target, 'checkout', 'main');
-    writeFile(join(target.cwd, 'package.json'), '{ invalid JSON');
-    publishMain(target);
-    await interceptGithub(child, target);
-    await assert.rejects(prepare(target)('42'), /npm|JSON|install/i);
-    assertClean(target);
   });
 });

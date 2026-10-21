@@ -93,6 +93,11 @@ export interface CliServices {
     invocationCwd: string,
   ) => Promise<RuleSelectorResolution>;
   readonly manageSkill: (operation: 'install' | 'update', options: SkillOptions) => Promise<number>;
+  readonly manageDependencies: (
+    operation: 'add' | 'remove' | 'sync',
+    packages: readonly string[],
+    options: { readonly global?: boolean; readonly directory?: string },
+  ) => Promise<void>;
   readonly decisionResolver: (
     thresholdOverride?: number,
     pricingOverrides?: Partial<TokenPricing>,
@@ -263,6 +268,26 @@ export function createProgram(services: CliServices): Command {
     .action(async (options: SkillOptions) => {
       const status = await services.manageSkill('update', options);
       if (status !== EXIT_OK) throw new CliExit(status);
+    });
+
+  const dependencies = program
+    .command('deps')
+    .description('Manage the public npm packages declared by trusted rules');
+  const dependencyOptions = (command: Command): Command => command
+    .addOption(new Option('--global', 'manage home rules instead of project rules').conflicts('directory'))
+    .addOption(new Option('--directory <path>', 'manage a rule directory relative to the working directory').conflicts('global'));
+  for (const operation of ['add', 'remove'] as const) {
+    dependencyOptions(dependencies.command(operation))
+      .description(operation === 'add' ? 'Add or update packages and save exact locked versions' : 'Remove declared direct packages')
+      .argument(operation === 'add' ? '<packages...>' : '<names...>', 'public npm packages')
+      .action(async (packages: string[], options: { readonly global?: boolean; readonly directory?: string }) => {
+        await services.manageDependencies(operation, packages, options);
+      });
+  }
+  dependencyOptions(dependencies.command('sync'))
+    .description('Acquire locked packages and refresh SDK and dependency editor links')
+    .action(async (options: { readonly global?: boolean; readonly directory?: string }) => {
+      await services.manageDependencies('sync', [], options);
     });
 
   program

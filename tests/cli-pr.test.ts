@@ -1,12 +1,19 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { after, test, type TestContext } from 'node:test';
+import { pathToFileURL } from 'node:url';
 
 import { runProgram } from '../dist/adapter/cli/program.js';
 import { createRuleLoader } from '../dist/adapter/filesystem/rules.js';
 import { createServices } from '../dist/infra/runtime.js';
+import {
+  createDependencyFixture,
+  dependencyFixtureEnvironment,
+  POLICY_MESSAGE_V1,
+  type RegistryRequest,
+} from './dependency-support.ts';
 import {
   BASE_MESSAGE,
   GLOBAL_MESSAGE,
@@ -19,13 +26,16 @@ import {
   git,
   interceptGithub,
   policy,
+  startGithubFixture,
   type PrFixture,
   type RequestRecord,
 } from './pr-support.ts';
-import { createSandbox, parseCheckOutput, writeFile, type CheckReportShape, type Sandbox } from './support.ts';
+import { createSandbox, parseCheckOutput, runCli, writeFile, type CheckReportShape, type Sandbox } from './support.ts';
 
 const sandbox = createSandbox('rulekeeper-cli-pr-');
 after(() => sandbox.cleanup());
+const dependencyRegistry = createDependencyFixture(join(sandbox.root, 'dependency-registry'));
+let dependencyInvocation = 0;
 
 function fixture(context: TestContext, label: string): PrFixture {
   const target = createPrFixture(sandbox, label);
@@ -35,10 +45,6 @@ function fixture(context: TestContext, label: string): PrFixture {
     if (previous === undefined) delete process.env.TMPDIR;
     else process.env.TMPDIR = previous;
   });
-  target.env.npm_config_offline = 'true';
-  target.env.npm_config_registry = 'http://127.0.0.1:1';
-  target.env.npm_config_cache = join(target.root, 'npm-cache');
-  target.env.npm_config_update_notifier = 'false';
   return target;
 }
 
@@ -319,71 +325,196 @@ test('failed comment POST retains analysis and removes both checkout trees', asy
   assert.ok(posts(requests)[0]!.url.endsWith('/pulls/42/reviews'));
 });
 
-for (const locked of [true, false]) {
-  test(`${locked ? 'locked' : 'unlocked'} committed base dependencies execute offline as dev policy without lifecycle scripts`, async context => {
-    let target = fixture(context, `dependency-${locked}`);
-    const marker = join(target.root, 'lifecycle-ran');
-    const lifecycle = `node -e ${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'unsafe')`)}`;
-    target = publish(target, 'main', () => {
-      writeFile(join(target.cwd, 'deps/policy-helper/package.json'), JSON.stringify({
-        name: 'policy-helper', version: '1.0.0', type: 'module', exports: './index.js',
-        scripts: { preinstall: lifecycle, install: lifecycle, postinstall: lifecycle, prepare: lifecycle },
-      }));
-      writeFile(join(target.cwd, 'deps/policy-helper/index.js'), `export default 'Offline committed-base dependency policy';\n`);
-      writeFile(join(target.cwd, 'package.json'), JSON.stringify({
-        name: 'trusted-base', private: true, type: 'module',
-        devDependencies: { 'policy-helper': 'file:deps/policy-helper' },
-        scripts: { preinstall: lifecycle, install: lifecycle, postinstall: lifecycle, prepare: lifecycle },
-      }));
-      writeFile(join(target.cwd, '.rulekeeper/base.rule.ts'), policy(
-        `() => violation(message)`, `import message from 'policy-helper';`,
-      ));
-      if (locked) {
-        execFileSync('npm', ['install', '--package-lock-only', '--include=dev', '--ignore-scripts', '--no-audit', '--no-fund'], {
-          cwd: target.cwd, env: target.env, stdio: ['ignore', 'pipe', 'pipe'],
-        });
-      }
-    });
-    target = publish(target, 'feature/pr-fixture', () => {
-      writeFile(join(target.cwd, 'package.json'), JSON.stringify({
-        name: 'untrusted-head', private: true,
-        dependencies: { 'never-install-head': 'file:absent-head-package' },
-        scripts: { preinstall: lifecycle, install: lifecycle },
-      }));
-    });
-    const requests = await interceptGithub(context, target);
-    const result = await check(target, ['--pr', '42'], { env: { NODE_ENV: 'production' } });
-    assert.equal(result.status, 1, result.stderr);
-    assert.deepEqual(evaluations(parseCheckOutput(result, 'installed policy')), [
-      { rule: 'base', filepath: 'src/changed.txt', status: 'violation', message: 'Offline committed-base dependency policy' },
-      { rule: 'global', filepath: 'src/changed.txt', status: 'violation', message: GLOBAL_MESSAGE },
-    ]);
-    assert.equal(existsSync(marker), false);
-    assert.deepEqual(posts(requests), []);
+function policyLock(version: '1.0.0' | '2.0.0', malicious = false): string {
+  const names = ['fixture-policy', 'fixture-shared', ...(malicious ? ['fixture-install'] : [])];
+  const direct = { 'fixture-policy': version, ...(malicious ? { 'fixture-install': '1.0.0' } : {}) };
+  const packages: Record<string, unknown> = {
+    '': { name: 'rulekeeper-rules', version: '1.0.0', dependencies: direct },
+  };
+  for (const name of names) {
+    const artifact = dependencyRegistry.artifacts.find(candidate => candidate.manifest.name === name
+      && candidate.manifest.version === (name === 'fixture-install' ? '1.0.0' : version));
+    assert.ok(artifact);
+    packages[`node_modules/${name}`] = {
+      version: artifact.manifest.version,
+      resolved: artifact.tarball,
+      integrity: artifact.integrity,
+      ...(artifact.manifest.dependencies === undefined ? {} : { dependencies: artifact.manifest.dependencies }),
+      ...(name === 'fixture-install' ? { hasInstallScript: true } : {}),
+    };
+  }
+  return `${JSON.stringify({ name: 'rulekeeper-rules', version: '1.0.0', lockfileVersion: 3, requires: true, packages }, null, 2)}\n`;
+}
+
+function committedDependencies(target: PrFixture, manifest: 'malformed' | 'unrelated' = 'unrelated'): PrFixture {
+  target = publish(target, 'main', () => {
+    writeFile(join(target.cwd, 'package.json'), manifest === 'malformed' ? '{ invalid application JSON' : JSON.stringify({
+      name: 'unrelated-base-application', private: true,
+      dependencies: { 'never-install-base': 'file:missing-base-package' },
+      scripts: { install: 'exit 1' },
+    }));
+    writeFile(join(target.cwd, 'package-lock.json'), '{ stale application lock');
+    writeFile(join(target.cwd, 'npm-shrinkwrap.json'), '{ malformed application shrinkwrap');
+    // Rules have their own ESM boundary; Node need not parse the unrelated application manifest.
+    writeFile(join(target.cwd, '.rulekeeper/package.json'), '{"type":"module"}');
+    writeFile(join(target.cwd, '.rulekeeper/rulekeeper.lock'), policyLock('1.0.0'));
+    writeFile(join(target.cwd, '.rulekeeper/base.rule.ts'), policy(
+      `subject => subject.source.includes('BAD') ? violation(message) : pass()`,
+      `import { message } from 'fixture-policy';
+import assert from 'node:assert/strict';
+import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+const installed = new URL('./node_modules/', import.meta.url);
+assert.equal(lstatSync(installed).isDirectory(), true);
+assert.equal(lstatSync(installed).isSymbolicLink(), false);
+for (const name of ['fixture-policy', 'fixture-shared']) {
+  const location = new URL(name, installed);
+  assert.equal(lstatSync(location).isDirectory(), true);
+  assert.equal(lstatSync(location).isSymbolicLink(), false);
+}
+const marker = JSON.parse(readFileSync(new URL('.rulekeeper-install.json', installed), 'utf8'));
+assert.equal(marker.version, 1);
+assert.match(marker.key, /^[a-f0-9]{64}$/);
+assert.ok(marker.installedLocations.includes('node_modules/fixture-policy'));
+assert.ok(marker.installedLocations.includes('node_modules/fixture-shared'));
+assert.equal(
+  realpathSync(new URL(import.meta.resolve('fixture-policy'))),
+  realpathSync(new URL('fixture-policy/index.js', installed)),
+);
+assert.equal(readFileSync(new URL('./package.json', import.meta.url), 'utf8'), '{"type":"module"}');
+assert.equal(existsSync(new URL('./package-lock.json', import.meta.url)), false);`,
+    ));
+  });
+  return publish(target, 'feature/pr-fixture', () => {
+    writeFile(join(target.cwd, '.rulekeeper/rulekeeper.lock'), policyLock('2.0.0', true));
+    writeFile(join(target.cwd, 'package.json'), JSON.stringify({
+      name: 'untrusted-head',
+      dependencies: { 'never-install-head': 'file:missing-head-package' },
+      scripts: { install: 'exit 1' },
+    }));
   });
 }
 
-test('npm installation and committed-policy import failures are CLI errors, never global-only fallbacks', async context => {
-  for (const failure of ['install', 'import'] as const) {
+async function checkWithDependencies(
+  context: TestContext,
+  target: PrFixture,
+  mode: 'tarballs' | 'offline' = 'tarballs',
+  args: readonly string[] = [],
+) {
+  const api = await startGithubFixture(target);
+  context.after(() => api.close());
+  const requestLog = join(target.root, `dependency-requests-${dependencyInvocation++}.jsonl`);
+  const preload = writeFile(join(target.root, 'pr-transport.mjs'), `
+import nock from ${JSON.stringify(import.meta.resolve('nock'))};
+const originalFetch = globalThis.fetch;
+globalThis.fetch = (input, init) => {
+  const url = new URL(input instanceof Request ? input.url : input.toString());
+  if (url.origin !== 'https://api.github.com') throw new Error('Unexpected GitHub API origin: ' + url.origin);
+  nock.enableNetConnect('127.0.0.1');
+  return originalFetch(${JSON.stringify(api.origin)} + url.pathname + url.search, init);
+};
+`);
+  const bin = join(target.root, 'git-only');
+  if (!existsSync(bin)) {
+    mkdirSync(bin);
+    const gitPath = execFileSync('/bin/sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+    symlinkSync(gitPath, join(bin, 'git'));
+  }
+  const before = callerSnapshot(target);
+  const result = await runCli(['check', '--pr', '42', '--json', '--output-all', ...args], target, {
+    ...dependencyFixtureEnvironment(dependencyRegistry, {
+      mode, requestLog, nodeOptions: `--import=${JSON.stringify(pathToFileURL(preload).href)}`,
+    }),
+    RK_DEPENDENCY_CACHE: join(target.root, 'rule-dependency-cache'),
+    RK_DEPENDENCY_SCRIPT_MARKER: join(target.root, 'lifecycle-ran'),
+    PATH: bin,
+    NODE_ENV: 'production',
+  });
+  assert.deepEqual(callerSnapshot(target), before, 'PR acquisition must preserve all caller files and Git state');
+  assertClean(target);
+  const dependencyRequests = existsSync(requestLog)
+    ? readFileSync(requestLog, 'utf8').split('\n').filter(Boolean)
+      .map(line => JSON.parse(line) as RegistryRequest)
+      // Nock also records allowed loopback GitHub transport as unmatched traffic.
+      .filter(request => request.kind !== 'unmatched' || !request.path.startsWith(`${api.origin}/`))
+    : [];
+  return { ...result, dependencyRequests, githubRequests: api.requests };
+}
+
+for (const manifest of ['malformed', 'unrelated'] as const) {
+  test(`PR CLI installs real packages only beside committed base policy with ${manifest} application metadata and no npm`, async context => {
+    const target = committedDependencies(fixture(context, `managed-${manifest}`), manifest);
+    const result = await checkWithDependencies(context, target);
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.stderr, '');
+    assert.deepEqual(evaluations(parseCheckOutput(result, 'committed managed base policy')), [
+      { rule: 'base', filepath: 'src/changed.txt', status: 'violation', message: POLICY_MESSAGE_V1 },
+      { rule: 'global', filepath: 'src/changed.txt', status: 'violation', message: GLOBAL_MESSAGE },
+    ]);
+    const [base] = parseCheckOutput(result, 'installed base checkout cleanup');
+    assert.ok(base);
+    assert.equal(existsSync(dirname(base.ruleFile)), false, 'temporary base policy and its installed node_modules must be removed together');
+    assert.deepEqual(readdirSync(join(target.root, 'rule-dependency-cache')), ['tarballs'], 'only downloaded artifacts persist outside the removed checkout');
+    assert.deepEqual([...result.dependencyRequests].sort((left, right) => left.path.localeCompare(right.path)), [
+      { kind: 'tarball', path: '/fixture-policy/-/fixture-policy-1.0.0.tgz' },
+      { kind: 'tarball', path: '/fixture-shared/-/fixture-shared-1.0.0.tgz' },
+    ]);
+    assert.deepEqual(posts(result.githubRequests), []);
+    assert.equal(existsSync(join(target.root, 'lifecycle-ran')), false);
+    const cached = await checkWithDependencies(context, target, 'offline');
+    assert.equal(cached.status, 1, cached.stderr);
+    const cachedReports = parseCheckOutput(cached, 'base policy reinstalled from downloaded artifacts');
+    assert.deepEqual(evaluations(cachedReports).map(item => item.message), [POLICY_MESSAGE_V1, GLOBAL_MESSAGE]);
+    assert.equal(existsSync(dirname(cachedReports[0]!.ruleFile)), false);
+    assert.deepEqual(cached.dependencyRequests, []);
+  });
+}
+
+test('invalid base locks, unavailable locked packages and imports fail without global-only fallback or comments', async context => {
+  for (const failure of ['lock', 'offline', 'unsafe', 'import'] as const) {
     await context.test(failure, async child => {
-      let target = fixture(child, `${failure}-failure`);
+      let target = committedDependencies(fixture(child, `managed-${failure}`));
       target = publish(target, 'main', () => {
-        if (failure === 'install') {
-          writeFile(join(target.cwd, 'package.json'), '{"name":');
-        } else {
+        if (failure === 'lock') {
+          writeFile(join(target.cwd, '.rulekeeper/rulekeeper.lock'), '{ invalid rule lock');
+        } else if (failure === 'unsafe') {
+          writeFile(join(target.cwd, '.rulekeeper/rulekeeper.lock'), policyLock('1.0.0', true));
+        } else if (failure === 'import') {
           writeFile(join(target.cwd, '.rulekeeper/base.rule.ts'), policy(
             `() => violation(message)`, `import message from '../policy/missing-helper.ts';`,
           ));
+        } else {
+          writeFile(join(target.cwd, 'unrelated-base.txt'), 'Keep the reviewed locked policy\n');
         }
       });
-      const requests = await interceptGithub(child, target);
-      const result = await check(target, ['--pr', '42', '--auto-comment']);
+      const result = await checkWithDependencies(child, target, failure === 'offline' ? 'offline' : 'tarballs', ['--auto-comment']);
       assert.equal(result.status, 2);
       assert.equal(result.stdout, '');
-      assert.match(result.stderr, failure === 'install' ? /npm|install|ENOENT/i : /missing-helper|import|resolve/i);
-      assert.deepEqual(posts(requests), []);
+      assert.match(result.stderr, failure === 'lock' ? /rulekeeper\.lock|JSON|lock/i
+        : failure === 'offline' ? /fixture-policy|fixture-shared|network|cache|request/i
+          : failure === 'unsafe' ? /fixture-install|install script|lifecycle|unsupported/i : /missing-helper|import|resolve/i);
+      assert.deepEqual(posts(result.githubRequests), []);
+      assert.equal(existsSync(join(target.root, 'lifecycle-ran')), false);
+      if (failure === 'lock') assert.deepEqual(result.dependencyRequests, []);
+      assert.ok(result.dependencyRequests.every(request => !request.path.includes('2.0.0')
+        && (failure === 'unsafe' || !request.path.includes('fixture-install'))));
     });
   }
+});
+
+test('SDK-only committed base rules need neither rule lock nor application installation', async context => {
+  let target = fixture(context, 'sdk-only-no-install');
+  target = publish(target, 'main', () => {
+    writeFile(join(target.cwd, 'package.json'), '{ invalid unrelated application manifest');
+    writeFile(join(target.cwd, '.rulekeeper/package.json'), '{"type":"module"}');
+    writeFile(join(target.cwd, '.rulekeeper/base.rule.ts'), policy(
+      `subject => subject.source.includes('BAD') ? violation(${JSON.stringify(BASE_MESSAGE)}) : pass()`,
+    ));
+  });
+  const result = await checkWithDependencies(context, target, 'offline');
+  assert.equal(result.status, 1, result.stderr);
+  assert.deepEqual(evaluations(parseCheckOutput(result, 'SDK-only base')).map(item => item.message), [BASE_MESSAGE, GLOBAL_MESSAGE]);
+  assert.deepEqual(result.dependencyRequests, []);
+  assert.deepEqual(posts(result.githubRequests), []);
 });
 
 function callerSnapshot(target: Sandbox) {
