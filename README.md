@@ -1,4 +1,3 @@
-# Rulekeeper
 <p align="center">
   <img src="rulekeeper-icon.webp" alt="Rulekeeper shield logo" width="144">
 </p>
@@ -9,7 +8,7 @@ Write deterministic rules in TypeScript (or JavaScript). When a policy needs jud
 
 ## Install
 
-Rulekeeper requires Node.js 24 or later. Git is required only when you use `check --diff`.
+Rulekeeper requires Node.js 24.15+, or Node.js 26+. Git is required for `check --diff` and `check --pr`.
 
 Install the CLI globally:
 
@@ -20,11 +19,7 @@ rulekeeper --help
 
 The npm package is scoped. The command is `rulekeeper`. A global installation can load rules without a project-local dependency.
 
-Node resolves dependencies relative to the importing module. Rulekeeper and its dependencies use their own installed dependency trees. Your rules and helpers do not borrow arbitrary packages from Rulekeeper.
-
-Only missing ESM imports of `@alex-dbs/rulekeeper` fall back to the running Rulekeeper's public API. Normal local resolution keeps priority. This works for home rules and `rulekeeper test` workers. Other missing packages fail normally. Relative file imports and package export restrictions remain unchanged.
-
-For TypeScript editor support and a project-specific version, install it locally:
+For a project-specific CLI version, install it locally:
 
 ```sh
 npm install --save-dev @alex-dbs/rulekeeper
@@ -34,6 +29,33 @@ npx rulekeeper --help
 The global installation is optional: with only the project-local dependency, run commands through `npx rulekeeper`.
 
 The npm install commands require the first release to be published. To run an unreleased checkout, use `npm ci`, `npm run build`, then `npm start -- --help`.
+
+## Rule dependencies
+
+Use ordinary JavaScript or TypeScript imports in rules. Add public npm packages without running `npm install` or changing application dependencies:
+
+```sh
+rulekeeper deps add bignumber.js@11.1.5
+rulekeeper deps add bignumber.js@latest
+rulekeeper deps remove bignumber.js
+rulekeeper deps sync
+```
+
+`deps add` accepts names, versions, ranges, and tags. It saves exact direct versions and the complete resolved graph in `.rulekeeper/rulekeeper.lock`. To update a package, run `deps add` with a version or tag.
+
+Add confirmations report that command's committed versions, even if another command changes the lock before the confirmation is printed.
+
+`deps sync` applies the committed graph, including removing owned packages when the lock is empty. SDK aliases in `package.json` imports use the same local-version preference as direct SDK imports.
+
+```text
+.rulekeeper/
+  .gitignore         # Keeps the local node_modules directory out of Git
+  rules/             # Your rule files (or put them directly in .rulekeeper)
+  rulekeeper.lock    # Exact direct dependencies and resolved graph
+  node_modules/      # Actual installed packages, not links to a shared tree
+```
+
+*It is basically a wrapper of npm, but configured to work with Rulekeeper*
 
 ## Write a rule
 
@@ -138,6 +160,7 @@ A scope is a file or selected part of a file. Rulekeeper validates selected rule
 - `filter(subject, context)` runs once per selected scope, before grouping. It defaults to `true`. Return `false` or `{ applies: false, reason: '...' }` to skip a scope. Put applicability and required-data checks here (null check for instance).
 - `group` controls which scopes the evaluator sees together. It defaults to `'scope'`, which evaluates each scope separately. Set it to `'file'`, `'folder'`, `'project'`, or `{ by: 'folder', level }`. `folder` groups scopes within each containing folder. `project` groups all selected scopes together. `level` is a nonpositive integer.
 - `check` is the required evaluator. Assign `regex(...)`, `ai(...)`, or a function as a property. Return `pass()` or `violation(message)` from a custom function.
+- `comment` optionally replaces each GitHub finding body for this rule when you use `--auto-comment` with `check --diff` or `check --pr`. Set a nonblank Markdown string, for example `comment = 'Follow [our policy](https://example.com/policy).'`. Without it, Rulekeeper uses the generated body. Inline locations do not change.
 
 The `settings` field sets AI options for one rule, such as its model, decision threshold, and input or output token prices.
 
@@ -151,8 +174,13 @@ The `settings` field sets AI options for one rule, such as its model, decision t
 - `check [path]` runs selected rules against a file or folder. It exits with status 1 when a rule reports a violation.
 - `inspect <rule> [folder]` shows how one rule selects and evaluates subjects.
 - `skill install` and `skill update` install or refresh Rulekeeper's rule-writing skill for coding agents.
+- `deps add`, `deps remove`, and `deps sync` manage locked rule packages and editor declarations.
 
 Without an explicit rule path, Rulekeeper discovers rules under `.rulekeeper` in the project and `~/.rulekeeper` in the user home directory. Use `--help` after a command for its options.
+
+Rule discovery skips Rulekeeper's temporary installation directories, not ordinary hidden rule folders.
+
+With `check --pr --auto-comment`, comments refer to the analyzed revision. If the PR head changes during analysis or comment planning, Rulekeeper refuses to post stale findings.
 
 ## AI decisions
 
@@ -184,7 +212,7 @@ Rules are TypeScript or JavaScript modules, but they can inspect text files in a
 
 ### Can I do anything with a rule?
 
-Rule modules are trusted Node.js code. You can write custom selectors, filters, and evaluators, and choose how Rulekeeper groups scopes. Rulekeeper does not sandbox rules, so run only code you trust.
+Rule modules are trusted Node.js code. You can write custom selectors, filters, and evaluators, and choose how Rulekeeper groups scopes. Rulekeeper does not sandbox rules, so run only code you trust. Managed resolution prevents accidental use of undeclared packages, not deliberate access through Node APIs, absolute paths, or custom loaders.
 
 ## Contributing
 
@@ -193,6 +221,7 @@ Before you contribute, install dependencies and run the project checks from the 
 ```sh
 npm ci
 npm test
+node dist/cli.js deps sync
 npm run typecheck
 ```
 

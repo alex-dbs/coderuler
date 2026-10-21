@@ -12,12 +12,16 @@ permissions:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ['24.15.0']
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
       - run: npm test -- --test-concurrency=4
+      - run: node dist/cli.js deps sync
       - run: npm run typecheck

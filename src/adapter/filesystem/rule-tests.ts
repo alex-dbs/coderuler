@@ -8,6 +8,7 @@ import type { LoadedRule } from '../../app/ports.js';
 import type { RuleTestCase, RuleTestResult } from '../../app/rule-tests.js';
 import { isRecord, validateJsonValue } from '../../app/validate.js';
 import type { RuleTestWorkerMessage, RuleTestWorkerRequest } from './rule-test-worker.js';
+import { getRuleDependencies } from './rule-resolution.js';
 
 // A JavaScript entry lets inherited tsx hooks resolve the source worker's .js import.
 const WORKER_MODULE = new URL('./rule-test-worker.js', import.meta.url);
@@ -150,7 +151,11 @@ async function runCase(
       if (performance.now() >= deadline) actual = 'timeout';
       else {
         active = session.current ??= new RuleTestWorkerSession();
-        actual = await active.run({ root, ruleFile: entry.ruleFile, files: example.files, ai }, deadline, failCase);
+        const dependencies = getRuleDependencies(entry.ruleFile);
+        actual = await active.run({
+          root, ruleFile: entry.ruleFile, files: example.files, ai,
+          ...(dependencies === undefined ? {} : { dependencies }),
+        }, deadline, failCase);
       }
     } catch (error) {
       throw failCase(error);

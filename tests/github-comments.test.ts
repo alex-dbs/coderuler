@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createServer, type IncomingHttpHeaders } from 'node:http';
 import { join } from 'node:path';
@@ -71,7 +71,7 @@ interface Reply {
   readonly headers?: Record<string, string>;
 }
 
-async function github(t: TestContext, replies: readonly Reply[]) {
+async function github(t: TestContext, replies: readonly Reply[], transport?: { origin: string }) {
   const requests: Request[] = [];
   const server = createServer(async (request, response) => {
     let body = '';
@@ -85,6 +85,7 @@ async function github(t: TestContext, replies: readonly Reply[]) {
   t.after(() => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
+  if (transport) transport.origin = `http://127.0.0.1:${address.port}`;
   const originalFetch = globalThis.fetch;
   t.mock.method(globalThis, 'fetch', (input: string | URL | globalThis.Request, init?: RequestInit) => {
     const url = new URL(input instanceof globalThis.Request ? input.url : input);
@@ -119,21 +120,22 @@ test('local HTTPS and SSH origins discover one open PR and post only unlocatable
   for (const origin of ['https://github.com/example/project.git', 'git@github.com:example/project.git', 'ssh://git@github.com/example/project.git', 'ssh://git@github.com:22/example/project.git']) {
     await t.test(origin, async t => {
       const repo = repository(origin);
-      const requests = await github(t, [{ body: [{ number: 23 }] }, detail, { body: [] }, posted]);
+      const requests = await github(t, [{ body: [{ number: 23 }] }, detail, { body: [] }, detail, posted]);
       await createGithubCommenter({ ...repo.env, GITHUB_TOKEN: token })(repo.cwd, fallback);
       assert.deepEqual(requests.map(request => [request.method, request.path]), [
         ['GET', '/repos/example/project/pulls?state=open&head=example%3Afeature%2Fcomment&per_page=2'],
         ['GET', '/repos/example/project/pulls/23'],
         ['GET', '/repos/example/project/pulls/23/files?per_page=100&page=1'],
+        ['GET', '/repos/example/project/pulls/23'],
         ['POST', '/repos/example/project/issues/23/comments'],
       ]);
-      assert.deepEqual(payload(requests[3]!), summary([body]));
+      assert.deepEqual(payload(requests[4]!), summary([body]));
       for (const request of requests) {
         assert.equal(request.headers.authorization, `Bearer ${token}`);
         assert.equal(request.headers.accept, 'application/vnd.github+json');
         assert.equal(request.headers['x-github-api-version'], '2022-11-28');
       }
-      assert.equal(requests[3]!.headers['content-type'], 'application/json');
+      assert.equal(requests[4]!.headers['content-type'], 'application/json');
     });
   }
 });
@@ -146,12 +148,89 @@ test('Actions refs and pull_request_target resolve the base PR without local Git
         repository: { full_name: 'wrong/project' },
         pull_request: { number: 41, base: { repo: { full_name: 'base/project' } }, head: { repo: { full_name: 'fork/project' } } },
       }));
-      const requests = await github(t, [detail, { body: [] }, posted]);
+      const requests = await github(t, [detail, { body: [] }, detail, posted]);
       await createGithubCommenter({ ...sandbox.env, GITHUB_TOKEN: token, GITHUB_REPOSITORY: suffix === 'event' ? 'wrong/project' : 'base/project', GITHUB_REF: suffix === 'event' ? 'refs/heads/main' : `refs/pull/41/${suffix}`, ...(suffix === 'event' ? { GITHUB_EVENT_PATH: event } : {}) })(sandbox.cwd, fallback);
-      assert.deepEqual(requests.map(request => request.path), ['/repos/base/project/pulls/41', '/repos/base/project/pulls/41/files?per_page=100&page=1', '/repos/base/project/issues/41/comments']);
-      assert.deepEqual(payload(requests[2]!), summary([body]));
+      assert.deepEqual(requests.map(request => request.path), ['/repos/base/project/pulls/41', '/repos/base/project/pulls/41/files?per_page=100&page=1', '/repos/base/project/pulls/41', '/repos/base/project/issues/41/comments']);
+      assert.deepEqual(payload(requests[3]!), summary([body]));
     });
   }
+});
+
+test('explicit PR target supports detached HEAD and overrides unrelated Actions identity', async t => {
+  const repo = repository();
+  const file = source(repo);
+  repo.git('checkout', '--quiet', '--detach');
+  const requests = await github(t, [detail, { body: [file] }, detail, posted]);
+  await createGithubCommenter({
+    ...repo.env,
+    GITHUB_TOKEN: token,
+    GITHUB_REPOSITORY: 'unrelated/project',
+    GITHUB_REF: 'refs/pull/99/merge',
+    GITHUB_EVENT_PATH: join(repo.root, 'missing-event.json'),
+  })(repo.cwd, [{ body, locations: [{ filepath: 'app.yml', lines: { start: 4, end: 5 } }] }], {
+    repository: 'requested/project', number: 42, head,
+  });
+  assert.deepEqual(requests.map(request => [request.method, request.path]), [
+    ['GET', '/repos/requested/project/pulls/42'],
+    ['GET', '/repos/requested/project/pulls/42/files?per_page=100&page=1'],
+    ['GET', '/repos/requested/project/pulls/42'],
+    ['POST', '/repos/requested/project/pulls/42/reviews'],
+  ]);
+  assert.deepEqual(payload(requests[3]!), {
+    commit_id: head, event: 'COMMENT', body: 'Rulekeeper violations', comments: [inline('app.yml', 5, 4)],
+  });
+});
+
+test('explicit target matches inline files despite inherited Git repository locations', async t => {
+  const caller = repository();
+  const repo = repository();
+  const file = source(repo);
+  repo.git('checkout', '--quiet', '--detach');
+  const callerHead = caller.git('rev-parse', 'HEAD');
+  const callerIndex = caller.git('write-tree');
+  const callerStatus = caller.git('status', '--porcelain');
+  const transport = { origin: '' };
+  const requests = await github(t, [detail, { body: [file] }, detail, posted], transport);
+  const script = `
+    import { createGithubCommenter } from ${JSON.stringify(new URL('../dist/adapter/github/comments.js', import.meta.url).href)};
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (input, init) => {
+      const url = new URL(input);
+      if (url.origin !== 'https://api.github.com' || init.redirect !== 'manual') throw new Error('Unsafe API request');
+      return originalFetch(${JSON.stringify(transport.origin)} + url.pathname + url.search, init);
+    };
+    await createGithubCommenter(process.env)(process.cwd(), ${JSON.stringify([
+      { body, locations: [{ filepath: 'app.yml', lines: { start: 4, end: 5 } }] },
+    ])}, { repository: 'requested/project', number: 42 });
+  `;
+  const { promise, resolve, reject } = Promise.withResolvers<void>();
+  execFile(process.execPath, ['--input-type=module', '--eval', script], {
+    cwd: repo.cwd,
+    env: {
+      ...repo.env,
+      GITHUB_TOKEN: token,
+      GIT_DIR: join(caller.cwd, '.git'),
+      GIT_COMMON_DIR: join(caller.cwd, '.git'),
+      GIT_WORK_TREE: caller.cwd,
+      GIT_INDEX_FILE: join(caller.cwd, '.git/index'),
+    },
+  }, (error, _stdout, stderr) => {
+    if (error) reject(new Error(stderr || error.message, { cause: error }));
+    else resolve();
+  });
+  await promise;
+  assert.deepEqual(requests.map(request => [request.method, request.path]), [
+    ['GET', '/repos/requested/project/pulls/42'],
+    ['GET', '/repos/requested/project/pulls/42/files?per_page=100&page=1'],
+    ['GET', '/repos/requested/project/pulls/42'],
+    ['POST', '/repos/requested/project/pulls/42/reviews'],
+  ]);
+  assert.deepEqual(payload(requests[3]!), {
+    commit_id: head, event: 'COMMENT', body: 'Rulekeeper violations', comments: [inline('app.yml', 5, 4)],
+  });
+  assert.equal(caller.git('rev-parse', 'HEAD'), callerHead);
+  assert.equal(caller.git('write-tree'), callerIndex);
+  assert.equal(caller.git('status', '--porcelain'), callerStatus);
 });
 
 test('nested invocation roots map rename targets and prefer RIGHT additions despite deletions', async t => {
@@ -212,11 +291,11 @@ test('unmatched source never gets inline coordinates: dirty, unpushed, untracked
         filepath = '../outside.yml';
         writeFile(join(repo.cwd, filepath), 'one\n');
       }
-      const requests = await github(t, [detail, { body: [{ ...file, filename: kind === 'missing' ? filepath : file.filename }] }, posted]);
+      const requests = await github(t, [detail, { body: [{ ...file, filename: kind === 'missing' ? filepath : file.filename }] }, detail, posted]);
       await actions(repo.env)(repo.cwd, [{ body, locations: [{ filepath, lines: { start: 1, end: 1 } }] }]);
-      assert.equal(requests.length, 3);
-      assert.equal(requests[2]!.path, '/repos/example/project/issues/23/comments');
-      assert.deepEqual(payload(requests[2]!), summary([body]));
+      assert.equal(requests.length, 4);
+      assert.equal(requests[3]!.path, '/repos/example/project/issues/23/comments');
+      assert.deepEqual(payload(requests[3]!), summary([body]));
     });
   }
 });
@@ -229,9 +308,9 @@ test('removed, missing patch, deletion-only, malformed and nonoverlapping hunks 
     await t.test(JSON.stringify(change), async t => {
       const repo = repository();
       const file = source(repo);
-      const requests = await github(t, [detail, { body: [{ ...file, ...change }] }, posted]);
+      const requests = await github(t, [detail, { body: [{ ...file, ...change }] }, detail, posted]);
       await actions(repo.env)(repo.cwd, [{ body, locations: [{ filepath: 'app.yml', lines: { start: 1, end: 2 } }] }]);
-      assert.equal(requests[2]!.path, '/repos/example/project/issues/23/comments');
+      assert.equal(requests[3]!.path, '/repos/example/project/issues/23/comments');
     });
   }
 });
@@ -254,10 +333,10 @@ test('Actions checkout without usable Git metadata falls back even when a file e
   writeFile(join(sandbox.cwd, 'app.yml'), 'one\n');
   const bytes = Buffer.from('one\n');
   const file = { filename: 'app.yml', status: 'added', sha: createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex'), patch: '@@ -0,0 +1 @@\n+one' };
-  const requests = await github(t, [detail, { body: [file] }, posted]);
+  const requests = await github(t, [detail, { body: [file] }, detail, posted]);
   await actions(sandbox.env)(sandbox.cwd, [{ body, locations: [{ filepath: 'app.yml', lines: { start: 1, end: 1 } }] }]);
-  assert.equal(requests[2]!.path, '/repos/example/project/issues/23/comments');
-  assert.deepEqual(payload(requests[2]!), summary([body]));
+  assert.equal(requests[3]!.path, '/repos/example/project/issues/23/comments');
+  assert.deepEqual(payload(requests[3]!), summary([body]));
 });
 
 test('file pagination finds later files without following arbitrary Link URLs', async t => {
@@ -273,11 +352,11 @@ test('file pagination finds later files without following arbitrary Link URLs', 
 test('pagination stops at GitHub 3000-file cap and unmatched findings fall back', async t => {
   const repo = repository();
   const page = Array.from({ length: 100 }, (_, index) => ({ filename: `other-${index}`, status: 'modified', sha: head }));
-  const requests = await github(t, [detail, ...Array.from({ length: 30 }, () => ({ body: page })), posted]);
+  const requests = await github(t, [detail, ...Array.from({ length: 30 }, () => ({ body: page })), detail, posted]);
   await actions(repo.env)(repo.cwd, fallback);
-  assert.equal(requests.length, 32);
+  assert.equal(requests.length, 33);
   assert.equal(requests[30]!.path, '/repos/example/project/pulls/23/files?per_page=100&page=30');
-  assert.equal(requests[31]!.method, 'POST');
+  assert.equal(requests[32]!.method, 'POST');
 });
 
 test('inline reviews batch at 100, and distinct findings are not collapsed', async t => {
@@ -298,6 +377,36 @@ test('head movement aborts all posting, including fallback', async t => {
   const requests = await github(t, [detail, { body: [file] }, { body: { head: { sha: 'b'.repeat(40) } } }]);
   await assert.rejects(actions(repo.env)(repo.cwd, [{ body, locations: [{ filepath: 'app.yml', lines: { start: 4, end: 4 } }] }, ...fallback]), /head.*changed|head.*moved/i);
   assert.deepEqual(requests.map(request => request.method), ['GET', 'GET', 'GET']);
+});
+
+test('analyzed PR revision rejects stale context anchors and summary findings before planning', async t => {
+  for (const located of [true, false]) {
+    await t.test(located ? 'unchanged context anchor' : 'summary-only group', async t => {
+      const repo = repository();
+      source(repo);
+      const requests = await github(t, [{ body: { head: { sha: 'b'.repeat(40) } } }]);
+      await assert.rejects(createGithubCommenter({ ...repo.env, GITHUB_TOKEN: token })(repo.cwd, [{
+        body,
+        locations: located ? [{ filepath: 'app.yml', lines: { start: 1, end: 1 } }] : [],
+      }], { repository: 'example/project', number: 23, head }), error => assertSafeError(error, /head.*changed.*analysis/i));
+      assert.deepEqual(requests.map(request => [request.method, request.path]), [['GET', '/repos/example/project/pulls/23']]);
+    });
+  }
+});
+
+test('summary-only planning rechecks the head with and without an analyzed revision', async t => {
+  for (const expected of [true, false]) {
+    await t.test(expected ? 'checkout revision' : 'local diff identity', async t => {
+      const repo = repository();
+      const file = source(repo);
+      const requests = await github(t, [detail, { body: [{ ...file, sha: 'c'.repeat(40) }] }, { body: { head: { sha: 'b'.repeat(40) } } }]);
+      await assert.rejects(createGithubCommenter({ ...repo.env, GITHUB_TOKEN: token })(repo.cwd, [{
+        body,
+        locations: [{ filepath: 'app.yml', lines: { start: 4, end: 4 } }],
+      }], { repository: 'example/project', number: 23, ...(expected ? { head } : {}) }), error => assertSafeError(error, /head.*changed.*planning/i));
+      assert.deepEqual(requests.map(request => request.method), ['GET', 'GET', 'GET']);
+    });
+  }
 });
 
 test('local discovery refuses missing and ambiguous PRs without posting', async t => {
@@ -343,7 +452,7 @@ test('all HTTP failure stages are safe, do not retry and never replace a failed 
       const replies: Reply[] = stage === 'discovery' ? [] : [{ body: [{ number: 23 }] }];
       if (!['discovery', 'head'].includes(stage)) replies.push(detail);
       if (!['discovery', 'head', 'files'].includes(stage)) replies.push({ body: stage === 'fallback' ? [] : [file] });
-      if (stage === 'review') replies.push(detail);
+      if (['review', 'fallback'].includes(stage)) replies.push(detail);
       replies.push({ status: 403, body: { message: `credential ${token} denied` } });
       const requests = await github(t, replies);
       const findings = stage === 'fallback' ? fallback : [{ body, locations: [{ filepath: 'app.yml', lines: { start: 4, end: 4 } }] }, ...fallback];

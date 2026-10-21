@@ -15,6 +15,7 @@ Default-export a constructible class extending `Rule<T>` (`T = JsonValue`). Extr
 | `scope?: ScopeSelector<T>`                                                              | Absent     | One whole-file scope per eligible file unless supplied.                                                      |
 | `settings: RuleSettings` | `{}` | Optional backend, model, threshold, and input/output USD-per-million token prices; see AI below. |
 | `group: Grouping`                                                                       | `'scope'`  | Groups surviving scopes before evaluation.                                                                   |
+| `comment?: string` | Absent | Nonblank Markdown override for each GitHub finding body with `--auto-comment`; see below. |
 | `when(context: ProjectContext): Awaitable<PredicateResult>`                             | `true`     | Whole-rule applicability, once per enabled rule before parsing target sources.                               |
 | `select(context: SelectionContext): Awaitable<readonly ScopeSubject<T>[]>`              | Delegates  | Calls `context.select({ files, exclude, scope })`; override for custom selection.                            |
 | `filter(subject: ScopeSubject<T>, context: ProjectContext): Awaitable<PredicateResult>` | `true`     | Per-scope applicability before grouping.                                                                     |
@@ -45,6 +46,28 @@ Good: explain an out-of-domain scope with a filter reason. Bad: return `pass()` 
 JSON/YAML `path` addresses the document; `key` is a JSONPath evaluated against each selected value and must produce exactly one string or finite number. All structured paths are nonempty `$`-rooted JSONPath; executable expressions are rejected and evaluation errors propagate. Protobuf paths may select RPC records or their `http`/`bindings`/`method`/`url` subtrees only; forbidden selections error even without RPCs.
 
 Omitted/`undefined` options retain defaults; explicit `null` is invalid for structured paths and CSV headers/delimiters. A CSV delimiter is one Unicode code point other than CR, LF, or a quote; CSV scopes preserve exact record source slices with multibyte delimiters too.
+
+### ast-grep queries
+
+Use `scopes.astGrep` to select code by syntax. The [official ast-grep documentation](https://ast-grep.github.io/) is authoritative for query syntax and behavior. This reference covers the Rulekeeper integration.
+
+- For patterns and captures, read [pattern syntax](https://ast-grep.github.io/guide/pattern-syntax). `$NAME` matches one node, and `$$$ARGS` matches zero or more nodes.
+- For node kinds, relations, and logical composition, read the [rule object reference](https://ast-grep.github.io/reference/rule).
+- For unfamiliar syntax, use the [playground](https://ast-grep.github.io/playground.html) to inspect node kinds and try the query against realistic code.
+- For custom node traversal beyond built-in selection, read the [JavaScript API](https://ast-grep.github.io/guide/api-usage/js-api).
+
+Choose the source language, then start with a `pattern` or `kind`. Add `has`/`inside` for structural context and `all`/`any`/`not` for composition. Relational searches default to immediate neighbors. Use `stopBy: 'end'` when the search must reach deeper descendants or ancestors.
+
+Pass the query object as `rule`, with `constraints` and `utils` beside it when needed. Rulekeeper supplies file selection and reporting, so omit ast-grep YAML fields such as `id`, `message`, and `severity`.
+
+```ts
+scope = scopes.astGrep({
+  language: 'typescript',
+  rule: { pattern: 'console.log($$$ARGS)' },
+});
+```
+
+This selects calls with any number of arguments. Read `subject.source` and `subject.captures.ARGS` in the check. Rulekeeper omits empty captures, so `ARGS` is absent for `console.log()`. Use `rulekeeper inspect` to confirm matches on project files, then test the policy through the workflow in [SKILL.md](SKILL.md).
 
 ### AST and TypeScript/TSX
 
@@ -200,6 +223,8 @@ interface CheckResult {
 Explicit `lines` are absolute file coordinates: positive safe integers with inclusive `start <= end`. Use a narrower subrange within the member's known lines; file-only locations must fit a member's range for that file. When the selected member has no line information, explicit lines may supply it.
 
 With `locations` omitted, a scope violation uses its own source lines; a group violation does **not** automatically blame all members. Explicit `locations: []` disables automatic scope attribution. Without usable source lines (or a matching current PR diff anchor), `--auto-comment` reports the finding in an ordinary PR comment instead of guessing an inline location.
+
+Set `comment` on the rule to replace each generated GitHub finding body with your Markdown. Omit it to keep the generated body. Rulekeeper strips terminal controls and redacts credentials from overrides. Inline locations and check results stay unchanged. The fallback comment keeps its shared `Rulekeeper violations` heading.
 
 Scalar AI classification supplies no offending-member attribution: scope AI can use its subject's lines, but grouped AI needs explicit locations from a custom check wrapping `context.ai(...)`; otherwise it uses the fallback comment.
 

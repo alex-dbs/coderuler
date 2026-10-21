@@ -702,7 +702,15 @@ export function countViolations(reports: readonly RuleReport[]): number {
 export function renderViolationComments(
   reports: readonly RuleReport[],
   redact: TextRedactor,
+  rules?: readonly LoadedRule[],
 ): readonly ViolationComment[] {
+  const overrides = new Map<string, string>();
+  if (rules !== undefined) {
+    for (const entry of rules) {
+      const comment = entry.rule.comment;
+      if (comment !== undefined) overrides.set(entry.name, redact(stripVTControlCharacters(comment)));
+    }
+  }
   const safe = (text: string): string => escapeText(redact(stripVTControlCharacters(text)))
     .replace(/[\\`*_{}\[\]()#+\-.!|~]/g, '\\$&')
     .replace(/&/g, '&amp;')
@@ -721,19 +729,26 @@ export function renderViolationComments(
   );
   const comments: ViolationComment[] = [];
   for (const report of reports) {
+    const override = overrides.get(report.name);
     for (const { subject, result } of report.evaluations) {
       if (result.status !== 'violation') continue;
-      const label = subject.kind === 'scope'
-        ? `scope ${location(subject)} (${safe(subject.id)})`
-        : safe(`group ${subject.group.type} ${subject.group.path} (${subject.members.length} scopes)`);
-      const body = [`- **${safe(report.name)}** — ${label}`];
-      if (result.locations !== undefined) {
-        for (const entry of result.locations) {
-          const scope = entry.scopeId === undefined ? '' : ` (scope ${safe(entry.scopeId)})`;
-          body.push(`  - Location: ${location(entry)}${scope}`);
+      let body: string;
+      if (override !== undefined) {
+        body = override;
+      } else {
+        const label = subject.kind === 'scope'
+          ? `scope ${location(subject)} (${safe(subject.id)})`
+          : safe(`group ${subject.group.type} ${subject.group.path} (${subject.members.length} scopes)`);
+        const lines = [`- **${safe(report.name)}** — ${label}`];
+        if (result.locations !== undefined) {
+          for (const entry of result.locations) {
+            const scope = entry.scopeId === undefined ? '' : ` (scope ${safe(entry.scopeId)})`;
+            lines.push(`  - Location: ${location(entry)}${scope}`);
+          }
         }
+        if (result.message !== undefined) lines.push(`  - ${safe(result.message)}`);
+        body = `${lines.join('\n')}\n`;
       }
-      if (result.message !== undefined) body.push(`  - ${safe(result.message)}`);
       const candidates = result.locations
         ?? (subject.kind === 'scope' ? [subject] : []);
       const locations: ViolationComment['locations'][number][] = [];
@@ -745,7 +760,7 @@ export function renderViolationComments(
         seen.add(key);
         locations.push({ filepath: candidate.filepath, lines: candidate.lines });
       }
-      comments.push({ body: `${body.join('\n')}\n`, locations });
+      comments.push({ body, locations });
     }
   }
   return comments;

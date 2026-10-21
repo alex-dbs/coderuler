@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, realpathSync, statSync } from 'node:fs';
-import { cp, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { createDependencyFixture, dependencyFixtureEnvironment, fixturePackages, POLICY_MESSAGE_V1, type DependencyFixture } from './dependency-support.ts';
 
 const REPO_ROOT = realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), '..'));
 const PACKAGE_NAME = '@alex-dbs/rulekeeper';
@@ -99,6 +101,8 @@ interface Consumer {
   readonly globalIsolationApp: string;
   readonly missingImportApp: string;
   readonly missingHome: string;
+  readonly ambientApp: string;
+  readonly registry: DependencyFixture;
 }
 
 const SHARED_HELPER_SOURCE = `export const LICENSE_PATTERN = /Copyright ..../;
@@ -281,7 +285,9 @@ export const tests = [
 
 const LOCAL_PREFERENCE_RULE_SOURCE = `import { Rule, FIXTURE_LOCAL_MARKER, pass, scopes, test, violation } from '@alex-dbs/rulekeeper';
 import { parse } from 'yaml';
+import { createRequire } from 'node:module';
 
+const requiredYaml = createRequire(import.meta.url)('yaml');
 if (FIXTURE_LOCAL_MARKER !== 'fixture-local-copy') {
   throw new Error('rule import resolved outside the project-local SDK: ' + String(FIXTURE_LOCAL_MARKER));
 }
@@ -292,8 +298,11 @@ export default class LocalPreferenceRule extends Rule {
 
   check = (subject) => {
     const local = parse(subject.source);
-    if (local.localYamlMarker !== 'fixture-local-yaml') {
-      throw new Error('direct yaml import resolved outside the rule location');
+    if (local.localYamlMarker !== 'fixture-managed-yaml-esm') {
+      throw new Error('direct yaml import did not select the managed ESM export');
+    }
+    if (requiredYaml.parse(subject.source).localYamlMarker !== 'fixture-managed-yaml-cjs') {
+      throw new Error('helper require did not select the managed CommonJS export');
     }
     return subject.data?.verdict === 'BAD' ? violation('bad local input') : pass();
   };
@@ -305,13 +314,15 @@ export const tests = [
 ];
 `;
 
-const LOCAL_YAML_PACKAGE_JSON = `${JSON.stringify(
-  { name: 'yaml', version: '0.0.0-fixture', type: 'module', exports: { '.': './index.js' } },
-  null,
-  2,
-)}\n`;
-const LOCAL_YAML_INDEX_SOURCE = `export const parse = (source) => ({ localYamlMarker: 'fixture-local-yaml', source });
-`;
+const MANAGED_YAML_MANIFEST = {
+  name: 'yaml', version: '1.0.0', type: 'module',
+  exports: { '.': { import: './index.js', require: './index.cjs' } },
+};
+const MANAGED_YAML_FILES = {
+  'index.js': `export const parse = (source) => ({ localYamlMarker: 'fixture-managed-yaml-esm', source });\n`,
+  'index.cjs': `exports.parse = (source) => ({ localYamlMarker: 'fixture-managed-yaml-cjs', source });\n`,
+  'util.js': 'export const privateUtility = true;\n',
+};
 
 const MISSING_IMPORT_RULE_SOURCE = `import '@alex-dbs/rulekeeper-fixture-missing';
 import { Rule } from '@alex-dbs/rulekeeper';
@@ -349,6 +360,17 @@ export default class DirectYamlRule extends Rule {
 }
 `;
 
+const REQUIRED_EXPORT_RESTRICTION_RULE_SOURCE = `import { createRequire } from 'node:module';
+import { Rule } from '@alex-dbs/rulekeeper';
+
+createRequire(import.meta.url)('yaml/util');
+
+export default class RequiredExportRestrictionRule extends Rule {
+  files = ['src/*.txt'];
+  check = () => ({ status: 'pass' });
+}
+`;
+
 const REQUIRED_YAML_RULE_SOURCE = `import './helpers/required-yaml.js';
 import { Rule } from '@alex-dbs/rulekeeper';
 
@@ -374,20 +396,33 @@ export default class BorrowerRule extends Rule {
 }
 `;
 
-const BORROWER_PACKAGE_JSON = `${JSON.stringify(
-  { name: 'rulekeeper-fixture-borrower', version: '0.0.0-fixture', type: 'module', exports: { '.': './index.js' } },
-  null,
-  2,
-)}\n`;
+const BORROWER_MANIFEST = {
+  name: 'rulekeeper-fixture-borrower', version: '1.0.0', type: 'module', exports: { '.': './index.js' },
+};
 const BORROWER_INDEX_SOURCE = `import { parseDocument } from 'yaml';
 
 export const borrowedParser = typeof parseDocument;
 `;
 
-async function writeLocalYamlPackage(directory: string): Promise<void> {
-  await mkdir(directory, { recursive: true });
-  await writeFile(join(directory, 'package.json'), LOCAL_YAML_PACKAGE_JSON);
-  await writeFile(join(directory, 'index.js'), LOCAL_YAML_INDEX_SOURCE);
+async function writeFixtureLock(directory: string, registry: DependencyFixture, names: readonly string[]): Promise<void> {
+  const artifacts = names.map(name => {
+    const artifact = registry.artifacts.find(candidate => candidate.manifest.name === name);
+    assert.ok(artifact !== undefined, `missing registry fixture for ${name}`);
+    return artifact;
+  });
+  const dependencies = Object.fromEntries(artifacts.map(artifact => [artifact.manifest.name, artifact.manifest.version]));
+  await writeFile(join(directory, 'rulekeeper.lock'), `${JSON.stringify({
+    name: 'rulekeeper-rules',
+    version: '1.0.0',
+    lockfileVersion: 3,
+    requires: true,
+    packages: {
+      '': { name: 'rulekeeper-rules', version: '1.0.0', dependencies },
+      ...Object.fromEntries(artifacts.map(artifact => [`node_modules/${artifact.manifest.name}`, {
+        version: artifact.manifest.version, resolved: artifact.tarball, integrity: artifact.integrity,
+      }])),
+    },
+  }, null, 2)}\n`);
 }
 
 const cleanupPaths: string[] = [];
@@ -425,7 +460,7 @@ const PROXY_KEYS: Readonly<Record<string, true>> = {
   all_proxy: true,
 };
 
-function isolatedEnv(home: string, extra: Readonly<Record<string, string>> = {}): NodeJS.ProcessEnv {
+function isolatedEnv(home: string, extra: Readonly<NodeJS.ProcessEnv> = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined) continue;
@@ -446,15 +481,33 @@ function isolatedEnv(home: string, extra: Readonly<Record<string, string>> = {})
   return env;
 }
 
-function runCli(app: string, args: readonly string[], options: { readonly cwd: string; readonly home: string; readonly extra?: Readonly<Record<string, string>> }): RunResult {
+function runCli(app: string, args: readonly string[], options: { readonly cwd: string; readonly home: string; readonly extra?: Readonly<NodeJS.ProcessEnv> }): RunResult {
   const bin = join(app, 'node_modules', '.bin', 'rulekeeper');
   assert.ok(existsSync(bin), `installed CLI missing at ${bin}`);
   const env = options.extra === undefined ? isolatedEnv(options.home) : isolatedEnv(options.home, options.extra);
   return run(bin, args, { cwd: options.cwd, env });
 }
 
-function runGlobalCli(args: readonly string[], options: { readonly cwd: string; readonly home: string; readonly extra?: Readonly<Record<string, string>> }): RunResult {
-  const env = options.extra === undefined ? isolatedEnv(options.home) : isolatedEnv(options.home, options.extra);
+function runSourceCli(
+  args: readonly string[],
+  options: { readonly cwd: string; readonly home: string; readonly registry: DependencyFixture; readonly mode?: 'all' | 'offline' },
+): RunResult {
+  const tsx = createRequire(import.meta.url).resolve('tsx/cli');
+  return run(process.execPath, [tsx, join(REPO_ROOT, 'src', 'cli.ts'), ...args], {
+    cwd: options.cwd,
+    env: isolatedEnv(options.home, {
+      ...dependencyFixtureEnvironment(options.registry, { mode: options.mode ?? 'offline' }),
+      RK_DEPENDENCY_CACHE: join(options.home, 'dependency-cache'),
+    }),
+  });
+}
+
+function runGlobalCli(args: readonly string[], options: { readonly cwd: string; readonly home: string; readonly extra?: Readonly<NodeJS.ProcessEnv> }): RunResult {
+  const env = isolatedEnv(options.home, {
+    ...dependencyFixtureEnvironment(consumer.registry, { mode: 'tarballs' }),
+    RK_DEPENDENCY_CACHE: join(consumer.root, 'dependency-cache'),
+    ...options.extra,
+  });
   if (process.platform === 'win32') {
     const bin = join(consumer.globalPrefix, 'rulekeeper.cmd');
     assert.ok(existsSync(bin), `globally installed CLI missing at ${bin}`);
@@ -575,6 +628,12 @@ before(async () => {
   const globalIsolationApp = join(root, 'global-isolation-app');
   const missingImportApp = join(root, 'missing-import-app');
   const missingHome = join(root, 'missing-home');
+  const ambientApp = join(root, 'ambient-app');
+  const registry = createDependencyFixture(join(root, 'registry'), [
+    { manifest: MANAGED_YAML_MANIFEST, files: MANAGED_YAML_FILES },
+    { manifest: BORROWER_MANIFEST, files: { 'index.js': BORROWER_INDEX_SOURCE } },
+    ...fixturePackages().filter(fixture => fixture.manifest.name === '@fixture/typed'),
+  ]);
 
   await mkdir(app, { recursive: true });
   await mkdir(join(app, '.rulekeeper', 'helpers'), { recursive: true });
@@ -588,12 +647,18 @@ before(async () => {
   await mkdir(join(globalHome, '.rulekeeper'), { recursive: true });
   await mkdir(join(localPreferenceApp, '.rulekeeper'), { recursive: true });
   await mkdir(join(globalIsolationApp, '.rulekeeper', 'helpers'), { recursive: true });
-  await mkdir(join(globalIsolationApp, '.rulekeeper', 'node_modules', 'rulekeeper-fixture-borrower'), { recursive: true });
   await mkdir(join(missingImportApp, '.rulekeeper'), { recursive: true });
   await mkdir(missingHome, { recursive: true });
 
-  await writeLocalYamlPackage(join(localPreferenceApp, '.rulekeeper', 'node_modules', 'yaml'));
-  await writeLocalYamlPackage(join(missingImportApp, '.rulekeeper', 'node_modules', 'yaml'));
+  await mkdir(join(ambientApp, '.rulekeeper'), { recursive: true });
+  await mkdir(join(ambientApp, 'node_modules', 'yaml'), { recursive: true });
+  await writeFile(join(ambientApp, 'node_modules', 'yaml', 'package.json'), `${JSON.stringify(MANAGED_YAML_MANIFEST)}\n`);
+  for (const [filename, source] of Object.entries(MANAGED_YAML_FILES)) {
+    await writeFile(join(ambientApp, 'node_modules', 'yaml', filename), source);
+  }
+  await writeFixtureLock(join(localPreferenceApp, '.rulekeeper'), registry, ['yaml']);
+  await writeFixtureLock(join(missingImportApp, '.rulekeeper'), registry, ['yaml']);
+  await writeFixtureLock(join(globalIsolationApp, '.rulekeeper'), registry, ['rulekeeper-fixture-borrower']);
 
   const relativeTarball = relative(app, tarball).split(sep).join('/');
   await writeFile(
@@ -617,23 +682,17 @@ before(async () => {
   await writeFile(join(globalIsolationApp, '.rulekeeper', 'required-yaml.rule.mjs'), REQUIRED_YAML_RULE_SOURCE);
   await writeFile(join(globalIsolationApp, '.rulekeeper', 'helpers', 'required-yaml.js'), REQUIRED_YAML_HELPER_SOURCE);
   await writeFile(join(globalIsolationApp, '.rulekeeper', 'borrower.rule.mjs'), BORROWER_RULE_SOURCE);
-  await writeFile(
-    join(globalIsolationApp, '.rulekeeper', 'node_modules', 'rulekeeper-fixture-borrower', 'package.json'),
-    BORROWER_PACKAGE_JSON,
-  );
-  await writeFile(
-    join(globalIsolationApp, '.rulekeeper', 'node_modules', 'rulekeeper-fixture-borrower', 'index.js'),
-    BORROWER_INDEX_SOURCE,
-  );
+  await writeFile(join(ambientApp, '.rulekeeper', 'direct-yaml.rule.mjs'), DIRECT_YAML_RULE_SOURCE);
   await writeFile(join(missingImportApp, '.rulekeeper', 'broken.rule.mjs'), MISSING_IMPORT_RULE_SOURCE);
   await writeFile(join(missingImportApp, '.rulekeeper', 'missing-relative.rule.mjs'), MISSING_RELATIVE_RULE_SOURCE);
   await writeFile(join(missingImportApp, '.rulekeeper', 'restricted.rule.mjs'), EXPORT_RESTRICTION_RULE_SOURCE);
+  await writeFile(join(missingImportApp, '.rulekeeper', 'required-restricted.rule.mjs'), REQUIRED_EXPORT_RESTRICTION_RULE_SOURCE);
   assert.equal(
     existsSync(join(globalIsolationApp, '.rulekeeper', 'node_modules', 'yaml')),
     false,
     'the isolation fixture must not carry a local yaml package',
   );
-  for (const project of [globalApp, localPreferenceApp, globalIsolationApp, missingImportApp]) {
+  for (const project of [globalApp, localPreferenceApp, globalIsolationApp, missingImportApp, ambientApp]) {
     await writeFile(
       join(project, 'package.json'),
       `${JSON.stringify({ name: 'rulekeeper-global-fixture', private: true, type: 'module' }, null, 2)}\n`,
@@ -662,7 +721,7 @@ before(async () => {
   const globalSdkYaml = createRequire(pathToFileURL(globalSdkEntry)).resolve('yaml');
   assert.ok(globalSdkYaml.startsWith(globalModules), `global SDK must resolve yaml from its installation: ${globalSdkYaml}`);
 
-  const localSdk = join(localPreferenceApp, '.rulekeeper', 'node_modules', PACKAGE_NAME);
+  const localSdk = join(localPreferenceApp, 'node_modules', PACKAGE_NAME);
   await cp(join(globalModules, PACKAGE_NAME), localSdk, { recursive: true, dereference: true });
   const localIndex = join(localSdk, 'dist', 'index.js');
   const localSdkYaml = createRequire(pathToFileURL(localIndex)).resolve('yaml');
@@ -698,7 +757,122 @@ before(async () => {
     globalIsolationApp,
     missingImportApp,
     missingHome,
+    ambientApp,
+    registry,
   };
+});
+
+test('the source CLI runs SDK-only rules through tsx and syncs the running SDK without an application install', async () => {
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'rulekeeper-source-sdk-'));
+  cleanupPaths.push(root);
+  const cwd = join(root, 'app');
+  const home = join(root, 'home');
+  const directory = join(cwd, '.rulekeeper');
+  await mkdir(directory, { recursive: true });
+  await mkdir(home);
+  await writeFile(join(cwd, 'package.json'), '{"type":"module"}\n');
+  await writeFile(join(cwd, 'input.txt'), 'source input\n');
+  await writeFile(join(directory, 'source.rule.ts'), `import { Rule, violation } from '@alex-dbs/rulekeeper';
+export default class SourceRule extends Rule {
+  files = ['input.txt'];
+  check = () => violation('Source SDK policy');
+}
+`);
+  const options = { cwd, home, registry: createDependencyFixture(join(root, 'registry'), []) };
+  const assertSourceReport = (result: RunResult): void => {
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    assert.equal(result.stderr, '');
+    assert.deepEqual(parseReport(result.stdout).map(entry => ({
+      name: entry.name,
+      status: entry.status,
+      evaluations: entry.evaluations.map(evaluation => ({
+        filepath: evaluation.subject.filepath,
+        result: evaluation.result,
+      })),
+    })), [{
+      name: 'source',
+      status: 'violation',
+      evaluations: [{ filepath: 'input.txt', result: { status: 'violation', message: 'Source SDK policy' } }],
+    }]);
+  };
+  assertSourceReport(runSourceCli(['check', '--json'], options));
+  assert.equal(existsSync(join(directory, 'node_modules')), false, 'SDK-only loading must not need editor links');
+  const synced = runSourceCli(['deps', 'sync'], options);
+  assert.equal(synced.status, 0, `${synced.stdout}\n${synced.stderr}`);
+  assert.equal(synced.stdout, `Rule dependencies ready: ${directory}\n`);
+  assert.equal(synced.stderr, '');
+  const sdk = join(directory, 'node_modules', PACKAGE_NAME);
+  assert.equal((await lstat(sdk)).isSymbolicLink(), true);
+  assert.equal(await realpath(sdk), REPO_ROOT);
+  assertSourceReport(runSourceCli(['check', '--json'], options));
+  assert.equal(existsSync(join(directory, 'rulekeeper.lock')), false);
+  assert.equal(existsSync(join(home, 'dependency-cache')), false);
+  assert.equal(existsSync(join(cwd, 'node_modules')), false);
+});
+
+test('the source CLI adds managed packages without a local SDK and checks and tests their real imports through tsx', async () => {
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'rulekeeper-source-deps-'));
+  cleanupPaths.push(root);
+  const cwd = join(root, 'app');
+  const home = join(root, 'home');
+  const directory = join(cwd, '.rulekeeper');
+  await mkdir(directory, { recursive: true });
+  await mkdir(home);
+  const manifest = '{"type":"module"}\n';
+  await writeFile(join(cwd, 'package.json'), manifest);
+  await writeFile(join(cwd, 'input.txt'), 'BAD\n');
+  await writeFile(join(directory, 'policy.rule.ts'), `import { Rule, pass, test, violation } from '@alex-dbs/rulekeeper';
+import { message } from 'fixture-policy';
+export default class Policy extends Rule {
+  files = ['input.txt'];
+  check = subject => subject.source.includes('BAD') ? violation(message) : pass();
+}
+export const tests = [
+  test('source policy passes').withFiles({ 'input.txt': 'GOOD' }).passes(),
+  test('source policy violates').withFiles({ 'input.txt': 'BAD' }).violates(),
+];
+`);
+  const registry = createDependencyFixture(join(root, 'registry'), fixturePackages().filter(fixture =>
+    ['fixture-policy', 'fixture-shared'].includes(fixture.manifest.name) && fixture.manifest.version === '1.0.0'));
+  const options = { cwd, home, registry };
+  assert.equal(existsSync(join(directory, 'node_modules')), false);
+  assert.equal(existsSync(join(cwd, 'node_modules')), false);
+  const added = runSourceCli(['deps', 'add', 'fixture-policy@1.0.0'], { ...options, mode: 'all' });
+  assert.equal(added.status, 0, `${added.stdout}\n${added.stderr}`);
+  assert.equal(added.stdout, `Added fixture-policy@1.0.0\n${join(directory, 'rulekeeper.lock')}\n`);
+  assert.equal(added.stderr, '');
+  assert.equal(await realpath(join(directory, 'node_modules', PACKAGE_NAME)), REPO_ROOT);
+  for (const name of ['fixture-policy', 'fixture-shared']) {
+    const installed = join(directory, 'node_modules', name);
+    assert.equal((await lstat(installed)).isDirectory(), true);
+    assert.equal((await lstat(installed)).isSymbolicLink(), false);
+    const installedManifest = JSON.parse(await readFile(join(installed, 'package.json'), 'utf8'));
+    assert.equal(installedManifest.name, name);
+    assert.equal(installedManifest.version, '1.0.0');
+  }
+  const committed = await readFile(join(directory, 'rulekeeper.lock'), 'utf8');
+  const checked = runSourceCli(['check', '--json'], options);
+  assert.equal(checked.status, 1, `${checked.stdout}\n${checked.stderr}`);
+  assert.equal(checked.stderr, '');
+  assert.deepEqual(parseReport(checked.stdout).map(entry => ({
+    name: entry.name,
+    status: entry.status,
+    evaluations: entry.evaluations.map(evaluation => ({
+      filepath: evaluation.subject.filepath,
+      result: evaluation.result,
+    })),
+  })), [{
+    name: 'policy',
+    status: 'violation',
+    evaluations: [{ filepath: 'input.txt', result: { status: 'violation', message: POLICY_MESSAGE_V1 } }],
+  }]);
+  const tested = runSourceCli(['test', '--concurrency', '2'], options);
+  assert.equal(tested.status, 0, `${tested.stdout}\n${tested.stderr}`);
+  assert.match(tested.stdout, /2 passed, 0 failed/);
+  assert.equal(await readFile(join(directory, 'rulekeeper.lock'), 'utf8'), committed);
+  assert.equal(await readFile(join(cwd, 'package.json'), 'utf8'), manifest);
+  assert.equal(existsSync(join(cwd, 'node_modules')), false);
+  assert.equal(existsSync(join(cwd, 'package-lock.json')), false);
 });
 
 test('the packed tarball ships the built package and bundled authoring skill', () => {
@@ -948,16 +1122,124 @@ test('the globally installed CLI loads rules without local dependencies while th
   assert.match(result.stdout, /4 passed, 0 failed/);
 });
 
-test('the globally installed CLI prefers the project-local SDK while that SDK resolves dependencies from its own tree', () => {
+test('the globally installed CLI prefers the project-local SDK and acquires locked ESM/CommonJS dependencies independently', async () => {
+  const directory = join(consumer.localPreferenceApp, '.rulekeeper');
+  const lockPath = join(directory, 'rulekeeper.lock');
+  const committedLock = await readFile(lockPath, 'utf8');
+  const applicationManifest = await readFile(join(consumer.localPreferenceApp, 'package.json'), 'utf8');
+  const localSdk = join(consumer.localPreferenceApp, 'node_modules', PACKAGE_NAME, 'dist/index.js');
+  const localSdkSource = await readFile(localSdk, 'utf8');
+  const requestLog = join(consumer.root, 'preference-requests.jsonl');
+  const cache = join(consumer.root, 'preference-cache');
+  assert.equal(existsSync(join(consumer.localPreferenceApp, '.rulekeeper', 'node_modules', 'yaml')), false);
   const result = runGlobalCli(['test'], {
     cwd: consumer.localPreferenceApp,
     home: consumer.missingHome,
-    extra: { DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
+    extra: {
+      DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1',
+      RK_DEPENDENCY_CACHE: cache, RK_DEPENDENCY_REQUEST_LOG: requestLog,
+    },
   });
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   assert.match(result.stdout, /project-local SDK and dependency case/);
   assert.match(result.stdout, /project-local SDK parses YAML with its own dependency/);
   assert.match(result.stdout, /2 passed, 0 failed/);
+  assert.equal(await readFile(lockPath, 'utf8'), committedLock, 'loading must not rewrite the committed dependency graph');
+  const requests = (await readFile(requestLog, 'utf8')).trim().split('\n').map(line => JSON.parse(line) as { kind: string; path: string });
+  assert.deepEqual(requests, [{ kind: 'tarball', path: '/yaml/-/yaml-1.0.0.tgz' }]);
+  const managedYaml = join(directory, 'node_modules', 'yaml');
+  assert.equal(await realpath(managedYaml), managedYaml);
+  assert.equal((await lstat(managedYaml)).isDirectory(), true);
+  assert.equal((await lstat(managedYaml)).isSymbolicLink(), false);
+  assert.equal(await readFile(join(consumer.localPreferenceApp, 'package.json'), 'utf8'), applicationManifest);
+  assert.equal(await readFile(localSdk, 'utf8'), localSdkSource);
+  assert.deepEqual(await readdir(join(consumer.localPreferenceApp, 'node_modules')), ['@alex-dbs'], 'acquisition must preserve the existing user SDK without installing application dependencies');
+  await rm(cache, { recursive: true });
+  const offline = runGlobalCli(['test', '--concurrency', '2'], {
+    cwd: consumer.localPreferenceApp,
+    home: consumer.missingHome,
+    extra: {
+      ...dependencyFixtureEnvironment(consumer.registry, { mode: 'offline' }),
+      RK_DEPENDENCY_CACHE: cache,
+    },
+  });
+  assert.equal(offline.status, 0, `${offline.stdout}\n${offline.stderr}`);
+  assert.match(offline.stdout, /2 passed, 0 failed/);
+  assert.equal(existsSync(cache), false, 'installed packed CLI loading must not recreate the download cache');
+  assert.equal(await readFile(lockPath, 'utf8'), committedLock);
+});
+
+test('the packed CLI installs typed rule packages locally, repairs them offline, and leaves application files untouched', async () => {
+  const app = join(consumer.root, 'packed-managed-app');
+  const home = join(consumer.root, 'packed-managed-home');
+  const directory = join(app, '.rulekeeper');
+  const cache = join(consumer.root, 'packed-managed-downloads');
+  await mkdir(app, { recursive: true });
+  await mkdir(home, { recursive: true });
+  const manifest = '{"name":"packed-managed-consumer","private":true,"type":"module"}\n';
+  await writeFile(join(app, 'package.json'), manifest);
+  const added = runGlobalCli(['deps', 'add', '@fixture/typed@1.0.0'], {
+    cwd: app, home,
+    extra: {
+      ...dependencyFixtureEnvironment(consumer.registry, { mode: 'all' }),
+      RK_DEPENDENCY_CACHE: cache,
+    },
+  });
+  assert.equal(added.status, 0, `${added.stdout}\n${added.stderr}`);
+  assert.equal(added.stdout, `Added @fixture/typed@1.0.0\n${join(directory, 'rulekeeper.lock')}\n`);
+  assert.equal(added.stderr, '');
+  const committed = await readFile(join(directory, 'rulekeeper.lock'), 'utf8');
+  const offline = {
+    ...dependencyFixtureEnvironment(consumer.registry, { mode: 'offline' }),
+    RK_DEPENDENCY_CACHE: cache,
+  };
+  const synced = runGlobalCli(['deps', 'sync'], { cwd: app, home, extra: offline });
+  assert.equal(synced.status, 0, synced.stderr);
+  assert.equal(synced.stdout, `Rule dependencies ready: ${directory}\n`);
+  const typedPackage = join(directory, 'node_modules/@fixture/typed');
+  assert.equal((await lstat(typedPackage)).isDirectory(), true);
+  assert.equal((await lstat(typedPackage)).isSymbolicLink(), false);
+  assert.equal((await lstat(join(directory, 'node_modules', PACKAGE_NAME))).isSymbolicLink(), true);
+  const filename = join(directory, 'typed.rule.ts');
+  const source = `import { Rule, violation } from '@alex-dbs/rulekeeper';
+import { format } from '@fixture/typed';
+export default class Typed extends Rule {
+  files = ['input.txt'];
+  check = () => violation(format('packed'));
+}
+`;
+  await writeFile(filename, source);
+  await writeFile(join(app, 'input.txt'), 'input\n');
+  const tsc = join(REPO_ROOT, 'node_modules/typescript/bin/tsc');
+  const compilerArguments = [tsc, '--noEmit', '--strict', '--module', 'NodeNext', '--target', 'ES2024', '--skipLibCheck', filename];
+  const valid = run(process.execPath, compilerArguments, { cwd: app, env: isolatedEnv(home) });
+  assert.equal(valid.status, 0, `${valid.stdout}\n${valid.stderr}`);
+  await writeFile(filename, source.replace("format('packed')", 'format(42)'));
+  const invalid = run(process.execPath, compilerArguments, { cwd: app, env: isolatedEnv(home) });
+  assert.notEqual(invalid.status, 0);
+  assert.match(invalid.stdout, /Argument of type 'number' is not assignable to parameter of type 'string'/);
+  await writeFile(filename, source);
+  await rm(typedPackage, { recursive: true });
+  const repaired = runGlobalCli(['deps', 'sync'], { cwd: app, home, extra: offline });
+  assert.equal(repaired.status, 0, repaired.stderr);
+  assert.equal((await lstat(typedPackage)).isDirectory(), true);
+  assert.equal(await readFile(join(directory, 'rulekeeper.lock'), 'utf8'), committed);
+  await rm(cache, { recursive: true });
+  const checked = runGlobalCli(['check', '--json'], { cwd: app, home, extra: offline });
+  assert.equal(checked.status, 1, `${checked.stdout}\n${checked.stderr}`);
+  assert.equal(checked.stderr, '');
+  assert.equal(reportFor(parseReport(checked.stdout), 'typed').status, 'violation');
+  assert.equal(reportFor(parseReport(checked.stdout), 'typed').evaluations[0]?.result.message, 'esm:packed');
+  assert.equal(existsSync(cache), false);
+  const removed = runGlobalCli(['deps', 'remove', '@fixture/typed'], { cwd: app, home, extra: offline });
+  assert.equal(removed.status, 0, removed.stderr);
+  assert.equal(removed.stdout, `Removed @fixture/typed\n${join(directory, 'rulekeeper.lock')}\n`);
+  assert.equal(existsSync(typedPackage), false);
+  assert.deepEqual(JSON.parse(await readFile(join(directory, 'rulekeeper.lock'), 'utf8')).packages[''].dependencies ?? {}, {});
+  assert.equal(await readFile(join(app, 'package.json'), 'utf8'), manifest);
+  for (const untouched of ['node_modules', 'package-lock.json', 'tsconfig.json']) {
+    assert.equal(existsSync(join(app, untouched)), false, `rule dependency commands must not create application ${untouched}`);
+  }
 });
 
 test('the globally installed CLI does not resolve direct bare rule imports from its own packages', () => {
@@ -967,8 +1249,22 @@ test('the globally installed CLI does not resolve direct bare rule imports from 
     extra: { DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
   });
   assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
-  assert.match(result.stderr, /['\"]yaml['\"]/);
   assert.ok(!result.stderr.includes(consumer.globalModules), `rule imports must not reach the CLI installation: ${result.stderr}`);
+});
+
+test('the globally installed CLI rejects an application package when the rule has no dependency lock', async () => {
+  const app = consumer.ambientApp;
+  const manifest = await readFile(join(app, 'package.json'), 'utf8');
+  const available = run(process.execPath, ['--input-type=module', '-e', "import { parse } from 'yaml'; process.stdout.write(parse('').localYamlMarker);"], {
+    cwd: app, env: isolatedEnv(consumer.missingHome),
+  });
+  assert.equal(available.status, 0, available.stderr);
+  assert.equal(available.stdout, 'fixture-managed-yaml-esm', 'the ambient copy must otherwise be importable by the application');
+  const result = runGlobalCli(['validate', '.rulekeeper/direct-yaml.rule.mjs'], { cwd: app, home: consumer.missingHome });
+  assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
+  assert.ok(!result.stderr.includes(consumer.globalModules), `rule imports must not reach the CLI installation: ${result.stderr}`);
+  assert.equal(existsSync(join(app, '.rulekeeper', 'rulekeeper.lock')), false, 'loading must not synthesize a dependency lock');
+  assert.equal(await readFile(join(app, 'package.json'), 'utf8'), manifest);
 });
 
 test('the globally installed CLI does not resolve bare helper require calls from its own packages', () => {
@@ -978,7 +1274,6 @@ test('the globally installed CLI does not resolve bare helper require calls from
     extra: { DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
   });
   assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
-  assert.match(result.stderr, /['\"]yaml['\"]/);
   assert.ok(!result.stderr.includes(consumer.globalModules), `helper require calls must not reach the CLI installation: ${result.stderr}`);
 });
 
@@ -989,7 +1284,6 @@ test('the globally installed CLI does not resolve packages required by user depe
     extra: { DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
   });
   assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
-  assert.match(result.stderr, /['\"]yaml['\"]/);
   assert.ok(!result.stderr.includes(consumer.globalModules), `user dependencies must not reach the CLI installation: ${result.stderr}`);
 });
 
@@ -1019,13 +1313,17 @@ test('the globally installed CLI keeps missing relative rule imports relative to
   );
 });
 
-test('the globally installed CLI enforces project-local package export maps for rule imports', () => {
-  const result = runGlobalCli(['validate', '.rulekeeper/restricted.rule.mjs'], {
-    cwd: consumer.missingImportApp,
-    home: consumer.missingHome,
-    extra: { DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
-  });
-  assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
+test('the globally installed CLI enforces managed package export maps for ESM imports and CommonJS requires', () => {
+  for (const filename of ['restricted.rule.mjs', 'required-restricted.rule.mjs']) {
+    const result = runGlobalCli(['validate', `.rulekeeper/${filename}`], {
+      cwd: consumer.missingImportApp,
+      home: consumer.missingHome,
+      extra: { DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
+    });
+    assert.equal(result.status, 2, `${filename}: ${result.stdout}\n${result.stderr}`);
+    assert.match(result.stderr, /(?:yaml\/util|['"]\.\/util['"])/);
+    assert.ok(!result.stderr.includes(consumer.globalModules), `private subpaths must not reach the CLI installation: ${result.stderr}`);
+  }
 });
 
 test('no statistics database or rule cache is created under the isolated home', async () => {

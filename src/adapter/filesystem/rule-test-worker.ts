@@ -6,6 +6,7 @@ import { executeRules } from '../../app/execute.js';
 import type { RuleTestCase } from '../../app/rule-tests.js';
 import { createDecisionResolver } from '../../infra/settings.js';
 import { createProject } from './project.js';
+import type { PreparedRuleDependencies } from './dependencies.js';
 import { createRuleLoader } from './rules.js';
 
 export interface RuleTestWorkerRequest {
@@ -14,6 +15,7 @@ export interface RuleTestWorkerRequest {
   readonly ruleFile: string;
   readonly files: RuleTestCase['files'];
   readonly ai: boolean;
+  readonly dependencies?: PreparedRuleDependencies;
 }
 
 export type RuleTestWorkerMessage =
@@ -28,13 +30,15 @@ function fixturePath(root: string, filepath: string): string {
   return target;
 }
 
-async function runCase({ root, ruleFile, files, ai }: RuleTestWorkerRequest): Promise<RuleTestCase['expected']> {
+async function runCase({ root, ruleFile, files, ai, dependencies }: RuleTestWorkerRequest): Promise<RuleTestCase['expected']> {
   for (const [filepath, source] of Object.entries(files)) {
     const target = fixturePath(root, filepath);
     await mkdir(dirname(target), { recursive: true });
     await writeFile(target, typeof source === 'string' ? source : JSON.stringify(source, null, 2), 'utf8');
   }
-  const rules = await createRuleLoader().load({ root, explicit: ruleFile, invocationCwd: root });
+  const rules = await createRuleLoader(
+    dependencies === undefined ? {} : { preparedDependencies: dependencies },
+  ).load({ root, explicit: ruleFile, invocationCwd: root });
   if (rules.length !== 1) throw new Error('Expected exactly one freshly loaded rule');
   const reports = await executeRules(rules, {
     project: createProject(root, { excludeFiles: [ruleFile] }),

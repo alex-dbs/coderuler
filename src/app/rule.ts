@@ -134,6 +134,7 @@ export abstract class Rule<T = JsonValue> {
   scope?: ScopeSelector<T>;
   settings: RuleSettings = {};
   group: Grouping = 'scope';
+  comment?: string;
 
   when(_context: ProjectContext): Awaitable<PredicateResult> {
     return true;
