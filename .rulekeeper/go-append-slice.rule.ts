@@ -92,7 +92,7 @@ or assigning elements by index and also appending them, is a violation.`,
   });
 }
 
-export const tests = [
+export const aiTests = [
   test('indexed filling without append selects no scope').withFiles({
     'copy.go': `package example
 
