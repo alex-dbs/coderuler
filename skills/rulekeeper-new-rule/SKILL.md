@@ -17,13 +17,21 @@ Establish:
 - **Decision:** what exact condition separates a pass from a violation?
 - **Evidence:** one realistic violation, one compliant counterpart, and the boundaries that could change the decision.
 
+Each rule must check exactly one thing. Split independent checks into separate rules.
+
 Use deterministic code for structural, numeric, equality, and pattern policies. Use AI when the decision genuinely requires semantic judgment; keep selection and applicability deterministic.
 
 ## 2. Write the dataset, then the rule
 
 Create `.rulekeeper/<name>.rule.ts` and default-export a class extending `Rule`. The filename supplies the rule name. Supported module suffixes are `.rule.ts`, `.rule.mts`, `.rule.js`, and `.rule.mjs`; helper modules use ordinary filenames.
 
-Add a named `tests` export in the same file. Run the relevant cases before the policy change and require an assertion mismatch for the intended violation—not a loading error. Implement the policy, then require every case to pass.
+Start the name with its language or technology prefix, such as `go-`, `ts-`, or `pg-`, followed by the policy.
+
+Keep rules short, with only a few lines of policy code. Reuse built-in selectors, evaluators, and standard libraries before writing custom logic. Add helpers only for real reuse.
+
+Add a named `tests` export in the same file. Use `.passes()` and `.violates()` cases that exercise the policy. Omit `.skips()` assertions when creating a rule: skipped inputs never reach the check and provide no evidence of policy behavior.
+
+Run the relevant cases before the policy change and require an assertion mismatch for the intended violation, not a loading error. Implement the policy, then require every case to pass.
 
 This complete example requires at least two replicas whenever `spec.replicas` is an integer:
 
@@ -61,23 +69,18 @@ export const tests = [
   test('zero is a real value, not missing data').withFiles({
     'deploy/api.yml': { spec: { replicas: 0 } },
   }).violates(),
-  test('unrelated configuration does not join the policy').withFiles({
-    'deploy/api.yml': { spec: { replicas: 2 } },
-    'deploy/settings.yml': { spec: { timeout: 1 } },
-    'examples/api.yml': { spec: { replicas: 1 } },
-  }).skips(), // tests skipped
 ];
 ```
 
-Save it as `.rulekeeper/replica-floor.rule.ts`. The scope cast reflects the fixed default `group = 'scope'`; the non-null assertion reflects the filter's required-data precondition. A TypeScript generic describes expected data; the filter still establishes that shape at runtime. If a missing or malformed field is itself a violation, select its enclosing object and check that requirement instead of filtering it away.
+Save it as `.rulekeeper/k8s-replica-floor.rule.ts`. The scope cast reflects the fixed default `group = 'scope'`; the non-null assertion reflects the filter's required-data precondition. A TypeScript generic describes expected data; the filter still establishes that shape at runtime. If a missing or malformed field is itself a violation, select its enclosing object and check that requirement instead of filtering it away.
 
 ## 3. Validate and run the tests
 
 For the example:
 
 ```sh
-rulekeeper validate .rulekeeper/replica-floor.rule.ts
-rulekeeper test .rulekeeper/replica-floor.rule.ts
+rulekeeper validate .rulekeeper/k8s-replica-floor.rule.ts
+rulekeeper test .rulekeeper/k8s-replica-floor.rule.ts
 ```
 
 Then run the project's rules and their datasets:
@@ -94,7 +97,7 @@ Useful test options:
 ```sh
 rulekeeper test . --failures-only
 rulekeeper test . --concurrency 4 --timeout 30s
-rulekeeper test .rulekeeper/semantic-policy.rule.ts --ai --timeout 45s
+rulekeeper test .rulekeeper/k8s-semantic-policy.rule.ts --ai --timeout 45s
 ```
 
 Replace the semantic-policy filename with the actual AI rule. `--ai` authorizes live provider calls for `aiTests`, requires provider configuration, and may incur charges. Outcomes can vary; provider errors are errors, not passes.
@@ -104,8 +107,8 @@ Replace the semantic-policy filename with the actual AI rule. `--ai` authorizes 
 Tests use temporary fixtures. Inspection uses actual files under `.`; create representative project data there if none exists yet.
 
 ```sh
-rulekeeper inspect .rulekeeper/replica-floor.rule.ts .
-rulekeeper inspect replica-floor . --json
+rulekeeper inspect .rulekeeper/k8s-replica-floor.rule.ts .
+rulekeeper inspect k8s-replica-floor . --json
 ```
 
 An exact rule name uses discovery; a module path selects that file directly. Inspection accepts one rule, not a directory. Use one output format at a time (`--json`, `--jsonl`, or `--raw`).
@@ -124,7 +127,7 @@ Inspection runs the actual check, including live AI calls when present.
 Finally exercise normal evaluation:
 
 ```sh
-rulekeeper check . --rules .rulekeeper/replica-floor.rule.ts --output-all
+rulekeeper check . --rules .rulekeeper/k8s-replica-floor.rule.ts --output-all
 ```
 
 ## Good and bad practices
@@ -133,7 +136,6 @@ rulekeeper check . --rules .rulekeeper/replica-floor.rule.ts --output-all
 | --- | --- |
 | Narrow selection, applicability in `when`/`filter`, policy in `check` | Repeating guards in the check or filtering out the violations the rule should report |
 | A function-valued `check = ...` or typed `check: Evaluator<T> = ...` | A `check(...)` method instead of the required property |
-| Small direct comparisons, standard parsers/libraries, shared helpers with real reuse | Brittle source regex for syntax, homemade parsers, or abstractions for hypothetical cases |
 | Actionable violations naming the field/value and required correction | Generic messages with no location-specific reason |
 | Pure per-subject decisions and local state | Results depending on concurrent check order or mutable module caches |
 | Real failing-before/passing-after datasets and an inspected applicable subject | Merely validating imports, running without selected subjects, or treating a skip as a pass |

@@ -47,6 +47,28 @@ JSON/YAML `path` addresses the document; `key` is a JSONPath evaluated against e
 
 Omitted/`undefined` options retain defaults; explicit `null` is invalid for structured paths and CSV headers/delimiters. A CSV delimiter is one Unicode code point other than CR, LF, or a quote; CSV scopes preserve exact record source slices with multibyte delimiters too.
 
+### ast-grep queries
+
+Use `scopes.astGrep` to select code by syntax. The [official ast-grep documentation](https://ast-grep.github.io/) is authoritative for query syntax and behavior. This reference covers the Rulekeeper integration.
+
+- For patterns and captures, read [pattern syntax](https://ast-grep.github.io/guide/pattern-syntax). `$NAME` matches one node, and `$$$ARGS` matches zero or more nodes.
+- For node kinds, relations, and logical composition, read the [rule object reference](https://ast-grep.github.io/reference/rule).
+- For unfamiliar syntax, use the [playground](https://ast-grep.github.io/playground.html) to inspect node kinds and try the query against realistic code.
+- For custom node traversal beyond built-in selection, read the [JavaScript API](https://ast-grep.github.io/guide/api-usage/js-api).
+
+Choose the source language, then start with a `pattern` or `kind`. Add `has`/`inside` for structural context and `all`/`any`/`not` for composition. Relational searches default to immediate neighbors. Use `stopBy: 'end'` when the search must reach deeper descendants or ancestors.
+
+Pass the query object as `rule`, with `constraints` and `utils` beside it when needed. Rulekeeper supplies file selection and reporting, so omit ast-grep YAML fields such as `id`, `message`, and `severity`.
+
+```ts
+scope = scopes.astGrep({
+  language: 'typescript',
+  rule: { pattern: 'console.log($$$ARGS)' },
+});
+```
+
+This selects calls with any number of arguments. Read `subject.source` and `subject.captures.ARGS` in the check. Rulekeeper omits empty captures, so `ARGS` is absent for `console.log()`. Use `rulekeeper inspect` to confirm matches on project files, then test the policy through the workflow in [SKILL.md](SKILL.md).
+
 ### AST and TypeScript/TSX
 
 Choose a language matching the source; common JavaScript/TypeScript, markup, and bundled language grammars are supported, with case-insensitive names/aliases and lazy bundled registration. Use the installed release's language documentation when selecting a less common grammar.
