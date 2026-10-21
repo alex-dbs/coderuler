@@ -65,7 +65,7 @@ test('numeric SSH origin materializes complete committed trees and only merge-ba
   const requests = await interceptGithub(context, target);
   const before = snapshot(target);
   const result = await checkout(context, target);
-  assert.deepEqual(result.pullRequest, { repository: PR_REPOSITORY, number: PR_NUMBER });
+  assert.deepEqual(result.pullRequest, { repository: PR_REPOSITORY, number: PR_NUMBER, head: target.head });
   assert.equal(dirname(result.root), dirname(result.rulesRoot));
   assert.equal(dirname(result.root).startsWith(join(target.temporary, 'rulekeeper-pr-')), true);
   assert.equal(lstatSync(join(result.root, '.git')).isDirectory(), true, 'head must be the main repository, not a linked worktree');
@@ -100,12 +100,21 @@ test('canonical URL works outside a repository, ignores query and fragment, and 
   mkdirSync(outside);
   const result = await prepare(target, outside, { ...target.env, GITHUB_TOKEN: '   ' })(`${PR_URL}/?tab=files#diff`);
   context.after(() => result.cleanup());
-  assert.deepEqual(result.pullRequest, { repository: PR_REPOSITORY, number: 42 });
+  assert.deepEqual(result.pullRequest, { repository: PR_REPOSITORY, number: 42, head: target.head });
   assert.equal(readFileSync(join(result.root, '.git/config'), 'utf8').includes(`https://github.com/${PR_REPOSITORY}.git`), true);
   assert.equal(requests.length, 1);
   assert.equal(requests[0]?.authorization, undefined);
   await result.cleanup();
   assertClean(target);
+});
+
+test('checkout identity carries the fetched Git revision rather than earlier API metadata', async context => {
+  const target = fixture(context, 'stale-head-metadata');
+  await interceptGithub(context, target, { metadata: { base: { ref: 'main' }, head: { sha: target.base } } });
+  const result = await checkout(context, target);
+  assert.notEqual(target.base, target.head);
+  assert.equal(result.pullRequest.head, target.head);
+  assert.equal(result.pullRequest.head, git(at(target, result.root), 'rev-parse', 'HEAD'));
 });
 
 test('explicit base selects the branch tip policy and its distinct merge-base, not the default branch', async context => {

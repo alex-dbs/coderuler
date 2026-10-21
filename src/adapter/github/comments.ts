@@ -174,6 +174,9 @@ export function createGithubCommenter(
       return sha;
     };
     const head = await readHead();
+    if (pull.head !== undefined && head !== pull.head) {
+      throw new Error('GitHub pull request head changed since analysis; refusing stale findings.');
+    }
     const files = new Map<string, PullFile>();
     for (let page = 1; page <= 30; page++) {
       const entries = await json(`${path}/files?per_page=100&page=${page}`);
@@ -221,8 +224,8 @@ export function createGithubCommenter(
       if (anchors.size === 0) fallback.push(finding.body);
     }
 
+    if (await readHead() !== head) throw new Error('GitHub pull request head changed during comment planning; refusing stale findings.');
     if (inline.length > 0) {
-      if (await readHead() !== head) throw new Error('GitHub pull request head changed during comment planning; refusing stale inline locations.');
       for (let index = 0; index < inline.length; index += 100) {
         const response = await request(`${path}/reviews`, 'POST', {
           commit_id: head, event: 'COMMENT', body: 'Rulekeeper violations', comments: inline.slice(index, index + 100),

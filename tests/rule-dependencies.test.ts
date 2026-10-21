@@ -238,6 +238,77 @@ test('a read-only empty-lock owner loads silently while explicit sync still esta
   assert.deepEqual(target.requests, []);
 });
 
+test('explicit sync replaces a previous owned installation with an empty committed graph offline', async context => {
+  const target = setup(context);
+  await target.manager.change(target.directory, 'add', ['fixture-policy@1.0.0']);
+  assert.equal(await message(target.directory), POLICY_MESSAGE_V1);
+  const modules = join(target.directory, 'node_modules');
+  const markerPath = join(modules, '.rulekeeper-install.json');
+  const previousMarker = readFileSync(markerPath, 'utf8');
+  const sdk = join(modules, '@alex-dbs/rulekeeper');
+  const sdkTarget = realpathSync(sdk);
+  const empty = readLock(target.directory);
+  empty.packages = { '': { name: 'rulekeeper-rules', version: '1.0.0', dependencies: {} } };
+  writeLock(target.directory, empty);
+  const committed = lockBytes(target.directory);
+  target.network('offline');
+
+  assert.equal((await target.manager.prepare(target.directory)).key, 'empty');
+  assert.equal(readFileSync(markerPath, 'utf8'), previousMarker);
+  const synchronized = await target.manager.sync(target.directory);
+  assert.deepEqual(synchronized, { directory: target.directory, directDependencies: [], key: 'empty' });
+  assert.equal(lockBytes(target.directory), committed);
+  const marker = JSON.parse(readFileSync(markerPath, 'utf8')) as { key: string; installedLocations: string[] };
+  assert.equal(marker.key, 'empty');
+  assert.deepEqual(marker.installedLocations, []);
+  const requireFromOwner = createRequire(join(target.directory, 'consumer.cjs'));
+  for (const name of ['fixture-policy', 'fixture-shared']) {
+    assert.equal(existsSync(join(modules, name)), false);
+    assert.throws(() => requireFromOwner.resolve(name), { code: 'MODULE_NOT_FOUND' });
+  }
+  assert.equal(lstatSync(sdk).isSymbolicLink(), true);
+  assert.equal(realpathSync(sdk), sdkTarget);
+  const sdkManifest = JSON.parse(readFileSync(join(sdk, 'package.json'), 'utf8')) as { types: string };
+  assert.equal(typeof sdkManifest.types, 'string');
+  assert.equal(lstatSync(realpathSync(join(sdk, sdkManifest.types))).isFile(), true);
+  assert.deepEqual(target.requests, []);
+});
+
+test('empty-lock sync preserves an unowned node_modules directory instead of claiming or replacing it', async context => {
+  const target = setup(context);
+  writeLock(target.directory, {
+    name: 'rulekeeper-rules',
+    version: '1.0.0',
+    lockfileVersion: 3,
+    packages: { '': { name: 'rulekeeper-rules', version: '1.0.0', dependencies: {} } },
+  });
+  const committed = lockBytes(target.directory);
+  const modules = join(target.directory, 'node_modules');
+  mkdirSync(modules);
+  const sentinel = join(modules, 'user-file');
+  writeFileSync(sentinel, 'preserve');
+  target.network('offline');
+  await assert.rejects(target.manager.sync(target.directory), /node_modules.*conflict/i);
+  assert.equal(readFileSync(sentinel, 'utf8'), 'preserve');
+  assert.deepEqual(readdirSync(modules), ['user-file']);
+  assert.equal(lockBytes(target.directory), committed);
+  assert.deepEqual(target.requests, []);
+});
+
+test('sync without a committed lock does not remove a previous owned dependency installation', async context => {
+  const target = setup(context);
+  await target.manager.change(target.directory, 'add', ['fixture-policy@1.0.0']);
+  const markerPath = join(target.directory, 'node_modules/.rulekeeper-install.json');
+  const previousMarker = readFileSync(markerPath, 'utf8');
+  rmSync(join(target.directory, 'rulekeeper.lock'));
+  target.network('offline');
+  assert.equal((await target.manager.sync(target.directory)).key, 'empty');
+  assert.equal(await message(target.directory), POLICY_MESSAGE_V1);
+  assert.equal(readFileSync(markerPath, 'utf8'), previousMarker);
+  assert.equal(existsSync(join(target.directory, 'rulekeeper.lock')), false);
+  assert.deepEqual(target.requests, []);
+});
+
 test('upgrades and removes are explicit transactions and removing the last package retains an empty lock', async context => {
   const target = setup(context);
   const first = await target.manager.change(target.directory, 'add', ['fixture-policy@1.0.0']);

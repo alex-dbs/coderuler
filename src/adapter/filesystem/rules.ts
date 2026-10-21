@@ -45,7 +45,10 @@ async function collectModules(directory: string, files: string[]): Promise<void>
     if (entry.isSymbolicLink()) continue;
     const child = join(directory, entry.name);
     if (entry.isDirectory()) {
-      if (entry.name === ARCHIVED_DIRECTORY || entry.name === 'node_modules') continue;
+      if (entry.name === ARCHIVED_DIRECTORY || entry.name === 'node_modules'
+        || entry.name === '.rulekeeper-deps-write'
+        || entry.name.startsWith('.rulekeeper-deps-stage-')
+        || entry.name.startsWith('.rulekeeper-sdk-')) continue;
       await collectModules(child, files);
     } else if (entry.isFile() && RULE_MODULE.test(entry.name)) {
       files.push(child);

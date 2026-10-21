@@ -10,6 +10,7 @@ import { createGithubApi, mapping } from './api.js';
 export interface PullRequest {
   readonly repository: string;
   readonly number: number;
+  readonly head?: string;
 }
 
 export interface PullRequestCheckout {
@@ -146,11 +147,12 @@ export function createPullRequestCheckout(
         `+refs/pull/${pullRequest.number}/head:refs/rulekeeper/head`,
       ]);
       await runGit(root, ['checkout', '--detach', 'refs/rulekeeper/head']);
+      const head = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
       await runGit(root, ['worktree', 'add', '--detach', rulesRoot, 'refs/rulekeeper/base']);
       const mergeBase = (await runGit(root, ['merge-base', 'refs/rulekeeper/base', 'refs/rulekeeper/head'])).stdout.trim();
       const files = await changedFiles(root, mergeBase, isolatedEnv);
       await assertNoWorktreeOverride(rulesRoot);
-      return { root, rulesRoot, changedFiles: files, pullRequest, cleanup };
+      return { root, rulesRoot, changedFiles: files, pullRequest: { ...pullRequest, head }, cleanup };
     } catch (error) {
       await cleanup();
       throw error;

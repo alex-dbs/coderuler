@@ -325,6 +325,63 @@ test('failed comment POST retains analysis and removes both checkout trees', asy
   assert.ok(posts(requests)[0]!.url.endsWith('/pulls/42/reviews'));
 });
 
+test('PR advancement after actual analysis refuses stale inline and fallback findings and cleans checkout', async context => {
+  for (const located of [false, true]) {
+    await context.test(located ? 'unchanged contextual anchor' : 'fixed affected-file fallback', async child => {
+      let target = fixture(child, located ? 'stale-context-anchor' : 'stale-summary');
+      if (located) {
+        target = publish(target, 'main', () => {
+          writeFile(join(target.cwd, '.rulekeeper/base.rule.ts'), policy(
+            `subject => subject.source.includes('BAD') ? violation(${JSON.stringify(BASE_MESSAGE)}) : pass()`,
+            '',
+            `scope = file => [{ id: '$', source: file.source, lines: { start: 1, end: 1 } }];`,
+          ));
+        });
+        target = publish(target, 'feature/pr-fixture', () => {
+          writeFile(join(target.cwd, 'src/changed.txt'), 'unchanged anchor\nBAD changed by the PR\n');
+        });
+      }
+      const analyzedHead = target.head;
+      const metadata = { base: { ref: 'main' }, head: { sha: analyzedHead } };
+      const requests = await interceptGithub(child, target, { metadata });
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      const runtime = createServices(target.cwd, target.env);
+      const loader = createRuleLoader({ home: target.home });
+      let evaluated = false;
+      const status = await runProgram(['check', '--pr', '42', '--auto-comment', '--json', '--output-all'], {
+        ...runtime,
+        loadRules: loader.load,
+        runRules: async (...args: Parameters<typeof runtime.runRules>) => {
+          const reports = await runtime.runRules(...args);
+          assert.ok(reports.some(report => report.status === 'violation'), 'real evaluation must finish against the old fetched head');
+          evaluated = true;
+          target = publish(target, 'feature/pr-fixture', () => {
+            writeFile(join(target.cwd, 'src/changed.txt'), `${located ? 'unchanged anchor\n' : ''}GOOD fixed by the PR\n`);
+          });
+          metadata.head.sha = target.head;
+          return reports;
+        },
+        terminal: { color: false, interactive: false },
+        write: (text: string) => { stdout.push(text); },
+        writeError: (text: string) => { stderr.push(text); },
+      });
+      assert.equal(evaluated, true);
+      assert.notEqual(target.head, analyzedHead);
+      assert.equal(git(target, '--git-dir', target.remote, 'rev-parse', 'refs/pull/42/head'), target.head);
+      assert.equal(status, 2);
+      assert.match(stderr.join(''), /head.*changed.*analysis/i);
+      assert.equal(stderr.join('').includes(PR_TOKEN), false);
+      const reports = JSON.parse(stdout.join('')).reports as CheckReportShape[];
+      assert.deepEqual(evaluations(reports).map(item => item.message), [BASE_MESSAGE, GLOBAL_MESSAGE]);
+      assert.ok(reports.every(report => report.status === 'violation'), 'rendered old-head analysis must remain available');
+      assert.deepEqual(posts(requests), []);
+      assert.equal(requests.length, 2, 'stale analysis must fail before file planning or any POST');
+      assertClean(target);
+    });
+  }
+});
+
 function policyLock(version: '1.0.0' | '2.0.0', malicious = false): string {
   const names = ['fixture-policy', 'fixture-shared', ...(malicious ? ['fixture-install'] : [])];
   const direct = { 'fixture-policy': version, ...(malicious ? { 'fixture-install': '1.0.0' } : {}) };

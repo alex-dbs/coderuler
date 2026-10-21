@@ -1,5 +1,5 @@
 import { closeSync, constants, fstatSync, lstatSync, mkdtempSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { createRequire, isBuiltin, registerHooks } from 'node:module';
+import { createRequire, isBuiltin, registerHooks, type ResolveHookSync } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -37,6 +37,7 @@ interface ImportScope {
   readonly metadata: string;
   readonly sourceMetadata: string;
   readonly denied: ReadonlyMap<string, string>;
+  readonly sdkTarget: string | undefined;
   readonly sourceRoots: readonly string[];
 }
 const ownerKeys = new Map<string, string>();
@@ -283,6 +284,20 @@ function requireCondition(conditions: readonly string[]): boolean {
   return requiring;
 }
 
+const resolveSdk: ResolveHookSync = (specifier, context, nextResolve) => {
+  let result;
+  try { result = nextResolve(specifier, context); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ERR_MODULE_NOT_FOUND' && (error as NodeJS.ErrnoException).code !== 'MODULE_NOT_FOUND') throw error;
+    // CommonJS nextResolve expects a filename, not a file URL. Only missing
+    // packages use the running SDK fallback; export-condition errors propagate.
+    result = nextResolve(requireCondition(context.conditions) ? fileURLToPath(SDK_ENTRY) : SDK_ENTRY, context);
+  }
+  const path = filename(result.url);
+  if (path !== undefined) sdkModules.add(path);
+  return result;
+};
+
 // Node, rather than a second implementation of its imports/conditions algorithm,
 // resolves #imports in a package scope with managed dependencies. Source links
 // canonicalize back to the real helpers without modifying the owner.
@@ -309,9 +324,21 @@ function importScope(parent: string, installation: Installation | undefined, dep
     const denied = new Map<string, string>();
     const sourceRoots: string[] = [];
     const ownName = manifest['exports'] == null ? undefined : manifest['name'];
-    let deniedDirectory: string | undefined;
+    let targetsDirectory: string | undefined;
+    let sdkTarget: string | undefined;
     const restrictTargets = (value: unknown): unknown => {
       if (typeof value === 'string') {
+        if (value === SDK) {
+          // Let Node select this exact public target through its normal
+          // conditions/arrays/patterns, then resolve it from the real importer
+          // to retain local SDK preference and the source-checkout fallback.
+          targetsDirectory ??= mkdtempSync(join(scope, '.rulekeeper-targets-'));
+          if (sdkTarget === undefined) {
+            sdkTarget = join(targetsDirectory, 'sdk');
+            writeFileSync(sdkTarget, '');
+          }
+          return `./${relative(scope, sdkTarget).split(sep).join('/')}`;
+        }
         const name = nameOf(value);
         if (!bare(value) || isBuiltin(value) || name === ownName || dependencies.directDependencies.includes(name)) return value;
         try {
@@ -322,8 +349,8 @@ function importScope(parent: string, installation: Installation | undefined, dep
         // Preserve Node's condition/array/pattern selection, but turn an
         // undeclared external target into an identifiable local resolution.
         // It can never reach application, NODE_PATH, or ancestor packages.
-        deniedDirectory ??= mkdtempSync(join(scope, '.rulekeeper-denied-'));
-        const marker = join(deniedDirectory, String(denied.size));
+        targetsDirectory ??= mkdtempSync(join(scope, '.rulekeeper-targets-'));
+        const marker = join(targetsDirectory, String(denied.size));
         writeFileSync(marker, '');
         denied.set(marker, name);
         return `./${relative(scope, marker).split(sep).join('/')}`;
@@ -352,7 +379,7 @@ function importScope(parent: string, installation: Installation | undefined, dep
     const prepared = {
       parentURL, require: createRequire(parentURL),
       metadata: join(scope, 'package.json'), sourceMetadata: join(directory, 'package.json'),
-      denied, sourceRoots,
+      denied, sdkTarget, sourceRoots,
     };
     importScopes.set(key, prepared);
     return prepared;
@@ -376,17 +403,7 @@ registerHooks({
     const owner = parent === undefined || sdkModules.has(parent) ? undefined : packageContext(parent);
     if (dependencies !== undefined) assertRuleDependenciesCurrent(dependencies);
     if (isBuiltin(specifier)) return nextResolve(specifier, context);
-    if (specifier === SDK) {
-      let result;
-      try { result = nextResolve(specifier, context); }
-      catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ERR_MODULE_NOT_FOUND' && (error as NodeJS.ErrnoException).code !== 'MODULE_NOT_FOUND') throw error;
-        result = nextResolve(SDK_ENTRY, context);
-      }
-      const path = filename(result.url);
-      if (path !== undefined) sdkModules.add(path);
-      return result;
-    }
+    if (specifier === SDK) return resolveSdk(specifier, context, nextResolve);
     if (parent === undefined || (dependencies === undefined && owner === undefined)) return nextResolve(specifier, context);
     const requiring = requireCondition(context.conditions);
     if (owner !== undefined) {
@@ -424,12 +441,18 @@ registerHooks({
     }
     let scope: ImportScope | undefined;
     if (specifier.startsWith('#')) {
+      // Node merges nextResolve's context into this hook's context in place.
+      // Retain the real importer before resolving through the temporary scope.
+      const importerContext = { ...context };
       scope = importScope(parent, installation, prepared);
       result = scope === undefined ? nextResolve(specifier, context) : requiring
         ? nextResolve(scope.require.resolve(specifier), context)
         : nextResolve(specifier, { ...context, parentURL: scope.parentURL });
       const denied = scope === undefined ? undefined : scope.denied.get(filename(result.url)!);
       if (denied !== undefined) throw undeclared(denied, prepared);
+      if (scope?.sdkTarget !== undefined && filename(result.url) === scope.sdkTarget) {
+        return resolveSdk(SDK, importerContext, nextResolve);
+      }
       if (scope !== undefined && filename(result.url) === scope.metadata) {
         result = nextResolve(requiring ? scope.sourceMetadata : pathToFileURL(scope.sourceMetadata).href, context);
       }

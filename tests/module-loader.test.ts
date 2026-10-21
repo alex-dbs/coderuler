@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import fsPromises, { mkdir, mkdtemp, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { Rule } from '../dist/index.js';
 import type { RuleLoader, RuleSelection } from '../dist/app/ports.js';
 import { createRuleLoader } from '../dist/adapter/filesystem/rules.js';
+import { createRuleDependencyManager } from '../dist/adapter/filesystem/dependencies.js';
+import { createDependencyFixture, installDependencyRegistry } from './dependency-support.ts';
 
 const BRAND = Symbol.for('rulekeeper.Rule');
 
@@ -293,6 +296,84 @@ test('skips rule modules nested under an old directory', async () => {
 
   const loaded = await loaderFor(root).load(selectionFor(root));
   assert.deepStrictEqual(names(loaded), ['keep']);
+});
+
+test('skips reserved dependency working directories but keeps authored hidden directories', async () => {
+  const root = await makeTempRoot('internal-directories');
+  const directory = join(root, '.rulekeeper');
+  await writeModule(join(directory, 'keep.rule.mjs'), plainRule('Keep'));
+  await writeModule(join(directory, '.authored', 'hidden-author.rule.mjs'), plainRule('HiddenAuthor'));
+  await writeModule(join(directory, '.rulekeeper-deps-write-custom', 'custom.rule.mjs'), plainRule('Custom'));
+  for (const internal of ['.rulekeeper-deps-stage-fixture', '.rulekeeper-sdk-fixture', 'node_modules', '.authored/.rulekeeper-deps-write']) {
+    await writeModule(join(directory, internal, 'hidden.rule.ts'), 'throw new Error("internal rules must not load");\n');
+  }
+
+  assert.deepStrictEqual(names(await loaderFor(root).load(selectionFor(root))), ['hidden-author', 'custom', 'keep']);
+});
+
+test('discovery ignores an active package audit and a mutex removed after root enumeration', async context => {
+  const root = await makeTempRoot('concurrent-install-discovery');
+  const directory = join(root, '.rulekeeper');
+  await writeModule(join(directory, 'authored.rule.mjs'), plainRule('Authored'));
+  await writeModule(join(directory, '.authored', 'hidden-author.rule.mjs'), plainRule('HiddenAuthor'));
+  const fixture = createDependencyFixture(join(root, 'registry'));
+  const registry = installDependencyRegistry(fixture);
+  const manager = createRuleDependencyManager({ cacheRoot: join(root, 'cache') });
+  const auditReached = Promise.withResolvers<void>();
+  const releaseAudit = Promise.withResolvers<void>();
+  const readdir = fsPromises.readdir;
+  let installing: Promise<unknown> | undefined;
+  let discoveryStarted = false;
+  let rootEnumerated = false;
+  let auditedDirectory: string | undefined;
+  const intercepted = context.mock.method(fsPromises, 'readdir', (async (...args: Parameters<typeof readdir>) => {
+    const entries = await readdir(...args);
+    const path = String(args[0]);
+    if (auditedDirectory === undefined && dirname(path).startsWith(join(directory, '.rulekeeper-deps-stage-'))
+      && path.startsWith(join(dirname(path), '.audit-'))
+      && entries.some(entry => String(entry.name) === 'hidden.rule.ts')) {
+      // Pacote has finished writing the real artifact; keep its audit directory alive for discovery.
+      auditedDirectory = path;
+      auditReached.resolve();
+      await releaseAudit.promise;
+    }
+    if (discoveryStarted && !rootEnumerated && path === directory) {
+      rootEnumerated = true;
+      assert.ok(entries.some(entry => String(entry.name).startsWith('.rulekeeper-deps-stage-')));
+      assert.ok(entries.some(entry => String(entry.name) === '.rulekeeper-deps-write'));
+      assert.ok(auditedDirectory);
+      assert.ok((await stat(join(auditedDirectory, 'hidden.rule.ts'))).isFile());
+      // Return the actual enumeration only after these transient entries have disappeared.
+      // Waiting for discovery to recurse into the audit instead would deadlock the fixed loader.
+      releaseAudit.resolve();
+      assert.ok(installing);
+      await installing;
+      await assert.rejects(stat(join(directory, '.rulekeeper-deps-write')), { code: 'ENOENT' });
+    }
+    return entries;
+  }) as typeof readdir);
+  syncBuiltinESMExports();
+  try {
+    installing = manager.change(directory, 'add', ['fixture-policy@1.0.0']);
+    await Promise.race([
+      auditReached.promise,
+      installing.then(() => { throw new Error('Acquisition completed without reaching the package audit barrier'); }),
+    ]);
+    discoveryStarted = true;
+    const loader = createRuleLoader({ home: join(root, 'home'), dependencies: manager });
+    assert.deepStrictEqual(names(await loader.load(selectionFor(root))), ['hidden-author', 'authored']);
+    assert.equal(rootEnumerated, true);
+    assert.ok(registry.requests.some(request => request.kind === 'tarball'));
+    assert.ok((await stat(join(directory, 'node_modules', 'fixture-policy', 'hidden.rule.ts'))).isFile());
+    // The published physical package tree must remain excluded too.
+    assert.deepStrictEqual(names(await loader.load(selectionFor(root))), ['hidden-author', 'authored']);
+  } finally {
+    releaseAudit.resolve();
+    await installing?.catch(() => {});
+    intercepted.mock.restore();
+    syncBuiltinESMExports();
+    registry.close();
+  }
 });
 
 test('rejects a discovery root that lives inside an archived old directory', async () => {

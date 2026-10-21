@@ -371,43 +371,48 @@ async function installedLocally(directory: string, snapshot: Snapshot): Promise<
 async function install(directory: string, cacheRoot: string, previous: Snapshot, request?: { readonly add?: readonly string[]; readonly rm?: readonly string[] }): Promise<Installation> {
   const stage = await realpath(await mkdtemp(join(directory, '.rulekeeper-deps-stage-')));
   try {
-    await stageLock(stage, previous);
-    const arborist = new Arborist({ ...policy, engineStrict: true, savePrefix: '', path: stage, cache: join(cacheRoot, 'tarballs') });
-    const tree = await arborist.buildIdealTree(request);
-    const exact: Record<string, string> = Object.create(null);
-    for (const name of Object.keys(dependencyMap(tree.package, 'dependencies', 'resolved root')).sort()) {
-      const edge = tree.edgesOut.get(name);
-      if (!edge?.to || !edge.valid) throw new Error(`${name}: resolution did not produce a compatible direct package`);
-      exact[name] = exactVersion(name, edge.to.version);
-      if (!request && exact[name] !== previous.direct[name]) throw new Error(`${name}: repair changed an exact direct dependency`);
-    }
-    tree.package = rootPackage(exact);
-    tree.meta.add(tree);
-    const serialized = `${JSON.stringify(JSON.parse(tree.meta.toString()) as unknown, null, 2)}\n`;
-    const snapshot = validateLock(isDeepStrictEqual(JSON.parse(previous.text), JSON.parse(serialized)) ? previous.text : serialized, directory);
-    const nodes = [...tree.inventory.values()].filter(node => node.location).map(node => ({ location: node.location, omitted: node.inert }));
-    const expected = nodes.filter(node => !node.omitted).map(node => node.location);
-    for (const node of tree.inventory.values()) {
-      for (const edge of node.edgesOut.values()) {
-        if (!edge.valid && !(edge.peer && edge.optional && !edge.to)) {
-          throw new Error(`${node.location || 'rulekeeper.lock root'}: package resolution failed for dependency ${edge.name}`);
+    let snapshot = previous;
+    let expected: string[] = [];
+    // An explicitly empty lock needs only an SDK installation, not npm graph work.
+    if (request || previous.key !== 'empty') {
+      await stageLock(stage, previous);
+      const arborist = new Arborist({ ...policy, engineStrict: true, savePrefix: '', path: stage, cache: join(cacheRoot, 'tarballs') });
+      const tree = await arborist.buildIdealTree(request);
+      const exact: Record<string, string> = Object.create(null);
+      for (const name of Object.keys(dependencyMap(tree.package, 'dependencies', 'resolved root')).sort()) {
+        const edge = tree.edgesOut.get(name);
+        if (!edge?.to || !edge.valid) throw new Error(`${name}: resolution did not produce a compatible direct package`);
+        exact[name] = exactVersion(name, edge.to.version);
+        if (!request && exact[name] !== previous.direct[name]) throw new Error(`${name}: repair changed an exact direct dependency`);
+      }
+      tree.package = rootPackage(exact);
+      tree.meta.add(tree);
+      const serialized = `${JSON.stringify(JSON.parse(tree.meta.toString()) as unknown, null, 2)}\n`;
+      snapshot = validateLock(isDeepStrictEqual(JSON.parse(previous.text), JSON.parse(serialized)) ? previous.text : serialized, directory);
+      const nodes = [...tree.inventory.values()].filter(node => node.location).map(node => ({ location: node.location, omitted: node.inert }));
+      expected = nodes.filter(node => !node.omitted).map(node => node.location);
+      for (const node of tree.inventory.values()) {
+        for (const edge of node.edgesOut.values()) {
+          if (!edge.valid && !(edge.peer && edge.optional && !edge.to)) {
+            throw new Error(`${node.location || 'rulekeeper.lock root'}: package resolution failed for dependency ${edge.name}`);
+          }
         }
       }
-    }
-    for (const node of nodes) {
-      const entry = snapshot.lock.packages[node.location]!;
-      const audit = await mkdtemp(join(stage, '.audit-'));
-      try {
-        // Inspect each raw artifact in isolation, including npm's omitted optional branches.
-        await pacote.extract(entry.resolved as string, audit, { ...policy, allowRemote: 'all', integrity: entry.integrity, cache: join(cacheRoot, 'tarballs') });
-        await validateExtracted(audit, node.location, entry);
-      } finally { await rm(audit, { recursive: true, force: true }); }
-    }
-    await writeFile(join(stage, 'package.json'), `${JSON.stringify(rootPackage(exact), null, 2)}\n`);
-    const actual = await arborist.reify({ save: false });
-    for (const location of expected) {
-      if (!actual.inventory.get(location) || !await pathExists(join(stage, location))) {
-        throw new Error(`${locationName(location)}: locked package acquisition failed; run rulekeeper deps sync after correcting the package or cache`);
+      for (const node of nodes) {
+        const entry = snapshot.lock.packages[node.location]!;
+        const audit = await mkdtemp(join(stage, '.audit-'));
+        try {
+          // Inspect each raw artifact in isolation, including npm's omitted optional branches.
+          await pacote.extract(entry.resolved as string, audit, { ...policy, allowRemote: 'all', integrity: entry.integrity, cache: join(cacheRoot, 'tarballs') });
+          await validateExtracted(audit, node.location, entry);
+        } finally { await rm(audit, { recursive: true, force: true }); }
+      }
+      await writeFile(join(stage, 'package.json'), `${JSON.stringify(rootPackage(exact), null, 2)}\n`);
+      const actual = await arborist.reify({ save: false });
+      for (const location of expected) {
+        if (!actual.inventory.get(location) || !await pathExists(join(stage, location))) {
+          throw new Error(`${locationName(location)}: locked package acquisition failed; run rulekeeper deps sync after correcting the package or cache`);
+        }
       }
     }
     const modules = join(stage, 'node_modules');
@@ -489,13 +494,11 @@ export function createRuleDependencyManager(options: {
     }
     return withRuleDependencyDirectoryLock(directory, async () => {
       const snapshot = await snapshotAt(directory);
-      if (!snapshot || snapshot.key === 'empty') {
-        if (explicit) {
-          await prepareRuleDependencySdk(directory, join(directory, 'node_modules'));
-          if (snapshot) await ensureDependencyIgnore(directory);
-        }
+      if (!snapshot) {
+        if (explicit) await prepareRuleDependencySdk(directory, join(directory, 'node_modules'));
         return prepared(directory, snapshot);
       }
+      if (snapshot.key === 'empty' && !explicit) return prepared(directory, snapshot);
       if (await installedLocally(directory, snapshot)) {
         if (explicit) {
           await prepareRuleDependencySdk(directory, join(directory, 'node_modules'));

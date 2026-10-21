@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, test } from 'node:test';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
 
 import type { LoadedRule, RuleSelection } from '../dist/app/ports.js';
@@ -241,6 +241,138 @@ test('rule #imports cannot disguise an undeclared application dependency', async
   const dependencies = await installedDependencies(directory);
   await rejects(() => loadPrepared(directory, dependencies), /ambient|#ambient/i, /declar|managed|tree|dependency/i);
 });
+
+for (const local of [false, true]) {
+  for (const sync of [false, true]) {
+    test(`SDK #imports retain supported public export selection with ${local ? 'an installed local SDK' : 'the running SDK fallback'} ${sync ? 'after explicit sync' : 'without a lock or editor links'}`, async () => {
+      const directory = await project(`sdk-imports-${local}-${sync}`, sync ? 1 : undefined);
+      const owner = join(directory, '.rulekeeper');
+      const metadata = JSON.stringify({
+        type: 'commonjs',
+        imports: {
+          '#sdk': '@alex-dbs/rulekeeper',
+          '#conditional': { import: '@alex-dbs/rulekeeper', require: './helpers/conditional.cjs' },
+          '#require-conditional': { import: './helpers/conditional.mjs', require: '@alex-dbs/rulekeeper' },
+          '#sdk-array': ['../invalid-target', '@alex-dbs/rulekeeper'],
+          '#sdk-pattern/*': '@alex-dbs/rulekeeper',
+        },
+      });
+      await put(join(directory, 'package.json'), metadata);
+      if (local) {
+        const sdk = join(directory, 'node_modules', '@alex-dbs', 'rulekeeper');
+        const running = new URL('../dist/index.js', import.meta.url);
+        await put(join(sdk, 'package.json'), JSON.stringify({
+          name: '@alex-dbs/rulekeeper', version: '9.8.7', type: 'module',
+          exports: { '.': { import: './index.js', require: './index.cjs' } },
+        }));
+        await put(join(sdk, 'index.js'), `export * from ${JSON.stringify(running.href)}; export const selectedSdk = 'local-esm';\n`);
+        await put(join(sdk, 'index.cjs'), `Object.assign(exports, require(${JSON.stringify(fileURLToPath(running))}), { selectedSdk: 'local-cjs' });\n`);
+      }
+      await put(join(directory, 'helpers', 'conditional.mjs'), "export const value = 'helper-esm';\n");
+      await put(join(directory, 'helpers', 'conditional.cjs'), "exports.value = 'helper-cjs';\n");
+      await put(join(directory, 'helpers', 'alias.mjs'), "import * as sdk from '#sdk'; export const value = sdk.selectedSdk ?? 'running';\n");
+      await put(join(directory, 'helpers', 'alias.cjs'), "exports.value = require('#sdk').selectedSdk ?? 'running';\n");
+      await put(join(owner, 'esm.rule.mjs'), `import { Rule, pass } from '#sdk';
+import { Rule as DirectRule } from '@alex-dbs/rulekeeper';
+import * as sdk from '#sdk';
+import * as conditional from '#conditional';
+import * as alternative from '#require-conditional';
+import * as array from '#sdk-array';
+import * as pattern from '#sdk-pattern/public';
+import { value } from '../helpers/alias.mjs';
+export default class extends Rule {
+  files = ['**/*.txt'];
+  observed = { selected: sdk.selectedSdk ?? 'running', direct: Rule === DirectRule, conditional: conditional.Rule === Rule, alternative: alternative.value, array: array.Rule === Rule, pattern: pattern.Rule === Rule, helper: value };
+  check = () => pass();
+}
+`);
+      // An absent SDK supports the existing absolute-entry fallback. Once sync
+      // exposes the running package, its import-only exports prohibit require.
+      if (local || !sync) await put(join(owner, 'cjs.rule.js'), `const sdk = require('#sdk');
+const { Rule, pass } = sdk;
+const direct = require('@alex-dbs/rulekeeper');
+const conditional = require('#require-conditional');
+const alternative = require('#conditional');
+const array = require('#sdk-array');
+const pattern = require('#sdk-pattern/public');
+const helper = require('../helpers/alias.cjs');
+module.exports = class extends Rule {
+  files = ['**/*.txt'];
+  observed = { selected: sdk.selectedSdk ?? 'running', direct: Rule === direct.Rule, conditional: conditional.Rule === Rule, alternative: alternative.value, array: array.Rule === Rule, pattern: pattern.Rule === Rule, helper: helper.value };
+  check = () => pass();
+};
+`);
+      const dependencies = sync ? await manager.sync(owner) : await manager.prepare(owner);
+      assert.equal(dependencies.key === 'empty', !sync);
+      assert.equal(existsSync(join(owner, 'rulekeeper.lock')), sync);
+      assert.equal(existsSync(join(owner, 'node_modules')), sync);
+      if (sync) assert.equal((await lstat(join(owner, 'node_modules', '@alex-dbs', 'rulekeeper'))).isSymbolicLink(), true);
+      const loaded = await loadPrepared(directory, dependencies);
+      assert.equal(loaded.length, local || !sync ? 2 : 1);
+      for (const entry of loaded) {
+        const commonjs = entry.name === 'cjs';
+        const selected = local ? `local-${commonjs ? 'cjs' : 'esm'}` : 'running';
+        assert.deepEqual(observed(entry), {
+          selected, direct: true, conditional: true, alternative: `helper-${commonjs ? 'cjs' : 'esm'}`,
+          array: true, pattern: true, helper: selected,
+        });
+      }
+      assert.equal(await readFile(join(directory, 'package.json'), 'utf8'), metadata, 'resolution leaves project metadata unchanged');
+    });
+  }
+}
+
+for (const specifier of ['@alex-dbs/rulekeeper', '#sdk']) {
+  test(`CommonJS ${specifier} preserves the running SDK's unavailable require export after sync`, async () => {
+    const directory = await project(`sdk-require-exports-${specifier.startsWith('#') ? 'alias' : 'direct'}`);
+    const owner = join(directory, '.rulekeeper');
+    await put(join(directory, 'package.json'), JSON.stringify({
+      type: 'commonjs', imports: { '#sdk': '@alex-dbs/rulekeeper' },
+    }));
+    await put(join(owner, 'require.rule.js'), `const { Rule, pass } = require(${JSON.stringify(specifier)});
+module.exports = class extends Rule {
+  files = ['**/*.txt'];
+  check = () => pass();
+};
+`);
+    const dependencies = await manager.sync(owner);
+    assert.equal((await lstat(join(owner, 'node_modules', '@alex-dbs', 'rulekeeper'))).isSymbolicLink(), true);
+    await assert.rejects(() => loadPrepared(directory, dependencies), error => {
+      for (let current = error; current instanceof Error; current = current.cause) {
+        if ((current as NodeJS.ErrnoException).code === 'ERR_PACKAGE_PATH_NOT_EXPORTED') {
+          assert.match(current.message, /@alex-dbs[/\\]rulekeeper/);
+          return true;
+        }
+      }
+      assert.fail(`Expected Node's package exports error, received: ${errorText(error)}`);
+    });
+  });
+}
+
+for (const commonjs of [false, true]) {
+  test(`SDK #imports do not exempt private subpaths for ${commonjs ? 'CommonJS' : 'ESM'}`, async () => {
+    const directory = await project(`sdk-private-alias-${commonjs}`);
+    await put(join(directory, 'package.json'), JSON.stringify({
+      type: 'module', imports: { '#sdk-private': '@alex-dbs/rulekeeper/private' },
+    }));
+    const sdk = join(directory, 'node_modules', '@alex-dbs', 'rulekeeper');
+    await put(join(sdk, 'package.json'), JSON.stringify({
+      name: '@alex-dbs/rulekeeper', type: 'module',
+      exports: { '.': './index.js', './private': { import: './private.js', require: './private.cjs' } },
+    }));
+    await put(join(sdk, 'index.js'), `export * from ${JSON.stringify(new URL('../dist/index.js', import.meta.url).href)};\n`);
+    const marker = join(directory, 'sdk-private-executed');
+    await put(join(sdk, 'private.js'), `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'executed'); export const value = true;\n`);
+    await put(join(sdk, 'private.cjs'), `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'executed'); exports.value = true;\n`);
+    if (commonjs) await put(join(directory, 'helpers', 'private.cjs'), "exports.value = require('#sdk-private').value;\n");
+    await put(join(directory, '.rulekeeper', 'private.rule.mjs'), rule(
+      commonjs ? "import { value } from '../helpers/private.cjs';" : "import { value } from '#sdk-private';", 'value',
+    ));
+    const dependencies = await installedDependencies(directory);
+    await rejects(() => loadPrepared(directory, dependencies), /@alex-dbs\/rulekeeper/, /not declared/);
+    assert.equal(existsSync(marker), false);
+  });
+}
 
 test('CommonJS #imports select the require condition and local CJS exports', async () => {
   const directory = await project('cjs-declared-imports', 1);

@@ -45,6 +45,8 @@ rulekeeper deps sync
 
 Add confirmations report that command's committed versions, even if another command changes the lock before the confirmation is printed.
 
+`deps sync` applies the committed graph, including removing owned packages when the lock is empty. SDK aliases in `package.json` imports use the same local-version preference as direct SDK imports.
+
 ```text
 .rulekeeper/
   .gitignore         # Keeps the local node_modules directory out of Git
@@ -175,6 +177,10 @@ The `settings` field sets AI options for one rule, such as its model, decision t
 - `deps add`, `deps remove`, and `deps sync` manage locked rule packages and editor declarations.
 
 Without an explicit rule path, Rulekeeper discovers rules under `.rulekeeper` in the project and `~/.rulekeeper` in the user home directory. Use `--help` after a command for its options.
+
+Rule discovery skips Rulekeeper's temporary installation directories, not ordinary hidden rule folders.
+
+With `check --pr --auto-comment`, comments refer to the analyzed revision. If the PR head changes during analysis or comment planning, Rulekeeper refuses to post stale findings.
 
 ## AI decisions
 
