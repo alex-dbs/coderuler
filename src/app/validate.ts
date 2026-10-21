@@ -91,6 +91,11 @@ export function validateRule(value: unknown, ruleFile: string): Rule<unknown> {
   if (!isRecord(settings)) invalid(at, 'settings must be an object');
   validateSettings(settings, at);
 
+  const comment = value['comment'];
+  if (comment !== undefined && (typeof comment !== 'string' || comment.trim() === '')) {
+    invalid(at, 'comment must be a non-blank string');
+  }
+
   if (!isGrouping(value['group'])) {
     invalid(at, 'group must be "scope", "file", "folder", "project", or { by: "folder", level: integer <= 0 }');
   }

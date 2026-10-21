@@ -138,6 +138,7 @@ A scope is a file or selected part of a file. Rulekeeper validates selected rule
 - `filter(subject, context)` runs once per selected scope, before grouping. It defaults to `true`. Return `false` or `{ applies: false, reason: '...' }` to skip a scope. Put applicability and required-data checks here (null check for instance).
 - `group` controls which scopes the evaluator sees together. It defaults to `'scope'`, which evaluates each scope separately. Set it to `'file'`, `'folder'`, `'project'`, or `{ by: 'folder', level }`. `folder` groups scopes within each containing folder. `project` groups all selected scopes together. `level` is a nonpositive integer.
 - `check` is the required evaluator. Assign `regex(...)`, `ai(...)`, or a function as a property. Return `pass()` or `violation(message)` from a custom function.
+- `comment` optionally replaces each GitHub finding body for this rule when you run `check --diff --auto-comment`. Set a nonblank Markdown string, for example `comment = 'Follow [our policy](https://example.com/policy).'`. Without it, Rulekeeper uses the generated body. Inline locations do not change.
 
 The `settings` field sets AI options for one rule, such as its model, decision threshold, and input or output token prices.
 

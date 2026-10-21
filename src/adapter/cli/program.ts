@@ -400,6 +400,7 @@ export function createProgram(services: CliServices): Command {
       let reports: readonly RuleReport[];
       let durationMs: number;
       let root: string;
+      let rules: readonly LoadedRule[];
       let walkthrough: WalkthroughRenderer | undefined;
       try {
         const area = await services.resolveTarget(services.cwd, target);
@@ -413,6 +414,7 @@ export function createProgram(services: CliServices): Command {
           filepath => area.contains(filepath),
           options.rules === undefined ? {} : { rulesPath: options.rules },
         );
+        rules = prepared.rules;
         if (changedFiles !== undefined) {
           const ruleFiles = new Set(prepared.rules.map(entry => relative(area.root, resolve(entry.ruleFile)).split(sep).join('/')));
           changedFiles = new Set([...changedFiles].filter(path => !ruleFiles.has(path)));
@@ -459,7 +461,7 @@ export function createProgram(services: CliServices): Command {
       );
       if (countViolations(reports) > 0) {
         if (options.autoComment === true) {
-          await services.commentOnPullRequest(root, renderViolationComments(reports, services.redact));
+          await services.commentOnPullRequest(root, renderViolationComments(reports, services.redact, rules));
         }
         throw new CliExit(EXIT_VIOLATION);
       }

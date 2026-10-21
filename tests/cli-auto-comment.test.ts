@@ -195,6 +195,81 @@ for (const diff of ['--diff', '--diff-only']) {
   });
 }
 
+const CUSTOM = '**Policy** — follow [the guide](https://example.invalid/guide) and keep `snake_case`.\n\n- mention @scope';
+
+test('per-rule comments replace review bodies verbatim and preserve locations', async context => {
+  const target = repository('custom-review', {
+    custom: scoped(`subject => subject.source.includes('BAD') ? violation(${JSON.stringify(MESSAGE)}) : pass()`, `comment = ${JSON.stringify(CUSTOM)};`),
+  });
+  const requests = await github(context, target);
+  const result = await check(target, ['--diff', '--base', target.base, '--auto-comment', '--json', '--output-all']);
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.equal(posts(requests).length, 1);
+  const payload = review(requests);
+  assert.deepEqual(payload.comments.map(comment => comment.body), [CUSTOM, CUSTOM]);
+  assert.deepEqual(payload.comments.map(({ path, line, side, start_line, start_side }) => ({ path, line, side, start_line, start_side })).sort((a, b) => a.path.localeCompare(b.path)), [
+    { path: 'src/one.txt', line: 3, side: 'RIGHT', start_line: 2, start_side: 'RIGHT' },
+    { path: 'src/two.txt', line: 3, side: 'RIGHT', start_line: 2, start_side: 'RIGHT' },
+  ]);
+  const report = JSON.parse(result.stdout).reports[0];
+  assert.equal(report.evaluations.find((evaluation: { result: { status: string } }) => evaluation.result.status === 'violation').result.message, MESSAGE);
+});
+
+test('rules without a comment keep the generated body alongside commented rules', async context => {
+  const target = repository('custom-default', {
+    custom: scoped(`subject => subject.source.includes('BAD') ? violation(${JSON.stringify(MESSAGE)}) : pass()`, `comment = ${JSON.stringify(CUSTOM)};`),
+    generated: implicit,
+  });
+  const requests = await github(context, target);
+  const result = await check(target, ['--diff', '--base', target.base, '--auto-comment']);
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(posts(requests).length, 1);
+  const bodies = review(requests).comments.map(comment => comment.body);
+  assert.equal(bodies.filter(body => body === CUSTOM).length, 2);
+  const generated = bodies.filter(body => body !== CUSTOM);
+  assert.equal(generated.length, 2);
+  for (const body of generated) {
+    assert.ok(body.startsWith('- **generated** — scope src/'));
+    assert.ok(body.includes('Reject \\*\\*bold\\*\\* &lt;script&gt;'));
+    assert.ok(body.includes('\\[REDACTED\\] \\[REDACTED\\]'));
+  }
+});
+
+test('a commented group rule uses the comment as the whole fallback finding', async context => {
+  const target = repository('custom-fallback', {
+    grouped: scoped(`() => violation('group rejection')`, `group = 'folder'; comment = ${JSON.stringify(CUSTOM)};`),
+  });
+  const requests = await github(context, target);
+  const result = await check(target, ['--diff', '--base', target.base, '--auto-comment']);
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(posts(requests).length, 1);
+  assert.equal(fallback(requests), `## Rulekeeper violations\n\n${CUSTOM}\n`);
+});
+
+test('commented findings strip terminal controls before redaction and keep Markdown unescaped', async context => {
+  const token = 'supersecretgithubtoken';
+  const apiKey = 'supersecrettypesafekey';
+  const comment = `**Bold** <script> @someone super\u001b[31msecretgithubtoken super\u001b[0msecrettypesafekey [docs](https://example.invalid)`;
+  const expected = '**Bold** <script> @someone [REDACTED] [REDACTED] [docs](https://example.invalid)';
+  const target = repository('custom-secrets', {
+    scoped: scoped(`subject => subject.source.includes('BAD') ? violation('generated body') : pass()`, `comment = ${JSON.stringify(comment)};`),
+  });
+  const requests = await github(context, target);
+  const result = await check(target, ['--diff', '--base', target.base, '--auto-comment'], {
+    GITHUB_TOKEN: token,
+    TYPESAFE_API_KEY: apiKey,
+  });
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(posts(requests).length, 1);
+  const bodies = review(requests).comments.map(comment => comment.body);
+  assert.deepEqual(new Set(bodies), new Set([expected]));
+  for (const request of posts(requests)) {
+    assert.equal(request.body.includes(token), false);
+    assert.equal(request.body.includes(apiKey), false);
+  }
+});
+
 for (const kind of ['review', 'fallback']) {
   test(`${kind} comments redact credentials reconstructed by ANSI stripping while preserving raw JSON`, async context => {
     const token = 'supersecretgithubtoken';
