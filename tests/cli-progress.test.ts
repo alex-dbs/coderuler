@@ -27,6 +27,16 @@ function fixture(overrides: Partial<CliServices> = {}) {
   return { services, stdout, stderr };
 }
 
+test('interactive PR preparation failures stop animation before returning', async context => {
+  context.mock.timers.enable({ apis: ['setInterval'] });
+  const target = fixture();
+  assert.equal(await runProgram(['check', '--pr', 'invalid'], target.services), 2);
+  assert.deepEqual(target.stdout, []);
+  const count = target.stderr.length;
+  context.mock.timers.tick(1000);
+  assert.equal(target.stderr.length, count);
+});
+
 test('terminal colors honor capability and environment precedence', () => {
   for (const [env, color] of [
     [{}, true],

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createServer, type IncomingHttpHeaders } from 'node:http';
 import { join } from 'node:path';
@@ -71,7 +71,7 @@ interface Reply {
   readonly headers?: Record<string, string>;
 }
 
-async function github(t: TestContext, replies: readonly Reply[]) {
+async function github(t: TestContext, replies: readonly Reply[], transport?: { origin: string }) {
   const requests: Request[] = [];
   const server = createServer(async (request, response) => {
     let body = '';
@@ -85,6 +85,7 @@ async function github(t: TestContext, replies: readonly Reply[]) {
   t.after(() => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
+  if (transport) transport.origin = `http://127.0.0.1:${address.port}`;
   const originalFetch = globalThis.fetch;
   t.mock.method(globalThis, 'fetch', (input: string | URL | globalThis.Request, init?: RequestInit) => {
     const url = new URL(input instanceof globalThis.Request ? input.url : input);
@@ -152,6 +153,83 @@ test('Actions refs and pull_request_target resolve the base PR without local Git
       assert.deepEqual(payload(requests[2]!), summary([body]));
     });
   }
+});
+
+test('explicit PR target supports detached HEAD and overrides unrelated Actions identity', async t => {
+  const repo = repository();
+  const file = source(repo);
+  repo.git('checkout', '--quiet', '--detach');
+  const requests = await github(t, [detail, { body: [file] }, detail, posted]);
+  await createGithubCommenter({
+    ...repo.env,
+    GITHUB_TOKEN: token,
+    GITHUB_REPOSITORY: 'unrelated/project',
+    GITHUB_REF: 'refs/pull/99/merge',
+    GITHUB_EVENT_PATH: join(repo.root, 'missing-event.json'),
+  })(repo.cwd, [{ body, locations: [{ filepath: 'app.yml', lines: { start: 4, end: 5 } }] }], {
+    repository: 'requested/project', number: 42,
+  });
+  assert.deepEqual(requests.map(request => [request.method, request.path]), [
+    ['GET', '/repos/requested/project/pulls/42'],
+    ['GET', '/repos/requested/project/pulls/42/files?per_page=100&page=1'],
+    ['GET', '/repos/requested/project/pulls/42'],
+    ['POST', '/repos/requested/project/pulls/42/reviews'],
+  ]);
+  assert.deepEqual(payload(requests[3]!), {
+    commit_id: head, event: 'COMMENT', body: 'Rulekeeper violations', comments: [inline('app.yml', 5, 4)],
+  });
+});
+
+test('explicit target matches inline files despite inherited Git repository locations', async t => {
+  const caller = repository();
+  const repo = repository();
+  const file = source(repo);
+  repo.git('checkout', '--quiet', '--detach');
+  const callerHead = caller.git('rev-parse', 'HEAD');
+  const callerIndex = caller.git('write-tree');
+  const callerStatus = caller.git('status', '--porcelain');
+  const transport = { origin: '' };
+  const requests = await github(t, [detail, { body: [file] }, detail, posted], transport);
+  const script = `
+    import { createGithubCommenter } from ${JSON.stringify(new URL('../dist/adapter/github/comments.js', import.meta.url).href)};
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (input, init) => {
+      const url = new URL(input);
+      if (url.origin !== 'https://api.github.com' || init.redirect !== 'manual') throw new Error('Unsafe API request');
+      return originalFetch(${JSON.stringify(transport.origin)} + url.pathname + url.search, init);
+    };
+    await createGithubCommenter(process.env)(process.cwd(), ${JSON.stringify([
+      { body, locations: [{ filepath: 'app.yml', lines: { start: 4, end: 5 } }] },
+    ])}, { repository: 'requested/project', number: 42 });
+  `;
+  const { promise, resolve, reject } = Promise.withResolvers<void>();
+  execFile(process.execPath, ['--input-type=module', '--eval', script], {
+    cwd: repo.cwd,
+    env: {
+      ...repo.env,
+      GITHUB_TOKEN: token,
+      GIT_DIR: join(caller.cwd, '.git'),
+      GIT_COMMON_DIR: join(caller.cwd, '.git'),
+      GIT_WORK_TREE: caller.cwd,
+      GIT_INDEX_FILE: join(caller.cwd, '.git/index'),
+    },
+  }, (error, _stdout, stderr) => {
+    if (error) reject(new Error(stderr || error.message, { cause: error }));
+    else resolve();
+  });
+  await promise;
+  assert.deepEqual(requests.map(request => [request.method, request.path]), [
+    ['GET', '/repos/requested/project/pulls/42'],
+    ['GET', '/repos/requested/project/pulls/42/files?per_page=100&page=1'],
+    ['GET', '/repos/requested/project/pulls/42'],
+    ['POST', '/repos/requested/project/pulls/42/reviews'],
+  ]);
+  assert.deepEqual(payload(requests[3]!), {
+    commit_id: head, event: 'COMMENT', body: 'Rulekeeper violations', comments: [inline('app.yml', 5, 4)],
+  });
+  assert.equal(caller.git('rev-parse', 'HEAD'), callerHead);
+  assert.equal(caller.git('write-tree'), callerIndex);
+  assert.equal(caller.git('status', '--porcelain'), callerStatus);
 });
 
 test('nested invocation roots map rename targets and prefer RIGHT additions despite deletions', async t => {

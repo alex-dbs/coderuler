@@ -8,6 +8,7 @@ import { runRuleTests } from '../adapter/filesystem/rule-tests.js';
 import { createRuleLoader, resolveRuleSelector } from '../adapter/filesystem/rules.js';
 import { changedFiles } from '../adapter/git/changes.js';
 import { createGithubCommenter } from '../adapter/github/comments.js';
+import { createPullRequestCheckout } from '../adapter/github/pull-request.js';
 import { createSkillManager } from '../adapter/skills/cli.js';
 import { executeRules } from '../app/execute.js';
 import { createDecisionResolver } from './settings.js';
@@ -51,6 +52,8 @@ export function createServices(
     resolveTarget,
 
     changedFiles,
+
+    checkoutPullRequest: createPullRequestCheckout(cwd, env),
 
     commentOnPullRequest: createGithubCommenter(env),
 

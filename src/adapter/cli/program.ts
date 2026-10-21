@@ -12,6 +12,7 @@ import type {
 import type { RuleTestResult } from '../../app/rule-tests.js';
 import type { TokenPricing } from '../../app/rule.js';
 import type { ViolationComment } from '../../app/violation-comments.js';
+import type { PullRequest, PullRequestCheckout } from '../github/pull-request.js';
 import type { SkillOptions } from '../skills/cli.js';
 import { createInspectJsonRenderer } from './inspect-json.js';
 import { createProgress, type TerminalCapabilities } from './progress.js';
@@ -81,7 +82,12 @@ export interface CliServices {
   ) => Project;
   readonly resolveTarget: (root: string, target: string) => Promise<CliTarget>;
   readonly changedFiles: (root: string, base: string) => Promise<ReadonlySet<string>>;
-  readonly commentOnPullRequest: (root: string, comments: readonly ViolationComment[]) => Promise<void>;
+  readonly checkoutPullRequest: (selector: string, baseBranch?: string) => Promise<PullRequestCheckout>;
+  readonly commentOnPullRequest: (
+    root: string,
+    comments: readonly ViolationComment[],
+    pullRequest?: PullRequest,
+  ) => Promise<void>;
   readonly resolveRuleSelector: (
     selector: string,
     invocationCwd: string,
@@ -105,6 +111,7 @@ interface CheckOptions {
   readonly debug?: boolean;
   readonly verbose?: boolean;
   readonly diffOnly?: boolean;
+  readonly pr?: string;
   readonly autoComment?: boolean;
   readonly base?: string;
   readonly concurrency: number;
@@ -210,8 +217,9 @@ async function planWalk(
   root: string,
   isTarget: (filepath: string) => boolean,
   choice: RuleChoice,
+  rulesRoot: string = root,
 ): Promise<ExecutionPlan> {
-  const rules = await services.loadRules(ruleSelection(services, choice, root));
+  const rules = await services.loadRules(ruleSelection(services, choice, rulesRoot));
   const project = services.createProject(root, {
     excludeFiles: rules.map(entry => entry.ruleFile),
   });
@@ -372,8 +380,9 @@ export function createProgram(services: CliServices): Command {
     .option('--debug', 'stream framework metadata and force concurrency 1')
     .option('--verbose', 'stream the redacted walkthrough at the configured concurrency')
     .option('--diff, --diff-only', 'evaluate changed files and affected groups against a Git base')
-    .option('--auto-comment', 'post GitHub inline violation comments, with a summary fallback (requires --diff)')
-    .option('--base <ref>', 'Git base for --diff-only (default: HEAD)')
+    .option('--pr <number-or-url>', 'check a GitHub PR in a temporary checkout (implies --diff-only)')
+    .option('--auto-comment', 'post GitHub inline violation comments, with a summary fallback (requires --diff or --pr)')
+    .option('--base <ref>', 'Git base for --diff-only (default: HEAD), or base branch for --pr')
     .option(
       '--concurrency <number>',
       `bounded in-flight selection and evaluation tasks (${CONCURRENCY_HINT})`,
@@ -385,11 +394,12 @@ export function createProgram(services: CliServices): Command {
       if (options.json === true && options.jsonl === true) {
         throw new Error('--json and --jsonl are mutually exclusive');
       }
-      if (options.base !== undefined && options.diffOnly !== true) {
-        throw new Error('--base requires --diff-only');
+      const diffOnly = options.diffOnly === true || options.pr !== undefined;
+      if (options.base !== undefined && !diffOnly) {
+        throw new Error('--base requires --diff-only or --pr');
       }
-      if (options.autoComment === true && options.diffOnly !== true) {
-        throw new Error('--auto-comment requires --diff (or --diff-only)');
+      if (options.autoComment === true && !diffOnly) {
+        throw new Error('--auto-comment requires --diff (or --diff-only) or --pr');
       }
       const debug = options.debug === true;
       const verbose = options.verbose === true;
@@ -397,73 +407,86 @@ export function createProgram(services: CliServices): Command {
       const progress = services.terminal?.interactive === true && !machine && !debug && !verbose
         ? createProgress(services.writeError, () => services.terminal?.columns ?? 80)
         : undefined;
-      let reports: readonly RuleReport[];
-      let durationMs: number;
-      let root: string;
-      let rules: readonly LoadedRule[];
-      let walkthrough: WalkthroughRenderer | undefined;
+      let checkout: PullRequestCheckout | undefined;
       try {
-        const area = await services.resolveTarget(services.cwd, target);
-        root = area.root;
-        let changedFiles = options.diffOnly === true
-          ? await services.changedFiles(area.root, options.base ?? 'HEAD')
-          : undefined;
-        const prepared = await planWalk(
-          services,
-          area.root,
-          filepath => area.contains(filepath),
-          options.rules === undefined ? {} : { rulesPath: options.rules },
-        );
-        rules = prepared.rules;
-        if (changedFiles !== undefined) {
-          const ruleFiles = new Set(prepared.rules.map(entry => relative(area.root, resolve(entry.ruleFile)).split(sep).join('/')));
-          changedFiles = new Set([...changedFiles].filter(path => !ruleFiles.has(path)));
-        }
-        const concurrency = debug ? 1 : options.concurrency;
-        walkthrough = verbose
-          ? createWalkthroughRenderer({
-            write: services.writeError,
-            headings: createRuleHeadings(prepared.rules),
-            redact: services.redact,
-            columns: () => services.terminal?.columns ?? 80,
+        let reports: readonly RuleReport[];
+        let durationMs: number;
+        let root: string;
+        let rules: readonly LoadedRule[];
+        let walkthrough: WalkthroughRenderer | undefined;
+        try {
+          if (options.pr !== undefined) {
+            checkout = await services.checkoutPullRequest(options.pr, options.base);
+          }
+          const area = await services.resolveTarget(checkout?.root ?? services.cwd, target);
+          root = area.root;
+          let changedFiles = checkout?.changedFiles ?? (diffOnly
+            ? await services.changedFiles(area.root, options.base ?? 'HEAD')
+            : undefined);
+          const prepared = await planWalk(
+            services,
+            area.root,
+            filepath => area.contains(filepath),
+            options.rules === undefined ? {} : { rulesPath: options.rules },
+            checkout?.rulesRoot ?? area.root,
+          );
+          rules = prepared.rules;
+          if (changedFiles !== undefined) {
+            const ruleFiles = new Set(prepared.rules.map(entry => relative(area.root, resolve(entry.ruleFile)).split(sep).join('/')));
+            changedFiles = new Set([...changedFiles].filter(path => !ruleFiles.has(path)));
+          }
+          const concurrency = debug ? 1 : options.concurrency;
+          walkthrough = verbose
+            ? createWalkthroughRenderer({
+              write: services.writeError,
+              headings: createRuleHeadings(prepared.rules),
+              redact: services.redact,
+              columns: () => services.terminal?.columns ?? 80,
+              concurrency,
+            })
+            : undefined;
+          const emit = walkthrough?.emit ?? (debug
+            ? createMetadataRenderer(services.writeError, services.redact)
+            : progress?.emit);
+          const context: RunContext = {
+            project: prepared.project,
+            isTarget: prepared.isTarget,
             concurrency,
-          })
-          : undefined;
-        const emit = walkthrough?.emit ?? (debug
-          ? createMetadataRenderer(services.writeError, services.redact)
-          : progress?.emit);
-        const context: RunContext = {
-          project: prepared.project,
-          isTarget: prepared.isTarget,
-          concurrency,
-          resolveDecision: services.decisionResolver(options.threshold),
-          ...(emit === undefined ? {} : { emit }),
-          ...(changedFiles === undefined ? {} : { changedFiles }),
-        };
-        const startedAt = performance.now();
-        reports = await services.runRules(prepared.rules, context);
-        durationMs = performance.now() - startedAt;
-      } finally {
-        walkthrough?.finish();
-        progress?.stop();
-      }
-      const reportOptions = {
-        durationMs,
-        outputAll: options.outputAll === true,
-        color: services.terminal?.color === true,
-      };
-      services.write(
-        options.json === true
-          ? renderCheckJson(reports, reportOptions)
-          : options.jsonl === true
-            ? renderCheckJsonl(reports, reportOptions)
-            : renderCheckSummary(reports, services.redact, reportOptions),
-      );
-      if (countViolations(reports) > 0) {
-        if (options.autoComment === true) {
-          await services.commentOnPullRequest(root, renderViolationComments(reports, services.redact, rules));
+            resolveDecision: services.decisionResolver(options.threshold),
+            ...(emit === undefined ? {} : { emit }),
+            ...(changedFiles === undefined ? {} : { changedFiles }),
+          };
+          const startedAt = performance.now();
+          reports = await services.runRules(prepared.rules, context);
+          durationMs = performance.now() - startedAt;
+        } finally {
+          walkthrough?.finish();
+          progress?.stop();
         }
-        throw new CliExit(EXIT_VIOLATION);
+        const reportOptions = {
+          durationMs,
+          outputAll: options.outputAll === true,
+          color: services.terminal?.color === true,
+        };
+        services.write(
+          options.json === true
+            ? renderCheckJson(reports, reportOptions)
+            : options.jsonl === true
+              ? renderCheckJsonl(reports, reportOptions)
+              : renderCheckSummary(reports, services.redact, reportOptions),
+        );
+        if (countViolations(reports) > 0) {
+          if (options.autoComment === true) {
+            await services.commentOnPullRequest(
+              root,
+              renderViolationComments(reports, services.redact, rules),
+              checkout?.pullRequest,
+            );
+          }
+          throw new CliExit(EXIT_VIOLATION);
+        }
+      } finally {
+        await checkout?.cleanup();
       }
     });
 

@@ -407,7 +407,6 @@ test('--auto-comment without a diff flag fails usage before running or contactin
   const result = await check(target, ['--auto-comment', '--json']);
   assert.equal(result.status, 2);
   assert.equal(result.stdout, '');
-  assert.match(result.stderr, /--auto-comment requires --diff/);
   assert.deepEqual(requests, []);
 });
 

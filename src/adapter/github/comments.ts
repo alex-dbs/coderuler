@@ -5,29 +5,17 @@ import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 import type { ViolationComment } from '../../app/violation-comments.js';
 
-interface PullRequest {
-  readonly repository: string;
-  readonly number: number;
-}
+import { isolatedGitEnvironment } from '../git/environment.js';
+import { createGithubApi, mapping } from './api.js';
+import { originRepository, pullNumber, repositoryName, type PullRequest } from './pull-request.js';
 
-function repositoryName(value: unknown): string {
-  if (typeof value !== 'string' || !/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(value)
-    || value.split('/').some(part => part === '.' || part === '..')) {
-    throw new Error('Cannot determine the GitHub repository: expected owner/repository.');
-  }
-  return value;
-}
-
-function pullNumber(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
-    throw new Error('Cannot determine a valid GitHub pull request number.');
-  }
-  return value;
-}
-
-async function git(root: string, args: readonly string[]): Promise<string> {
+async function git(
+  root: string,
+  args: readonly string[],
+  env?: Readonly<Record<string, string | undefined>>,
+): Promise<string> {
   return await new Promise<string>((resolve, reject) => {
-    const child = spawn('git', [...args], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('git', [...args], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => { stdout += chunk; });
@@ -38,32 +26,6 @@ async function git(root: string, args: readonly string[]): Promise<string> {
       else reject(new Error(`Git ${args[0]} failed; check the origin remote and current branch (detached HEAD is unsupported).`));
     });
   });
-}
-
-function originRepository(origin: string): string {
-  let path: string;
-  const scp = /^git@github\.com:(.+)$/i.exec(origin);
-  if (scp) {
-    path = scp[1]!;
-  } else {
-    let url: URL;
-    try {
-      url = new URL(origin);
-    } catch {
-      throw new Error('Git origin must be an HTTPS or SSH repository on github.com.');
-    }
-    if (url.hostname.toLowerCase() !== 'github.com' || !['https:', 'ssh:'].includes(url.protocol)
-      || (url.port !== '' && !(url.protocol === 'ssh:' && url.port === '22')) || url.search || url.hash) {
-      throw new Error('Git origin must be an HTTPS or SSH repository on github.com.');
-    }
-    path = url.pathname.slice(1);
-  }
-  return repositoryName(path.replace(/\/$/, '').replace(/\.git$/, ''));
-}
-
-function mapping(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown> : undefined;
 }
 
 async function actionsPullRequest(env: Readonly<Record<string, string | undefined>>): Promise<PullRequest | undefined> {
@@ -143,10 +105,13 @@ function rightRuns(patch: string): readonly DiffRun[] {
   return runs;
 }
 
-async function repositoryPaths(root: string): Promise<{ root: string; invocation: string } | undefined> {
+async function repositoryPaths(
+  root: string,
+  env?: Readonly<Record<string, string | undefined>>,
+): Promise<{ root: string; invocation: string } | undefined> {
   try {
     const invocation = await realpath(root);
-    const repository = await realpath(await git(invocation, ['rev-parse', '--show-toplevel']));
+    const repository = await realpath(await git(invocation, ['rev-parse', '--show-toplevel'], env));
     const prefix = relative(repository, invocation);
     if (prefix === '..' || prefix.startsWith(`..${sep}`) || isAbsolute(prefix)) return undefined;
     return { root: repository, invocation };
@@ -159,6 +124,7 @@ async function matchingFile(
   repository: { readonly root: string; readonly invocation: string },
   filepath: string,
   files: ReadonlyMap<string, PullFile>,
+  env?: Readonly<Record<string, string | undefined>>,
 ): Promise<PullFile | undefined> {
   if (!filepath || isAbsolute(filepath)) return undefined;
   const absolute = resolve(repository.invocation, filepath);
@@ -170,7 +136,7 @@ async function matchingFile(
   try {
     // Symlinks and paths escaping through a symlink cannot identify this Git blob.
     if (!(await lstat(absolute)).isFile() || await realpath(absolute) !== absolute) return undefined;
-    await git(repository.root, ['--literal-pathspecs', 'ls-files', '--error-unmatch', '--', path]);
+    await git(repository.root, ['--literal-pathspecs', 'ls-files', '--error-unmatch', '--', path], env);
     const bytes = await readFile(absolute);
     const sha = createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
     return sha === file.sha ? file : undefined;
@@ -181,45 +147,15 @@ async function matchingFile(
 
 export function createGithubCommenter(
   env: Readonly<Record<string, string | undefined>>,
-): (root: string, comments: readonly ViolationComment[]) => Promise<void> {
-  return async (root, comments) => {
+): (root: string, comments: readonly ViolationComment[], pullRequest?: PullRequest) => Promise<void> {
+  return async (root, comments, pullRequest) => {
     if (comments.length === 0) return;
     const token = env.GITHUB_TOKEN?.trim();
     if (!token) throw new Error('GITHUB_TOKEN is required to comment on a GitHub pull request.');
 
-    const request = async (path: string, method: 'GET' | 'POST', payload?: object): Promise<Response> => {
-      let response: Response;
-      try {
-        response = await fetch(`https://api.github.com${path}`, {
-          method,
-          redirect: 'manual',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            Accept: 'application/vnd.github+json',
-            'X-GitHub-Api-Version': '2022-11-28',
-            ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }),
-          },
-          ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
-        });
-      } catch {
-        throw new Error('GitHub API request failed; check network connectivity to api.github.com.');
-      }
-      if (!response.ok) {
-        await response.body?.cancel().catch(() => undefined);
-        throw new Error(`GitHub API returned HTTP ${response.status}; check GITHUB_TOKEN permissions and pull request access.`);
-      }
-      return response;
-    };
-    const json = async (path: string): Promise<unknown> => {
-      const response = await request(path, 'GET');
-      try {
-        return await response.json() as unknown;
-      } catch {
-        throw new Error('GitHub API returned an invalid response.');
-      }
-    };
-
-    let pull = await actionsPullRequest(env);
+    const { request, json } = createGithubApi(token);
+    const gitEnv = pullRequest === undefined ? undefined : isolatedGitEnvironment(env);
+    let pull = pullRequest ?? await actionsPullRequest(env);
     if (!pull) {
       const repository = originRepository(await git(root, ['remote', 'get-url', 'origin']));
       const branch = await git(root, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
@@ -252,7 +188,7 @@ export function createGithubCommenter(
       if (entries.length < 100) break;
     }
 
-    const repository = comments.some(comment => comment.locations.length > 0) ? await repositoryPaths(root) : undefined;
+    const repository = comments.some(comment => comment.locations.length > 0) ? await repositoryPaths(root, gitEnv) : undefined;
     const matched = new Map<string, Promise<PullFile | undefined>>();
     const patches = new Map<string, readonly DiffRun[]>();
     const inline: ReviewComment[] = [];
@@ -264,7 +200,7 @@ export function createGithubCommenter(
           || location.lines.start <= 0 || location.lines.end < location.lines.start) continue;
         let match = matched.get(location.filepath);
         if (!match) {
-          match = matchingFile(repository, location.filepath, files);
+          match = matchingFile(repository, location.filepath, files, gitEnv);
           matched.set(location.filepath, match);
         }
         const file = await match;
