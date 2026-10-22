@@ -1,0 +1,19 @@
+---
+import type { CollectionEntry } from 'astro:content';
+import { sections, docHref } from '../lib/docs';
+interface Props { entries: CollectionEntry<'docs'>[]; active: string; }
+const { entries, active } = Astro.props;
+---
+<nav aria-label="Documentation">
+  {sections.map(section => (
+    <div class="docs-nav-group">
+      <p>{section}</p>
+      <ul>
+        {entries.filter(entry => entry.data.section === section).map(entry => (
+          <li><a href={docHref(entry.id)} aria-current={entry.id === active ? 'page' : undefined}>{entry.data.title}</a></li>
+        ))}
+      </ul>
+    </div>
+  ))}
+  <a class="docs-source-link" href="https://github.com/alex-dbs/rulekeeper">View source <span aria-hidden="true">↗</span></a>
+</nav>

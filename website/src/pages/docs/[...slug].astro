@@ -1,0 +1,52 @@
+---
+import { render, type CollectionEntry } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import DocsNavigation from '../../components/DocsNavigation.astro';
+import { getDocs, docHref } from '../../lib/docs';
+import '../../styles/docs.css';
+
+export async function getStaticPaths() {
+  return (await getDocs()).map(entry => ({
+    params: { slug: entry.id === 'index' ? undefined : entry.id },
+    props: { entry },
+  }));
+}
+interface Props { entry: CollectionEntry<'docs'>; }
+const { entry } = Astro.props;
+const entries = await getDocs();
+const { Content, headings } = await render(entry);
+const contents = headings.filter(heading => heading.depth === 2 || heading.depth === 3);
+const position = entries.findIndex(item => item.id === entry.id);
+const previous = entries[position - 1];
+const next = entries[position + 1];
+---
+<Base title={`${entry.data.title} · RuleKeeper docs`} description={entry.data.description} page="docs">
+  <div class="docs-shell page-shell">
+    <aside class="docs-sidebar">
+      <p class="eyebrow">Documentation</p>
+      <DocsNavigation entries={entries} active={entry.id} />
+    </aside>
+    <main id="main" class="docs-main" tabindex="-1">
+      <details class="mobile-docs-nav">
+        <summary>Browse documentation <span aria-hidden="true">＋</span></summary>
+        <DocsNavigation entries={entries} active={entry.id} />
+      </details>
+      <nav aria-label="Breadcrumb" class="breadcrumb"><a href="/docs/">Docs</a><span aria-hidden="true">/</span><span>{entry.data.section}</span></nav>
+      <div class="docs-article-head"><p class="eyebrow">{entry.data.section}</p><span class="docs-language">TypeScript & JavaScript</span></div>
+      <article class="prose"><Content /></article>
+      <div class="docs-article-footer">
+        <a href={`https://github.com/alex-dbs/rulekeeper/edit/main/website/src/content/docs/${entry.id}.md`}>Edit this page <span aria-hidden="true">↗</span></a>
+        <a href="https://github.com/alex-dbs/rulekeeper/issues">Report an issue <span aria-hidden="true">↗</span></a>
+      </div>
+      <nav class="page-pagination" aria-label="Documentation pages">
+        {previous ? <a href={docHref(previous.id)}><span>← Previous</span>{previous.data.title}</a> : <div />}
+        {next && <a href={docHref(next.id)} class="pagination-next"><span>Next →</span>{next.data.title}</a>}
+      </nav>
+    </main>
+    <aside class="docs-toc" aria-label="On this page">
+      <p class="eyebrow">On this page</p>
+      <nav><ul>{contents.map(heading => <li class:list={{ nested: heading.depth === 3 }}><a href={`#${heading.slug}`} data-toc-link>{heading.text}</a></li>)}</ul></nav>
+      <a class="toc-help" href="https://github.com/alex-dbs/rulekeeper/issues">Something unclear? <span aria-hidden="true">↗</span></a>
+    </aside>
+  </div>
+</Base>

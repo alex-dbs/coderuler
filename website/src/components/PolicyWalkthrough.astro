@@ -1,0 +1,88 @@
+---
+import { Code } from 'astro:components';
+import Violation from './Violation.astro';
+import RuleCode from './RuleCode.astro';
+import '../styles/walkthrough.css';
+
+const policy = `import { Rule, ai, scopes } from '@alex-dbs/rulekeeper';
+
+export default class GoAppendSlice extends Rule {
+  files = ['**/*.go'];
+
+  scope = scopes.astGrep({
+    language: 'go',
+    rule: {
+      any: [{ kind: 'function_declaration' },
+            { kind: 'method_declaration' }],
+      has: {
+        kind: 'for_statement', stopBy: 'end',
+        has: { pattern: 'append($SLICE,$$$ARGS)',
+               stopBy: 'end' },
+      },
+    },
+  });
+
+  check = ai({
+    rule: 'For a fresh slice with a known final count, ' +
+      'allocate its final length and fill by index or copy. ' +
+      'Allow append for an unknown conditional count ' +
+      'or a deliberately assigned existing prefix.',
+    violationMessage: 'Allocate the known final length ' +
+      'and fill by index instead of appending.',
+  });
+}`;
+const source = `func growScores(scores []int) []int {
+    out := make([]int, 0, len(scores))
+    for _, score := range scores {
+        out = append(out, score)
+    }
+    return out
+}`;
+const command = 'rulekeeper check';
+---
+<section class="policy-walkthrough page-shell" id="how-it-works" aria-labelledby="walkthrough-heading">
+  <div class="walkthrough-layout">
+    <div class="walkthrough-explanation">
+      <h2 id="walkthrough-heading">How it works</h2>
+      <div class="walkthrough-intent">
+        <p class="walkthrough-label">Policy intent</p>
+        <blockquote>When the final slice length is known, allocate it at that length.</blockquote>
+      </div>
+
+      <p class="walkthrough-label">Steps</p>
+      <ol class="walkthrough-steps">
+        <li>
+          <h3>Choose the files.</h3>
+          <p>The <code>**/*.go</code> pattern selects Go files, including <code>internal/store/scores.go</code> below.</p>
+        </li>
+        <li>
+          <h3>Select candidate functions.</h3>
+          <p>The syntax selector finds functions and methods with an <code>append</code> inside a <code>for</code> loop. A match is a candidate, not a violation.</p>
+        </li>
+        <li>
+          <h3>Check the selected context.</h3>
+          <p>Send just the relevant context to an AI decision model to check the rule.</p>
+        </li>
+      </ol>
+      <p class="walkthrough-run-note">Run from your repository root.</p>
+      <div class="walkthrough-command">
+        <Code code={command} lang="bash" theme="material-theme-palenight" />
+      </div>
+    </div>
+
+    <div class="walkthrough-example">
+      <RuleCode code={policy} filename=".rulekeeper/go-append-slice.rule.ts" class="walkthrough-policy-code">
+        <a slot="footer" class="walkthrough-source-link" href="https://github.com/alex-dbs/rulekeeper/blob/main/.rulekeeper/go-append-slice.rule.ts">Read the full source policy <span aria-hidden="true">↗</span></a>
+      </RuleCode>
+
+      <Violation
+        rule="go-append-slice"
+        file="internal/store/scores.go"
+        message="Allocate the known final length and fill by index instead of appending."
+        source={source}
+        startLine={12}
+        highlightLine={15}
+      />
+    </div>
+  </div>
+</section>

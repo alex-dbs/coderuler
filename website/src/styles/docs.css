@@ -1,0 +1,75 @@
+.docs-shell { display: grid; grid-template-columns: 208px minmax(0, 1fr) 168px; gap: clamp(32px, 4.2vw, 68px); padding-block: 48px 80px; align-items: start; }
+.docs-sidebar, .docs-toc { position: sticky; top: calc(var(--header-height) + 24px); max-height: calc(100dvh - var(--header-height) - 48px); overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.docs-sidebar > .eyebrow, .docs-toc > .eyebrow { margin-top: 0; margin-bottom: 28px; }
+.docs-nav-group { margin-bottom: 28px; }
+.docs-nav-group p { margin: 0 0 8px; font-size: 12px; font-weight: 550; }
+.docs-nav-group ul, .docs-toc ul { margin: 0; padding: 0; list-style: none; }
+.docs-nav-group a { display: block; padding: 10px 0 10px 14px; border-left: 1px solid var(--line); color: var(--muted); font-size: 13px; line-height: 1.5; min-height: 40px; }
+.docs-nav-group a:hover { color: var(--foreground); border-color: var(--muted); }
+.docs-nav-group a[aria-current] { border-color: var(--accent); color: var(--accent); background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 7%, transparent), transparent); }
+.docs-source-link { display: block; border-top: 1px solid var(--line); padding-top: 20px; color: var(--muted); font-size: 12px; min-height: 44px; }
+.docs-main { min-width: 0; }
+.breadcrumb { display: flex; flex-wrap: wrap; gap: 12px; color: var(--muted); font-size: 12px; margin-bottom: 32px; }
+.breadcrumb a { color: var(--foreground); }
+.docs-article-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 12px; }
+.docs-article-head .eyebrow { margin: 0; color: var(--accent); font-size: 10px; }
+.docs-language { font: 10px var(--mono); color: var(--muted); }
+.prose { font-size: 16px; line-height: 1.85; overflow-wrap: anywhere; }
+.prose h1 { font-size: clamp(42px, 4.6vw, 68px); font-weight: 500; letter-spacing: -.065em; line-height: 1.08; margin: 0 0 28px; color: var(--foreground); }
+.prose h1 + p { font-size: 18px; color: var(--muted); line-height: 1.75; margin-bottom: 36px; }
+.prose h2 { font-size: 27px; font-weight: 450; line-height: 1.3; letter-spacing: -.04em; margin: 48px 0 18px; padding-top: 20px; border-top: 1px solid var(--line); }
+.prose h3 { font-size: 20px; font-weight: 500; line-height: 1.4; letter-spacing: -.025em; margin: 32px 0 12px; }
+.prose p { margin-block: 18px; color: var(--muted); }
+.prose a { color: var(--foreground); text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 4px; }
+.prose a:hover { color: var(--accent); text-decoration-color: var(--accent); }
+.prose :not(pre) > code { padding: 2px 5px; background: var(--surface); border: 1px solid var(--line); font: .8em/1.7 var(--mono); color: var(--foreground); box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.prose pre { margin-block: 24px; overflow-wrap: normal; }
+.prose ul, .prose ol { color: var(--muted); padding-left: 24px; margin-block: 20px; }
+.prose li { padding-left: 4px; margin-block: 8px; }
+.prose li::marker { color: var(--accent); }
+.prose li p { margin-block: 8px; }
+.prose blockquote { border-left: 2px solid var(--accent); background: var(--surface); padding: 4px 24px; margin: 24px 0; }
+.prose strong { font-weight: 550; color: var(--foreground); }
+.prose table { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 1.7; margin-block: 24px; }
+.prose th { color: var(--foreground); font-weight: 500; text-align: left; }
+.prose td { color: var(--muted); vertical-align: top; }
+.prose th, .prose td { border-bottom: 1px solid var(--line); padding: 14px 10px; }
+.prose th:first-child, .prose td:first-child { padding-left: 0; }
+.prose table code { font-size: 11px; }
+.prose hr { border: 0; border-top: 1px solid var(--line); margin-block: 32px; }
+.docs-article-footer { display: flex; flex-wrap: wrap; gap: 24px; border-top: 1px solid var(--line); margin-top: 48px; padding-top: 20px; color: var(--muted); font-size: 12px; }
+.docs-article-footer a { display: inline-flex; gap: 8px; align-items: center; min-height: 44px; }
+.page-pagination { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 28px; }
+.page-pagination > a { display: flex; flex-direction: column; justify-content: center; gap: 8px; border: 1px solid var(--line); padding: 20px 24px; min-height: 96px; font-size: 16px; letter-spacing: -.025em; transition: border-color var(--motion-fast), background var(--motion-fast); }
+.page-pagination > a:hover { border-color: var(--accent); background: var(--surface); }
+.page-pagination a span { color: var(--muted); font: 10px var(--mono); letter-spacing: .03em; }
+.pagination-next { text-align: right; }
+.docs-toc ul { border-left: 1px solid var(--line); }
+.docs-toc a { display: block; font-size: 11px; color: var(--muted); padding: 8px 0 8px 14px; min-height: 32px; border-left: 1px solid transparent; margin-left: -1px; line-height: 1.6; }
+.docs-toc a:hover, .docs-toc a[aria-current] { color: var(--accent); border-color: var(--accent); }
+.docs-toc li.nested a { padding-left: 24px; }
+.docs-toc .toc-help { margin-top: 24px; border-top: 1px solid var(--line); border-left: 0; padding: 20px 0; }
+.mobile-docs-nav { display: none; }
+@media (min-width: 1600px) { .prose { max-width: 800px; } }
+@media (max-width: 1199px) {
+  .docs-shell { grid-template-columns: 184px minmax(0, 1fr); gap: 40px; }
+  .docs-toc { display: none; }
+}
+@media (max-width: 767px) {
+  .docs-shell { display: block; padding-block: 20px 48px; }
+  .docs-sidebar { display: none; }
+  .mobile-docs-nav { display: block; border-bottom: 1px solid var(--line); margin-bottom: 28px; }
+  .mobile-docs-nav > summary { display: flex; list-style: none; justify-content: space-between; align-items: center; min-height: 52px; color: var(--foreground); font-size: 14px; }
+  .mobile-docs-nav > summary::-webkit-details-marker { display: none; }
+  .mobile-docs-nav[open] > summary span { transform: rotate(45deg); }
+  .mobile-docs-nav > nav { padding-block: 20px 28px; }
+  .mobile-docs-nav .docs-nav-group a { min-height: 44px; padding-block: 12px; font-size: 14px; }
+  .breadcrumb { margin-bottom: 28px; }
+  .docs-language { display: none; }
+  .prose h1 { font-size: 44px; }
+  .prose h1 + p { font-size: 17px; }
+  .prose h2 { font-size: 25px; margin-top: 36px; }
+  .prose table { display: block; overflow-x: auto; }
+  .prose th, .prose td { min-width: 125px; }
+  .page-pagination > a { padding: 16px; font-size: 14px; }
+}

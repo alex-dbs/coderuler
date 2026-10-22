@@ -1,0 +1,46 @@
+---
+const fallbackParticles = Array.from({ length: 1050 }, (_, index) => {
+  const u = index * 2.399963229728653;
+  const v = index * 1.618033988749895;
+  const ring = 170 + 12 * Math.sin(3 * u);
+  const tube = 35 + 13 * Math.sin(3 * u + .4) ** 2;
+  const x = (ring + tube * Math.cos(v)) * Math.cos(u);
+  const y = (ring + tube * Math.cos(v)) * Math.sin(u);
+  const z = tube * Math.sin(v);
+  const tiltedY = y * .65 - z * .76;
+  const tiltedZ = y * .76 + z * .65;
+  const rotatedX = x * .85 + tiltedY * .52;
+  const rotatedY = -x * .52 + tiltedY * .85;
+  const perspective = 700 / (700 - tiltedZ);
+  return {
+    x: 300 + rotatedX * perspective * 1.12,
+    y: 290 + rotatedY * perspective * 1.12,
+    r: .7 + (index % 7) * .14,
+    opacity: .36 + (tiltedZ + 230) / 700,
+    tone: index % 11 === 0 ? 'ice' : index % 5 === 0 ? 'cream' : 'lavender',
+  };
+});
+---
+<div class="home-art" data-hero-art>
+  <div class="home-sculpture" aria-hidden="true">
+    <div class="home-sculpture-light"></div>
+    <svg class="home-sculpture-fallback" viewBox="0 0 600 580" fill="none">
+      <g class="home-orbit-lines" stroke="currentColor" stroke-width=".8">
+        <ellipse cx="300" cy="290" rx="263" ry="91" transform="rotate(-34 300 290)" />
+        <ellipse cx="300" cy="290" rx="241" ry="105" transform="rotate(63 300 290)" />
+      </g>
+      {fallbackParticles.map(point => <circle cx={point.x} cy={point.y} r={point.r} opacity={point.opacity} class={`home-particle-${point.tone}`} fill="currentColor" />)}
+      <circle cx="300" cy="290" r="65" stroke="currentColor" class="home-core-shell" stroke-dasharray="1 5" />
+    </svg>
+    <canvas class="home-sculpture-canvas" data-hero-canvas></canvas>
+    <div class="home-core">
+      <svg viewBox="0 0 100 100" fill="none"><path d="m28 51 15 15 31-34" stroke="currentColor" stroke-width="4" stroke-linecap="square" /></svg>
+    </div>
+    <div class="home-orbit-label home-label-files"><span>+</span><code>**/*.go · **/*.proto</code><i></i></div>
+    <div class="home-orbit-label home-label-rule"><i></i><code>rule.check()</code><span>+</span></div>
+  </div>
+  <div class="home-art-caption">
+    <span class="home-status-light" aria-hidden="true"></span>
+    <span>CHAOS OUT. CONVENTIONS IN.</span>
+  </div>
+</div>
