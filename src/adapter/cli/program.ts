@@ -64,6 +64,8 @@ export interface RuleSelectorResolution {
 
 export interface CliServices {
   readonly cwd: string;
+  readonly version: string;
+  readonly updateTool: () => Promise<number>;
   readonly loadRules: (selection: RuleSelection) => Promise<readonly LoadedRule[]>;
   readonly runRules: (
     rules: readonly LoadedRule[],
@@ -237,9 +239,19 @@ export function createProgram(services: CliServices): Command {
     .name('rulekeeper')
     .description('Evaluate trusted TypeScript rules against the current working tree')
     .configureOutput({
+      writeOut: text => services.write(text),
       writeErr: text => services.writeError(`rulekeeper: ${services.redact(escapeDiagnostic(text))}`),
     })
+    .version(services.version)
     .exitOverride();
+
+  program
+    .command('update')
+    .description('Upgrade the active global npm installation of Rulekeeper to the latest version')
+    .action(async () => {
+      const status = await services.updateTool();
+      if (status !== EXIT_OK) throw new CliExit(status);
+    });
 
   const skill = program
     .command('skill')

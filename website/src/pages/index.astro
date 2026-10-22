@@ -4,6 +4,7 @@ import Hero from '../components/Hero.astro';
 import PolicyWalkthrough from '../components/PolicyWalkthrough.astro';
 import RuleExamples from '../components/RuleExamples.astro';
 import RuleWorkflow from '../components/RuleWorkflow.astro';
+import { sitePath } from '../lib/paths';
 import '../styles/home.css';
 
 const install = 'npm install -g @alex-dbs/rulekeeper';
@@ -16,7 +17,7 @@ const install = 'npm install -g @alex-dbs/rulekeeper';
         <h1 id="hero-title">Your code.<br />Your <em>rules.</em></h1>
         <p class="home-hero-description">Your AI agent can forget instructions and conventions. RuleKeeper never forgets the rules you save.</p>
         <div class="home-hero-actions">
-          <a class="button" href="/docs/quickstart/">Start building rules <span aria-hidden="true">↗</span></a>
+          <a class="button" href={sitePath('/docs/quickstart/')}>Start building rules <span aria-hidden="true">↗</span></a>
           <a class="home-text-link" href="#how-it-works">See how it works <span aria-hidden="true">↓</span></a>
         </div>
         <button class="home-install-command" data-copy={install} aria-label="Copy npm install command" type="button">
@@ -36,7 +37,7 @@ const install = 'npm install -g @alex-dbs/rulekeeper';
 
     <section class="home-closing page-shell" aria-labelledby="closing-title">
       <p class="eyebrow">Get started</p>
-      <div><h2 id="closing-title">Run your rules<br />before <em>review.</em></h2><div class="home-closing-actions"><a class="button" href="/docs/quickstart/">Write your first rule <span aria-hidden="true">↗</span></a></div></div>
+      <div><h2 id="closing-title">Run your rules<br />before <em>review.</em></h2><div class="home-closing-actions"><a class="button" href={sitePath('/docs/quickstart/')}>Write your first rule <span aria-hidden="true">↗</span></a></div></div>
       <p class="home-closing-description">Save time and review costs by automating convention checks first. Let your frontier AI model focus on the code, without asking it to check every detail of your conventions.</p>
     </section>
   </main>

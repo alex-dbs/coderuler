@@ -169,6 +169,8 @@ The `settings` field sets AI options for one rule, such as its model, decision t
 
 ## Commands
 
+- `--version` prints the installed package version.
+- `update` upgrades the active global npm installation to the latest release. Update local dependencies with their package manager instead.
 - `validate [rule-path]` loads rules and validates their structure without running them.
 - `test [rule-path]` runs the inline tests declared by selected rules.
 - `check [path]` runs selected rules against a file or folder. It exits with status 1 when a rule reports a violation.
