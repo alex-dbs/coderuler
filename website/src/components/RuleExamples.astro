@@ -3,6 +3,7 @@ import RuleCode from './RuleCode.astro';
 import goRuleSource from '../../../.rulekeeper/go-append-slice.rule.ts?raw';
 import serviceRuleSource from '../../../.rulekeeper/service-proto.rule.ts?raw';
 import Violation from './Violation.astro';
+import { sitePath } from '../lib/paths';
 import '../styles/rule-examples.css';
 
 const source = 'https://github.com/alex-dbs/rulekeeper/blob/main/.rulekeeper/';
@@ -89,7 +90,7 @@ service BillingService {
       />
       <div class="rule-example-links">
         <a href={`${source}http-response-splitting.rule.ts`}>Full HTTP rule and tests <span aria-hidden="true">↗</span></a>
-        <a href="/docs/ai-checks/">How AI checks work <span aria-hidden="true">→</span></a>
+        <a href={sitePath('/docs/ai-checks/')}>How AI checks work <span aria-hidden="true">→</span></a>
       </div>
     </div>
     <RuleCode code={httpRule} filename="http-response-splitting.rule.ts" class="rule-example-code" />

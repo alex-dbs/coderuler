@@ -1,4 +1,4 @@
-export {};
+import { sitePath } from '../lib/paths';
 
 interface SearchEntry {
   title: string;
@@ -53,7 +53,7 @@ async function search() {
   }
   status.textContent = 'Searching…';
   try {
-    index ??= fetch('/search-index.json').then(response => {
+    index ??= fetch(sitePath('/search-index.json')).then(response => {
       if (!response.ok) throw new Error('Search index unavailable');
       return response.json() as Promise<SearchEntry[]>;
     });

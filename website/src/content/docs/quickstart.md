@@ -18,9 +18,12 @@ For a project-local installation, run these commands from your project root:
 ```sh
 npm install --save-dev @alex-dbs/rulekeeper
 npx rulekeeper --help
+npx rulekeeper --version
 ```
 
 This guide uses `npx rulekeeper`. If you prefer a global installation, run `npm install -g @alex-dbs/rulekeeper` and use `rulekeeper` instead. A global CLI can load rules without a project-local SDK dependency.
+
+Use `rulekeeper update` for a global npm installation. See the [update commands](/docs/cli/#update) for project-local installations.
 
 To use an unreleased source checkout instead of the npm package:
 

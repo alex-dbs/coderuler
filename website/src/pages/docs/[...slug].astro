@@ -3,6 +3,7 @@ import { render, type CollectionEntry } from 'astro:content';
 import Base from '../../layouts/Base.astro';
 import DocsNavigation from '../../components/DocsNavigation.astro';
 import { getDocs, docHref } from '../../lib/docs';
+import { sitePath } from '../../lib/paths';
 import '../../styles/docs.css';
 
 export async function getStaticPaths() {
@@ -31,7 +32,7 @@ const next = entries[position + 1];
         <summary>Browse documentation <span aria-hidden="true">＋</span></summary>
         <DocsNavigation entries={entries} active={entry.id} />
       </details>
-      <nav aria-label="Breadcrumb" class="breadcrumb"><a href="/docs/">Docs</a><span aria-hidden="true">/</span><span>{entry.data.section}</span></nav>
+      <nav aria-label="Breadcrumb" class="breadcrumb"><a href={sitePath('/docs/')}>Docs</a><span aria-hidden="true">/</span><span>{entry.data.section}</span></nav>
       <div class="docs-article-head"><p class="eyebrow">{entry.data.section}</p><span class="docs-language">TypeScript & JavaScript</span></div>
       <article class="prose"><Content /></article>
       <div class="docs-article-footer">

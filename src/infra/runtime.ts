@@ -6,6 +6,7 @@ import npa from 'npm-package-arg';
 import { escapeDiagnostic, runProgram, type CliServices } from '../adapter/cli/program.js';
 import { terminalCapabilities } from '../adapter/cli/progress.js';
 import { createRedactor } from '../adapter/cli/reports.js';
+import { createToolUpdater, installedVersion } from '../adapter/cli/self-update.js';
 import { createRuleDependencyManager } from '../adapter/filesystem/dependencies.js';
 import { createProject, resolveTarget } from '../adapter/filesystem/project.js';
 import { runRuleTests } from '../adapter/filesystem/rule-tests.js';
@@ -40,6 +41,8 @@ export function createServices(
   const loader = createRuleLoader({ dependencies });
   const services: CliServices = {
     cwd,
+    version: installedVersion,
+    updateTool: createToolUpdater(cwd, env),
     redact,
     terminal: terminalCapabilities({
       stdoutIsTTY: process.stdout.isTTY === true,
@@ -113,7 +116,8 @@ export function createServices(
 export async function runCli(argv: readonly string[]): Promise<number> {
   const cwd = process.cwd();
   try {
-    loadEnvironment(cwd);
+    const versionOnly = argv.length === 1 && (argv[0] === '--version' || argv[0] === '-V');
+    if (!versionOnly) loadEnvironment(cwd);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const redact = createRedactor([process.env.TYPESAFE_API_KEY, process.env.GITHUB_TOKEN]);

@@ -9,6 +9,30 @@ order: 10
 
 Run commands from the project root. For a project-local installation, replace `rulekeeper` with `npx rulekeeper`. Use `rulekeeper --help` or `rulekeeper <command> --help` for installed-release help.
 
+## Version
+
+```sh
+rulekeeper --version
+```
+
+Print the installed package version. `-V` is the short form.
+
+## Update
+
+```sh
+rulekeeper update
+```
+
+Upgrade the active global npm installation to the `latest` release. npm must be on `PATH`. The command uses your npm registry configuration.
+
+Local installations and temporary `npx` copies cannot self-update. For a project-local npm development dependency, run:
+
+```sh
+npm install --save-dev @alex-dbs/rulekeeper@latest
+```
+
+For other installation methods, use the package manager that installed RuleKeeper. An npm update failure returns npm's exit code.
+
 ## Validate
 
 ```sh
