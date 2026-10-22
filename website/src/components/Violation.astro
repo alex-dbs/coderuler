@@ -1,0 +1,40 @@
+---
+import '../styles/violation.css';
+
+interface Props {
+  rule: string;
+  file: string;
+  message: string;
+  source: string;
+  startLine?: number;
+  highlightLine?: number;
+}
+
+const {
+  rule,
+  file,
+  message,
+  source,
+  startLine = 1,
+  highlightLine,
+} = Astro.props;
+const lines = source.split('\n');
+const location = `${file}:${highlightLine ?? startLine}`;
+---
+<article class="violation" aria-label={`${rule} violation`}>
+  <header class="violation-header">
+    <span class="violation-severity">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+        <path d="M12 3 2 21h20L12 3Z" stroke-linejoin="round" />
+        <path d="M12 9v5m0 3v.5" stroke-linecap="round" />
+      </svg>
+      Violation
+    </span>
+    <h3 class="violation-rule">{rule}</h3>
+  </header>
+  <p class="violation-location">{location}</p>
+  <p class="violation-message">{message}</p>
+  <pre class="violation-source" data-copy-disabled tabindex="0" aria-label={`Source excerpt from ${file}, starting at line ${startLine}`}><code>{lines.map((line, index) => (
+    <Fragment><span class="violation-line" data-line={startLine + index} data-highlighted={startLine + index === highlightLine ? 'true' : undefined}>{line}</span>{index < lines.length - 1 ? '\n' : ''}</Fragment>
+  ))}</code></pre>
+</article>

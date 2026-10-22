@@ -5,6 +5,7 @@
 - Refactor unclear code instead of adding prose comments or JSDoc.
 - Preserve comments required by compilers, tooling, or licenses.
 - Use TDD and golden tests based on real use cases.
+- Readme is public facing. We don't care about the work you've done. Keep it clean and focused.
 
 # Rules
 
@@ -13,3 +14,8 @@
 - Use domain names and direct comparisons so the policy reads naturally.
 - Add helpers and validation only when they clarify real behavior, not hypothetical edge cases.
 - No `skips` tests on the rules
+
+# Documentation
+
+- When a RuleKeeper change affects developer usage, update the documentation website in `website/` in the same change.
+- Keep documentation extremely concise. Include only what developers need to use the feature.

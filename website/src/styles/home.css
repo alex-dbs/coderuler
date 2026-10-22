@@ -1,0 +1,119 @@
+.home-page {
+  --home-ice: #c2d4ed;
+  --home-soft-accent: color-mix(in srgb, var(--accent) 12%, transparent);
+  --home-glow: color-mix(in srgb, var(--accent) 24%, transparent);
+  --home-cream-glow: color-mix(in srgb, var(--foreground) 8%, transparent);
+  overflow: clip;
+}
+.home-page :is(a, button):focus-visible { outline: 2px solid var(--accent); outline-offset: 5px; }
+.home-page :is(h1, h2, h3, h4, p) { margin-top: 0; }
+.home-page h2 { font-size: clamp(34px, 3.45vw, 52px); line-height: 1.12; font-weight: 500; letter-spacing: -.05em; }
+.home-page h3 { font-weight: 500; letter-spacing: -.025em; }
+.home-page .eyebrow { text-transform: uppercase; }
+.home-page em { font-style: normal; color: var(--accent); }
+.home-hero { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: center; min-height: 740px; padding-block: 64px 82px; }
+.home-hero-copy { position: relative; z-index: 2; min-width: 0; }
+.home-hero-eyebrow { display: flex; align-items: center; gap: 10px; }
+.home-tiny-square { width: 6px; height: 6px; background: var(--accent); flex: none; }
+.home-hero h1 { font-size: clamp(76px, 8.7vw, 140px); line-height: .98; font-weight: 550; letter-spacing: -.065em; margin: 29px 0 27px; white-space: nowrap; }
+.home-hero-description { max-width: 440px; font-size: 20px; line-height: 1.55; color: var(--muted); letter-spacing: -.025em; margin-bottom: 32px; }
+.home-hero-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 14px 26px; margin-bottom: 20px; }
+.home-page .button { min-height: 52px; gap: 25px; }
+.home-page .button > span { font-size: 20px; font-weight: 400; }
+.home-text-link { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; font-size: 13px; white-space: nowrap; }
+.home-text-link > span { color: var(--muted); }
+.home-page :is(.home-text-link, .home-inline-link):hover { color: var(--accent); }
+.home-install-command { display: flex; align-items: center; gap: 10px; width: fit-content; max-width: 100%; min-height: 44px; padding: 8px 0; border: 0; background: none; color: var(--muted); text-align: left; cursor: pointer; }
+.home-install-command:hover { color: var(--foreground); }
+.home-install-command code { font: 12px/1.6 var(--mono); overflow-wrap: anywhere; }
+.home-install-command .home-prompt { color: var(--accent); font: 13px var(--mono); }
+.home-install-command svg { width: 16px; height: 16px; flex: none; margin-left: 3px; }
+.home-art { position: relative; min-width: 0; width: calc(100% + 48px); margin: -12px -24px 0; }
+.home-sculpture { position: relative; height: clamp(480px, 43vw, 660px); isolation: isolate; }
+.home-sculpture-light { position: absolute; z-index: -1; inset: 6% 0; background: radial-gradient(ellipse at 50% 50%, var(--home-glow), var(--home-cream-glow) 28%, transparent 65%); }
+.home-sculpture-fallback, .home-sculpture-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.home-sculpture-canvas { visibility: hidden; }
+.home-art[data-canvas-ready] .home-sculpture-canvas { visibility: visible; }
+.home-art[data-canvas-ready] .home-sculpture-fallback { visibility: hidden; }
+.home-particle-lavender, .home-core-shell, .home-orbit-lines { color: var(--accent); }
+.home-particle-cream { color: var(--foreground); }
+.home-particle-ice { color: var(--home-ice); }
+.home-orbit-lines { opacity: .55; }
+.home-core-shell { opacity: .65; }
+.home-core { position: absolute; pointer-events: none; width: 106px; height: 106px; left: 50%; top: 50%; transform: translate(-50%, -50%); border: 1px solid var(--home-glow); border-radius: 50%; color: var(--foreground); background: radial-gradient(circle at 34% 25%, var(--home-glow), var(--home-soft-accent) 42%, transparent 76%); box-shadow: inset 0 0 30px var(--home-soft-accent), 0 0 45px var(--home-soft-accent); }
+.home-core svg { width: 100%; height: 100%; filter: drop-shadow(0 0 10px var(--accent)); transform-origin: 50% 50%; animation: home-check-confirm 3.5s ease-in-out infinite paused; }
+.home-art[data-hero-motion] .home-core svg { animation-play-state: running; }
+@keyframes home-check-confirm {
+  0%, 78.5%, 100% { color: var(--foreground); transform: scale(1); filter: drop-shadow(0 0 10px var(--accent)); }
+  89% { color: var(--success); transform: scale(1.045); filter: drop-shadow(0 0 12px color-mix(in srgb, var(--success) 70%, transparent)); }
+}
+.home-orbit-label { position: absolute; display: flex; align-items: center; gap: 10px; color: var(--muted); white-space: nowrap; pointer-events: none; }
+.home-orbit-label code { font: 10px var(--mono); }
+.home-orbit-label > span { font: 22px var(--mono); color: var(--accent); }
+.home-orbit-label i { width: 35px; height: 1px; background: var(--line); }
+.home-label-files { top: 18%; left: 1%; }
+.home-label-rule { right: 0; bottom: 17%; }
+.home-art-caption { display: flex; align-items: center; justify-content: center; gap: 9px; min-height: 44px; padding: 0 18px; color: var(--muted); font: 9px/1.5 var(--mono); letter-spacing: .05em; }
+.home-status-light { display: inline-block; flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+.home-closing { position: relative; padding-block: 49px 86px; }
+.home-closing::before { content: ''; position: absolute; left: var(--gutter); right: var(--gutter); top: 0; height: 1px; background: var(--line); }
+.home-closing > div { display: flex; justify-content: space-between; align-items: flex-end; gap: 35px; }
+.home-closing h2 { font-size: clamp(45px, 6.2vw, 94px); line-height: 1.05; letter-spacing: -.06em; margin: 28px 0 0; }
+.home-closing-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding-bottom: 5px; }
+.home-closing .home-closing-description { max-width: 68ch; margin: 28px 0 0; color: var(--muted); font-size: clamp(16px, 1.5vw, 18px); line-height: 1.75; }
+@media (min-width: 1600px) {
+  .home-hero { min-height: 810px; }
+}
+@media (max-width: 1150px) {
+  .home-hero { min-height: 660px; padding-block: 58px 65px; }
+  .home-hero h1 { font-size: 8.9vw; }
+  .home-hero-description { font-size: 18px; max-width: 340px; }
+  .home-hero-actions { gap: 10px 18px; }
+  .home-hero-actions .button { padding-inline: 16px; gap: 16px; font-size: 13px; }
+  .home-text-link { font-size: 12px; }
+  .home-art { width: calc(100% + 30px); margin-inline: -15px; }
+  .home-sculpture { height: 490px; }
+  .home-art-caption { padding-inline: 6px; font-size: 8px; }
+  .home-label-files { top: 15%; }
+  .home-label-rule { bottom: 15%; }
+}
+@media (max-width: 800px) {
+  .home-hero { display: flex; flex-direction: column; align-items: stretch; min-height: 0; padding-block: 50px 26px; }
+  .home-hero h1 { font-size: clamp(68px, 13.6vw, 108px); }
+  .home-hero-description { max-width: 390px; }
+  .home-art { align-self: center; width: 100%; max-width: 620px; margin: 4px 0 0; }
+  .home-sculpture { height: 540px; }
+  .home-core { width: 108px; height: 108px; }
+  .home-label-files { top: 19%; left: 0; }
+  .home-label-rule { bottom: 17%; right: 0; }
+  .home-art-caption { padding-inline: 0; font-size: 9px; }
+  .home-closing { padding-block: 38px 64px; }
+  .home-closing > div { flex-direction: column; align-items: flex-start; gap: 30px; }
+  .home-closing h2 { font-size: clamp(50px, 8vw, 68px); }
+}
+@media (max-width: 540px) {
+  .home-hero { padding-top: 42px; }
+  .home-hero .eyebrow { font-size: 9px; }
+  .home-hero h1 { font-size: clamp(65px, 15vw, 81px); margin-top: 27px; }
+  .home-hero-description { font-size: 17px; max-width: 310px; margin-bottom: 25px; }
+  .home-hero-actions { gap: 2px 16px; margin-bottom: 12px; }
+  .home-hero-actions .button { font-size: 12px; min-height: 49px; padding-inline: 15px; gap: 15px; }
+  .home-hero-actions .home-text-link { font-size: 11px; gap: 7px; }
+  .home-install-command { gap: 7px; }
+  .home-install-command code { font-size: 12px; }
+  .home-install-command svg { width: 14px; height: 14px; margin-left: 0; }
+  .home-art { width: calc(100% + 24px); margin: 3px -12px 0; }
+  .home-sculpture { height: 365px; }
+  .home-core { width: 75px; height: 75px; }
+  .home-orbit-label { gap: 5px; }
+  .home-orbit-label code { font-size: 8px; }
+  .home-orbit-label i { width: 17px; }
+  .home-label-files { top: 17%; left: 3%; }
+  .home-label-rule { bottom: 17%; right: 3%; }
+  .home-art-caption { padding-inline: 12px; gap: 6px; font-size: 7px; }
+  .home-closing .eyebrow { font-size: 9px; }
+  .home-closing h2 { font-size: clamp(44px, 11.5vw, 61px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .home-page *, .home-page *::before, .home-page *::after { animation: none !important; transition: none !important; }
+}

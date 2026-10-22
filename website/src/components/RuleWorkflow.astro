@@ -1,0 +1,214 @@
+---
+import RuleCode from './RuleCode.astro';
+import '../styles/rule-workflow.css';
+
+const servicePattern = String.raw`^\/service\/v\d+\/[a-z][a-z0-9_]*s(?:\/.*)?$`;
+const checks = [
+  {
+    mode: 'ai', title: 'AI model', name: 'GoAppendSlice', filename: 'go-append-slice.rule.ts',
+    imports: 'Rule, ai, scopes, type ScopeSubject',
+    description: 'Use an AI decision model, such as Jev, to evaluate the rule. It reads the selected function, including the allocation and loop.',
+    instruction: 'For a fresh slice with a known final count, allocate its final length and fill by index or copy.',
+    file: 'src/scores.go', excluded: 'vendor/cache.go', outside: 'package scores',
+    source: 'func growScores(scores []int) []int {\n  out := make([]int, 0, len(scores))\n  for _, score := range scores {\n    out = append(out, score)\n  }\n  return out\n}', context: 'growScores',
+    kept: 'scores.go → check', dropped: 'scores_test.go → skip',
+    sections: [
+      `  files = ['**/*.go'];
+  exclude = ['vendor/**'];`,
+      `  scope = scopes.astGrep({
+    language: 'go',
+    rule: {
+      any: [{ kind: 'function_declaration' },
+            { kind: 'method_declaration' }],
+      has: {
+        kind: 'for_statement', stopBy: 'end',
+        has: { pattern: 'append($SLICE,$$$ARGS)',
+               stopBy: 'end' },
+      },
+    },
+  });`,
+      `  filter = (subject: ScopeSubject) =>
+    !subject.filepath.endsWith('_test.go');`,
+      `  check = ai({
+    rule: 'For a fresh slice with a known final count, ' +
+      'allocate its final length and fill by index or copy. ' +
+      'Allow append for an unknown conditional count ' +
+      'or a deliberately assigned existing prefix.',
+    violationMessage: 'Allocate the known final length ' +
+      'and fill by index instead of appending.',
+  });`,
+    ],
+  },
+  {
+    mode: 'regex', title: 'Regex', name: 'ServiceProto', filename: 'service-proto.rule.ts',
+    imports: 'Rule, regex, scopes, type ScopeSubject',
+    description: 'Evaluate a regular expression locally against each selected HTTP URL. Public API files use a different URL policy, so the filter omits them.',
+    instruction: 'Service HTTP URLs must use /service/vX/ followed by a lowercase plural resource, such as /service/v1/invoices.',
+    file: 'proto/internal/billing.proto', excluded: 'vendor/types.proto', outside: 'option (google.api.http).get',
+    source: '"/service/v1/invoices"', context: '/service/v1/invoices',
+    kept: 'internal/billing.proto → check', dropped: 'public/billing.proto → skip',
+    pattern: servicePattern,
+    sections: [
+      `  files = ['**/*.proto'];
+  exclude = ['vendor/**'];`,
+      `  scope = scopes.protobuf({
+    path: '$.rpcs[*].http.bindings[*].url',
+  });`,
+      `  filter = (subject: ScopeSubject) =>
+    !subject.filepath.startsWith('proto/public/');`,
+      `  check = regex({
+    pattern: /${servicePattern}/,
+    violationMessage: 'Use /service/vX/ and a lowercase plural resource.',
+  });`,
+    ],
+  },
+  {
+    mode: 'code', title: 'Code', name: 'SourceLineLimit', filename: 'source-line-limit.rule.ts',
+    imports: 'Rule, scopes, pass, violation, type ScopeSubject',
+    description: 'Run custom JavaScript or TypeScript logic without a provider. This check counts the lines in each selected source file.',
+    instruction: 'Keep each selected source file at 80 lines or fewer. Test files are outside this policy.',
+    file: 'src/billing.ts', excluded: 'src/vendor/client.ts', outside: '// Whole-file scope',
+    source: 'export function total(items: number[]) {\n  return items.length;\n}', context: 'billing.ts · whole file',
+    kept: 'billing.ts → check', dropped: 'billing.test.ts → skip',
+    sections: [
+      `  files = ['src/**/*.ts'];
+  exclude = ['src/vendor/**'];`,
+      `  scope = scopes.file();`,
+      `  filter = (subject: ScopeSubject) =>
+    !subject.filepath.endsWith('.test.ts');`,
+      String.raw`  check: Rule['check'] = subject => {
+    const lineCount = (subject as ScopeSubject).lines!.end;
+    return lineCount > 80
+      ? violation('Keep source files at 80 lines or fewer.')
+      : pass();
+  };`,
+    ],
+  },
+].map(check => {
+  const opening = `import { ${check.imports} } from '@alex-dbs/rulekeeper';\n\nexport default class ${check.name} extends Rule {\n`;
+  const lineStages: Record<number, number> = {};
+  let line = opening.split('\n').length;
+  check.sections.forEach((section, stage) => {
+    for (let offset = 0; offset < section.split('\n').length; offset++) lineStages[line + offset] = stage;
+    line += section.split('\n').length + 1;
+  });
+  return { ...check, code: `${opening}${check.sections.join('\n\n')}\n}`, lineStages };
+});
+const examples = Object.fromEntries(checks.map(({ mode, title, instruction, file, excluded, outside, source, context, kept, dropped, ...check }) => [mode, { label: title, instruction, file, excluded, outside, source, context, kept, dropped, pattern: 'pattern' in check ? check.pattern : undefined }]));
+const stages = ['Choose files', 'Select portions', 'Filter matches', 'Run the check'];
+---
+
+<section class="rule-workflow page-shell" id="rule-workflow" aria-labelledby="rule-workflow-heading" data-rule-workflow data-flow-stage="0" data-flow-running="false" data-flow-examples={JSON.stringify(examples)}>
+  <header class="workflow-heading">
+    <div>
+      <p class="workflow-eyebrow">From source to a decision</p>
+      <h2 id="rule-workflow-heading">Rule workflow</h2>
+    </div>
+    <button class="workflow-replay" type="button" data-flow-replay hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 10a8 8 0 1 1 1.6 7.1M4 4v6h6" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      Replay
+    </button>
+  </header>
+  <p class="workflow-intro">Follow the rule on the left as its source moves through each step on the right.</p>
+  <div class="workflow-check-heading">
+    <h3>Choose a check</h3>
+    <div class="workflow-modes" role="group" aria-label="Example check method" data-flow-modes hidden>
+      {checks.map((check, index) => <button type="button" aria-pressed={index === 0 ? 'true' : 'false'} aria-controls={`workflow-example-${check.mode}`} data-flow-mode={check.mode}>{check.title}</button>)}
+    </div>
+  </div>
+  <div class="workflow-instruction">
+    <span>Rule instruction</span>
+    <p data-flow-instruction>{checks[0].instruction}</p>
+  </div>
+
+  <div class="workflow-pair" data-flow-pair>
+    <div class="workflow-rule">
+      {checks.map(check => <div class="workflow-check-example" id={`workflow-example-${check.mode}`} data-flow-example={check.mode}>
+        <RuleCode code={check.code} filename={check.filename} class="workflow-code" data-flow-code aria-label={`${check.name} complete rule`} transformers={[{
+          line(node, line) {
+            const stage = check.lineStages[line];
+            if (stage !== undefined) node.properties['data-flow-code-stage'] = String(stage);
+          },
+        }]} />
+        <p class="workflow-underhood">{check.description}</p>
+      </div>)}
+    </div>
+
+    <div class="workflow-animation" data-flow-animation>
+      <div class="workflow-step-controls" role="group" aria-label="Inspect a workflow step" data-flow-step-controls hidden>
+        {stages.map((title, index) => <button type="button" data-flow-step={index} aria-pressed={index === 0 ? 'true' : 'false'} aria-controls={`workflow-stage-${index}`}><span>0{index + 1}</span>{title}</button>)}
+      </div>
+      <ol class="workflow-stages" aria-label="Rule evaluation stages">
+        <li class="workflow-stage" id="workflow-stage-0" data-flow-node="0" data-flow-active>
+          <div class="workflow-stage-title"><span class="workflow-stage-number">01</span><h3>Choose files</h3></div>
+          <p>Include the paths you need. Exclude the rest.</p>
+          <div class="workflow-sample workflow-files">
+            <div class="workflow-file-gate" aria-hidden="true"></div>
+            <div class="workflow-file" data-flow-admitted>
+              <svg viewBox="0 0 20 24" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M3 2h9l5 5v15H3V2Z"/><path d="M12 2v6h5M6 12h8M6 16h6"/></svg>
+              <code data-flow-text="file">src/scores.go</code><span>Included →</span>
+            </div>
+            <div class="workflow-file workflow-file-excluded" data-flow-excluded>
+              <svg viewBox="0 0 20 24" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M3 2h9l5 5v15H3V2Z"/><path d="M12 2v6h5M6 12h8M6 16h6"/></svg>
+              <code data-flow-text="excluded">vendor/cache.go</code><span>Excluded ↘</span>
+            </div>
+          </div>
+        </li>
+        <li class="workflow-stage" id="workflow-stage-1" data-flow-node="1">
+          <div class="workflow-stage-title"><span class="workflow-stage-number">02</span><h3>Select portions</h3></div>
+          <p>A scope selects a whole file or a source fragment.</p>
+          <div class="workflow-sample workflow-source">
+            <code class="workflow-source-outside" data-flow-outside data-flow-text="outside">package scores</code>
+            <code class="workflow-source-selected" data-flow-selected data-flow-text="source">{checks[0].source}</code>
+            <div class="workflow-extract" data-flow-extract><span>Selected context</span><code data-flow-text="context">growScores</code></div>
+          </div>
+        </li>
+        <li class="workflow-stage" id="workflow-stage-2" data-flow-node="2">
+          <div class="workflow-stage-title"><span class="workflow-stage-number">03</span><h3>Filter matches</h3></div>
+          <p>Keep applicable matches. A filter does not decide pass or fail.</p>
+          <div class="workflow-sample workflow-filter">
+            <div class="workflow-match workflow-match-kept" data-flow-kept><code>true</code><span data-flow-text="kept">scores.go → check</span><span class="workflow-match-lines" aria-hidden="true"></span></div>
+            <div class="workflow-match workflow-match-dropped" data-flow-dropped><code>false</code><span data-flow-text="dropped">scores_test.go → skip</span><span class="workflow-match-lines" aria-hidden="true"></span></div>
+          </div>
+        </li>
+        <li class="workflow-stage" id="workflow-stage-3" data-flow-node="3">
+          <div class="workflow-stage-title"><span class="workflow-stage-number">04</span><h3>Run the check</h3></div>
+          <p>Evaluate the retained context against the rule instruction.</p>
+          <div class="workflow-sample workflow-evaluator" data-flow-check-phase="ready">
+            <div class="workflow-context-slot" data-flow-context-slot><span>Retained context</span><code data-flow-text="context">growScores</code></div>
+            <div class="workflow-check-detail" data-flow-evaluator="ai">
+              <div class="workflow-ai-request" data-flow-ai-request>
+                <span class="workflow-check-label">Example request</span>
+                <code data-flow-text="source">{checks[0].source}</code>
+                <p data-flow-text="instruction">{checks[0].instruction}</p>
+              </div>
+              <div class="workflow-model" data-flow-model><span>Jev / AI decision model</span><code data-flow-model-status>Awaiting example request</code></div>
+              <div class="workflow-ai-response" data-flow-ai-response hidden><span class="workflow-check-label">Example response</span><code>Noncompliant</code><p>Known final count: allocate the final length and fill by index.</p></div>
+            </div>
+            <div class="workflow-check-detail" data-flow-evaluator="regex" hidden>
+              <span class="workflow-check-label">Pattern evaluated locally</span>
+              <code class="workflow-pattern" data-flow-pattern>{`/${checks[1].pattern}/`}</code>
+              <code class="workflow-url" data-flow-url><span data-flow-url-part>/service/</span><span data-flow-url-part>v1/</span><span data-flow-url-part>invoices</span></code>
+              <code class="workflow-comparison" data-flow-regex-comparison>pattern.test("/service/v1/invoices")</code>
+            </div>
+            <div class="workflow-check-detail" data-flow-evaluator="code" hidden>
+              <span class="workflow-check-label">Count the retained file’s lines</span>
+              <code class="workflow-count-source" data-flow-count-source>{checks[2].source.split('\n').map((line, index) => <span data-flow-count-line><span aria-hidden="true">{index + 1}</span>{line}</span>)}</code>
+              <div class="workflow-count"><span>Line count</span><strong data-flow-line-count>0</strong><span> / 80 maximum</span></div>
+              <code class="workflow-comparison" data-flow-code-comparison>lineCount &gt; 80</code>
+            </div>
+            <div class="workflow-outcome" data-flow-outcome data-flow-verdict="violation">
+              <div><span class="workflow-verdict-icon" data-flow-verdict-icon aria-hidden="true">!</span><strong data-flow-verdict-label>Violation</strong><code data-flow-decision>violation(…)</code></div>
+              <p data-flow-verdict-message>Allocate the known final length and fill by index instead of appending.</p>
+            </div>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </div>
+  <p class="workflow-announcement" aria-live="polite" aria-atomic="true" data-flow-announcement></p>
+</section>
+
+<script>
+  import '../scripts/rule-workflow';
+</script>

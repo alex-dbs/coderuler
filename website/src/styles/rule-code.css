@@ -1,0 +1,59 @@
+.rule-code {
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--background);
+}
+.rule-code-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 48px;
+  padding: 4px 10px 4px 16px;
+  border-bottom: 1px solid var(--line);
+  border-radius: 9px 9px 0 0;
+  background: var(--surface);
+}
+.rule-code-header > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font: 12px/1.6 var(--mono);
+}
+.rule-code-copy {
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--foreground);
+  font: 12px/1.4 var(--font);
+  cursor: pointer;
+}
+.rule-code-copy:hover { border-color: var(--line); color: var(--accent); }
+.rule-code-copy[data-copied='true'] { color: var(--success); }
+.rule-code pre {
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  padding: 16px;
+  border: 0;
+  border-radius: 0 0 9px 9px;
+  background: var(--background) !important;
+  overflow: auto;
+  overscroll-behavior: contain;
+  font: 12px/1.85 var(--mono);
+  tab-size: 2;
+  scrollbar-width: thin;
+}
+.rule-code pre code { display: block; min-width: max-content; font: inherit; }
+.rule-code:has(> :last-child:not(pre)) pre { border-radius: 0; }
+.rule-code-copy:focus-visible, .rule-code pre:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (max-width: 760px) {
+  .rule-code-header { min-height: 44px; padding-left: 12px; }
+}

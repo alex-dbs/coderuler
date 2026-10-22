@@ -1,0 +1,90 @@
+.violation {
+  --violation-color: var(--error);
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  overflow: visible;
+}
+.violation-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 18px 20px 0;
+}
+.violation-severity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  color: var(--violation-color);
+  font: 12px/1.5 var(--mono);
+}
+.violation-severity svg { flex: none; }
+.violation-rule {
+  min-width: 0;
+  margin: 0;
+  color: var(--foreground);
+  font: 500 14px/1.5 var(--mono);
+  overflow-wrap: anywhere;
+}
+.violation-location {
+  margin: 14px 20px 0;
+  color: var(--muted);
+  font: 12px/1.7 var(--mono);
+  overflow-wrap: anywhere;
+}
+.violation-message {
+  margin: 6px 20px 24px;
+  color: var(--foreground);
+  font-size: 16px;
+  line-height: 1.6;
+}
+.violation pre.violation-source {
+  max-width: 100%;
+  margin: 0;
+  padding: 24px 20px 22px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 var(--radius-control) var(--radius-control);
+  background: var(--background);
+  color: var(--foreground);
+  overflow-x: auto;
+  font: 12px/1.85 var(--mono);
+}
+.violation-source code {
+  display: block;
+  min-width: max-content;
+  font: inherit;
+}
+.violation-line {
+  display: inline-block;
+  min-width: 100%;
+  border-left: 2px solid transparent;
+}
+.violation-line::before {
+  content: "  " attr(data-line);
+  display: inline-block;
+  width: 5ch;
+  margin-right: 2ch;
+  color: var(--muted);
+  text-align: right;
+  user-select: none;
+}
+.violation-line[data-highlighted="true"] {
+  border-left-color: var(--violation-color);
+  background: color-mix(in srgb, var(--violation-color) 12%, transparent);
+}
+.violation-line[data-highlighted="true"]::before {
+  content: "> " attr(data-line);
+  color: var(--violation-color);
+}
+@media (max-width: 560px) {
+  .violation-header { padding-inline: 14px; }
+  .violation-location { margin-inline: 14px; }
+  .violation-message { margin-inline: 14px; }
+  .violation pre.violation-source { padding-inline: 14px; }
+}
