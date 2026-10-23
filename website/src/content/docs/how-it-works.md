@@ -41,7 +41,7 @@ A skip means that the rule did not apply. It is not a passing policy decision.
 
 `files` selects root-relative globs. `exclude` removes matches, and exclusions win. Without a `scope`, RuleKeeper selects one whole-file scope per eligible file.
 
-A structured selector can instead select JSON values, YAML documents, CSV rows, Protobuf RPC information, or syntax nodes. Scopes preserve identity and source locations so findings can refer to the selected content.
+A structured selector can instead select JSON values, YAML documents, CSV rows, Protobuf declarations and options, or syntax nodes. Scopes preserve identity and source locations so findings can refer to the selected content.
 
 Override `select(context)` for custom selection. Reuse `context.select({ files, exclude, scope })` instead of recreating file traversal. See [scopes](/docs/scopes/) for signatures and boundaries.
 

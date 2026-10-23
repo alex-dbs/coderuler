@@ -10,7 +10,6 @@ import {
   resolveAstGrepLanguage,
 } from '../dist/adapter/scope/astgrep-languages.js';
 import { SourceLines, textLineSpan } from '../dist/adapter/scope/lines.js';
-import { readRpcRecords } from '../dist/adapter/scope/protobuf-parser.js';
 import { protobuf } from '../dist/adapter/scope/protobuf.js';
 import type { JsonValue, ScopeMatch, ScopeSelector } from '../dist/index.js';
 
@@ -629,93 +628,33 @@ service BillingService {
   rpc StreamInvoices(StreamInvoicesRequest) returns (StreamInvoicesResponse);
 }
 `;
+test('protobuf maps root and empty-option source spans around unannotated RPCs', async () => {
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: '$' }), 'unannotated.proto', PROTO_UNANNOTATED), [
+    { id: '$', source: PROTO_UNANNOTATED, lines: { start: 1, end: 7 }, data: { options: {}, services: [{ id: 'acme.billing.v1.BillingService', name: 'BillingService', parent: null, options: {} }], rpcs: [rpcRecord('StreamInvoices', {})], messages: [], fields: [], oneofs: [], enums: [], enumValues: [], extensions: [] } },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: '$.rpcs' }), 'unannotated.proto', PROTO_UNANNOTATED), [
+    { id: '/rpcs', source: PROTO_UNANNOTATED, lines: { start: 1, end: 7 }, data: [rpcRecord('StreamInvoices', {})] },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: '$.rpcs[*].id' }), 'unannotated.proto', PROTO_UNANNOTATED), [
+    { id: 'acme.billing.v1.BillingService.StreamInvoices:/id', source: 'rpc StreamInvoices(StreamInvoicesRequest) returns (StreamInvoicesResponse);', lines: { start: 6, end: 6 }, data: 'acme.billing.v1.BillingService.StreamInvoices' },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: '$.rpcs[*].options' }), 'unannotated.proto', PROTO_UNANNOTATED), [
+    { id: 'acme.billing.v1.BillingService.StreamInvoices:/options', source: 'rpc StreamInvoices(StreamInvoicesRequest) returns (StreamInvoicesResponse);', lines: { start: 6, end: 6 }, data: {} },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: '$.rpcs[*].options.*' }), 'unannotated.proto', PROTO_UNANNOTATED), []);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: '$.rpcs[*].name' }), 'unannotated.proto', PROTO_UNANNOTATED), [
+    { id: 'acme.billing.v1.BillingService.StreamInvoices:/name', source: 'StreamInvoices', lines: { start: 6, end: 6 }, data: 'StreamInvoices' },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: '$.rpcs[*]' }), 'empty.proto', PROTO_NO_RPCS), []);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: '$' }), 'empty.proto', PROTO_NO_RPCS), [
+    { id: '$', source: PROTO_NO_RPCS, lines: { start: 1, end: 3 }, data: { options: {}, services: [], rpcs: [], messages: [], fields: [], oneofs: [], enums: [], enumValues: [], extensions: [] } },
+  ]);
+});
+
 
 const PROTO_NO_RPCS = `syntax = "proto3";
 
 package acme.billing.v1;
-`;
-
-const PROTO_DOTTED_VERB = `syntax = "proto3";
-
-package acme.billing.v1;
-
-service BillingService {
-  rpc GetInvoice(GetInvoiceRequest) returns (GetInvoiceResponse) {
-    option (google.api.http).get = "/v1/billing/invoices";
-  }
-}
-`;
-
-const PROTO_EMPTY_URL = `syntax = "proto3";
-
-package acme.billing.v1;
-
-service BillingService {
-  rpc GetInvoice(GetInvoiceRequest) returns (GetInvoiceResponse) {
-    option (google.api.http) = {
-      get: ""
-    };
-  }
-}
-`;
-
-const PROTO_CUSTOM_BLOCK = `syntax = "proto3";
-
-package acme.billing.v1;
-
-service BillingService {
-  rpc GetInvoice(GetInvoiceRequest) returns (GetInvoiceResponse) {
-    option (google.api.http) = {
-      custom {
-        kind: "HEAD"
-        path: "/v1/billing/invoices"
-      }
-    };
-  }
-}
-`;
-
-const PROTO_CUSTOM_DOTTED = `syntax = "proto3";
-
-package acme.billing.v1;
-
-service BillingService {
-  rpc GetInvoice(GetInvoiceRequest) returns (GetInvoiceResponse) {
-    option (google.api.http).custom.kind = "HEAD";
-    option (google.api.http).custom.path = "/v1/billing/invoices";
-  }
-}
-`;
-
-const PROTO_NESTED_BINDINGS = `syntax = "proto3";
-
-package acme.billing.v1;
-
-/* Billing
-   invoices. */
-service BillingService {
-  // Lists invoices with list and nested additional bindings.
-  rpc ListInvoices(ListInvoicesRequest) returns (ListInvoicesResponse) {
-    option (google.api.http) = {
-      # search form
-      get: "/v1/billing/invoices?filter=open\\u0026sort=asc"
-      additional_bindings: [
-        { post: "/v1/billing/invoices\\/search" }
-        {
-          custom {
-            kind: "HEAD"
-            path: '/v1/billing/invoices/head'
-          }
-        }
-        { patch: "/v1/billing/invoices/patch"
-          additional_bindings {
-            delete: "/v1/billing/invoices/{invoice_id}"
-          }
-        }
-      ]
-    };
-  }
-}
 `;
 
 const PROTO_UNVALIDATED = `syntax = "proto3";
@@ -756,8 +695,12 @@ const PROTO_PLAIN_LINES = [
 const PROTO_CR = PROTO_PLAIN_LINES.replaceAll('\n', '\r');
 const PROTO_CRLF = PROTO_PLAIN_LINES.replaceAll('\n', '\r\n');
 
-function billingRecord(id: string, name: string, bindings: JsonValue): JsonValue {
-  return { id, package: 'acme.billing.v1', service: 'BillingService', name, http: { bindings } };
+function rpcRecord(name: string, options: JsonValue): JsonValue {
+  return { id: `acme.billing.v1.BillingService.${name}`, name, parent: 'acme.billing.v1.BillingService', options };
+}
+
+function protoRecord(id: string, name: string, parent: string | null, options: JsonValue): JsonValue {
+  return { id, name, parent, options };
 }
 
 test('protobuf selects RPC records by default', async () => {
@@ -767,25 +710,20 @@ test('protobuf selects RPC records by default', async () => {
       source:
         'rpc GetInvoice(GetInvoiceRequest) returns (GetInvoiceResponse) {\n    option (google.api.http) = {\n      get: "/v1/billing/invoices/{invoice_id}"\n    };\n  }',
       lines: { start: 6, end: 10 },
-      data: billingRecord('acme.billing.v1.BillingService.GetInvoice', 'GetInvoice', [
-        { method: 'GET', url: '/v1/billing/invoices/{invoice_id}' },
-      ]),
+      data: rpcRecord('GetInvoice', { 'google.api.http': { get: '/v1/billing/invoices/{invoice_id}' } }),
     },
     {
       id: 'acme.billing.v1.BillingService.StreamInvoices',
       source: 'rpc StreamInvoices(StreamInvoicesRequest) returns (StreamInvoicesResponse);',
       lines: { start: 12, end: 12 },
-      data: billingRecord('acme.billing.v1.BillingService.StreamInvoices', 'StreamInvoices', []),
+      data: rpcRecord('StreamInvoices', {}),
     },
     {
       id: 'acme.billing.v1.BillingService.CreateInvoice',
       source:
         'rpc CreateInvoice(CreateInvoiceRequest) returns (CreateInvoiceResponse) {\n    option (google.api.http) = {\n      post: "/v1/billing/invoices"\n      additional_bindings {\n        get: "/v1/billing/invoices/{invoice_id}/items"\n      }\n    };\n  }',
       lines: { start: 14, end: 21 },
-      data: billingRecord('acme.billing.v1.BillingService.CreateInvoice', 'CreateInvoice', [
-        { method: 'POST', url: '/v1/billing/invoices' },
-        { method: 'GET', url: '/v1/billing/invoices/{invoice_id}/items' },
-      ]),
+      data: rpcRecord('CreateInvoice', { 'google.api.http': { post: '/v1/billing/invoices', additional_bindings: { get: '/v1/billing/invoices/{invoice_id}/items' } } }),
     },
   ]);
 });
@@ -819,464 +757,303 @@ service BillingService {
 }
 `;
 
-test('protobuf keeps standard verbs and skips prototype-named unknown fields', async () => {
-  const bindings = await select(
-    protobuf<JsonValue>({ path: '$.rpcs[*].http.bindings[*]' }),
-    'proto/billing/v1/prototype.proto',
-    PROTO_PROTOTYPE_KEYS,
-  );
-  assert.deepEqual(
-    bindings.map(binding => binding.data),
-    [
-      { method: 'GET', url: '/v1/get' },
-      { method: 'POST', url: '/v1/post' },
-      { method: 'PUT', url: '/v1/put' },
-      { method: 'DELETE', url: '/v1/delete' },
-      { method: 'PATCH', url: '/v1/patch' },
-      { method: 'PATCH', url: '/v1/dotted-patch' },
-    ],
-  );
+test('protobuf keeps prototype-named option keys as own data', async () => {
+  const values = await select(protobuf<JsonValue>({ path: "$.rpcs[0].options['google.api.http']" }), 'prototype.proto', PROTO_PROTOTYPE_KEYS);
+  const first = values[0]?.data;
+  assert.ok(first && typeof first === 'object' && !Array.isArray(first));
+  assert.deepEqual(Object.keys(first), ['get', 'post', 'put', 'delete', 'patch', '__proto__', 'toString', 'constructor', 'valueOf', 'hasOwnProperty', 'foo']);
+  assert.equal(Object.getPrototypeOf(first), Object.prototype);
+  assert.equal(Object.getOwnPropertyDescriptor(first, '__proto__')?.value, '/v1/proto');
+  const second = (await select(protobuf<JsonValue>({ path: "$.rpcs[1].options['google.api.http']" }), 'prototype.proto', PROTO_PROTOTYPE_KEYS))[0]?.data;
+  assert.ok(second && typeof second === 'object' && !Array.isArray(second));
+  assert.deepEqual(Object.keys(second), ['toString', '__proto__', 'patch']);
 });
 
-test('protobuf selects url leaves across additional bindings in source order', async () => {
-  const selector = protobuf<JsonValue>({ path: '$.rpcs[*].http.bindings[*].url' });
-  assert.deepEqual(await select(selector, 'proto/billing/v1/invoice.proto', PROTO_MULTI), [
-    {
-      id: 'acme.billing.v1.BillingService.GetInvoice:/http/bindings/0/url',
-      source: '"/v1/billing/invoices/{invoice_id}"',
-      lines: { start: 8, end: 8 },
-      data: '/v1/billing/invoices/{invoice_id}',
-    },
-    {
-      id: 'acme.billing.v1.BillingService.CreateInvoice:/http/bindings/0/url',
-      source: '"/v1/billing/invoices"',
-      lines: { start: 16, end: 16 },
-      data: '/v1/billing/invoices',
-    },
-    {
-      id: 'acme.billing.v1.BillingService.CreateInvoice:/http/bindings/1/url',
-      source: '"/v1/billing/invoices/{invoice_id}/items"',
-      lines: { start: 18, end: 18 },
-      data: '/v1/billing/invoices/{invoice_id}/items',
-    },
-  ]);
-});
-
-test('protobuf selects http, bindings, binding, method, and url subtrees', async () => {
-  assert.deepEqual(
-    await select(protobuf<JsonValue>({ path: '$.rpcs[*].http.bindings[*].method' }), 'x.proto', PROTO_MULTI),
-    [
-      {
-        id: 'acme.billing.v1.BillingService.GetInvoice:/http/bindings/0/method',
-        source: 'get',
-        lines: { start: 8, end: 8 },
-        data: 'GET',
-      },
-      {
-        id: 'acme.billing.v1.BillingService.CreateInvoice:/http/bindings/0/method',
-        source: 'post',
-        lines: { start: 16, end: 16 },
-        data: 'POST',
-      },
-      {
-        id: 'acme.billing.v1.BillingService.CreateInvoice:/http/bindings/1/method',
-        source: 'get',
-        lines: { start: 18, end: 18 },
-        data: 'GET',
-      },
-    ],
-  );
-
-  assert.deepEqual(await select(protobuf<JsonValue>({ path: '$.rpcs[*].http.bindings[*]' }), 'x.proto', PROTO_MULTI), [
-    {
-      id: 'acme.billing.v1.BillingService.GetInvoice:/http/bindings/0',
-      source: 'get: "/v1/billing/invoices/{invoice_id}"',
-      lines: { start: 8, end: 8 },
-      data: { method: 'GET', url: '/v1/billing/invoices/{invoice_id}' },
-    },
-    {
-      id: 'acme.billing.v1.BillingService.CreateInvoice:/http/bindings/0',
-      source: 'post: "/v1/billing/invoices"',
-      lines: { start: 16, end: 16 },
-      data: { method: 'POST', url: '/v1/billing/invoices' },
-    },
-    {
-      id: 'acme.billing.v1.BillingService.CreateInvoice:/http/bindings/1',
-      source: 'get: "/v1/billing/invoices/{invoice_id}/items"',
-      lines: { start: 18, end: 18 },
-      data: { method: 'GET', url: '/v1/billing/invoices/{invoice_id}/items' },
-    },
-  ]);
-
-  const getInvoiceOption = 'option (google.api.http) = {\n      get: "/v1/billing/invoices/{invoice_id}"\n    };';
-  const createInvoiceOption =
-    'option (google.api.http) = {\n      post: "/v1/billing/invoices"\n      additional_bindings {\n        get: "/v1/billing/invoices/{invoice_id}/items"\n      }\n    };';
-  const createInvoiceBindings = [
-    { method: 'POST', url: '/v1/billing/invoices' },
-    { method: 'GET', url: '/v1/billing/invoices/{invoice_id}/items' },
-  ];
-
-  assert.deepEqual(await select(protobuf<JsonValue>({ path: '$.rpcs[*].http' }), 'x.proto', PROTO_MULTI), [
-    {
-      id: 'acme.billing.v1.BillingService.GetInvoice:/http',
-      source: getInvoiceOption,
-      lines: { start: 7, end: 9 },
-      data: { bindings: [{ method: 'GET', url: '/v1/billing/invoices/{invoice_id}' }] },
-    },
-    {
-      id: 'acme.billing.v1.BillingService.StreamInvoices:/http',
-      source: 'rpc StreamInvoices(StreamInvoicesRequest) returns (StreamInvoicesResponse);',
-      lines: { start: 12, end: 12 },
-      data: { bindings: [] },
-    },
-    {
-      id: 'acme.billing.v1.BillingService.CreateInvoice:/http',
-      source: createInvoiceOption,
-      lines: { start: 15, end: 20 },
-      data: { bindings: createInvoiceBindings },
-    },
-  ]);
-  assert.deepEqual(await select(protobuf<JsonValue>({ path: '$.rpcs[*].http.bindings' }), 'x.proto', PROTO_MULTI), [
-    {
-      id: 'acme.billing.v1.BillingService.GetInvoice:/http/bindings',
-      source: getInvoiceOption,
-      lines: { start: 7, end: 9 },
-      data: [{ method: 'GET', url: '/v1/billing/invoices/{invoice_id}' }],
-    },
-    {
-      id: 'acme.billing.v1.BillingService.StreamInvoices:/http/bindings',
-      source: 'rpc StreamInvoices(StreamInvoicesRequest) returns (StreamInvoicesResponse);',
-      lines: { start: 12, end: 12 },
-      data: [],
-    },
-    {
-      id: 'acme.billing.v1.BillingService.CreateInvoice:/http/bindings',
-      source: createInvoiceOption,
-      lines: { start: 15, end: 20 },
-      data: createInvoiceBindings,
-    },
-  ]);
-});
-
-test('protobuf keeps unannotated RPCs with empty bindings and no url leaves', async () => {
-  assert.deepEqual(await select(protobuf<JsonValue>(), 'x.proto', PROTO_UNANNOTATED), [
-    {
-      id: 'acme.billing.v1.BillingService.StreamInvoices',
-      source: 'rpc StreamInvoices(StreamInvoicesRequest) returns (StreamInvoicesResponse);',
-      lines: { start: 6, end: 6 },
-      data: billingRecord('acme.billing.v1.BillingService.StreamInvoices', 'StreamInvoices', []),
-    },
-  ]);
-  assert.deepEqual(
-    await select(protobuf<JsonValue>({ path: '$.rpcs[*].http.bindings[*].url' }), 'x.proto', PROTO_UNANNOTATED),
-    [],
-  );
-  assert.deepEqual(
-    await select(protobuf<JsonValue>({ path: '$.rpcs[*].http.bindings[*]' }), 'x.proto', PROTO_UNANNOTATED),
-    [],
-  );
-});
-
-test('protobuf reads dotted option assignments', async () => {
-  assert.deepEqual(await select(protobuf<JsonValue>(), 'x.proto', PROTO_DOTTED_VERB), [
-    {
-      id: 'acme.billing.v1.BillingService.GetInvoice',
-      source:
-        'rpc GetInvoice(GetInvoiceRequest) returns (GetInvoiceResponse) {\n    option (google.api.http).get = "/v1/billing/invoices";\n  }',
-      lines: { start: 6, end: 8 },
-      data: billingRecord('acme.billing.v1.BillingService.GetInvoice', 'GetInvoice', [
-        { method: 'GET', url: '/v1/billing/invoices' },
-      ]),
-    },
-  ]);
-  assert.deepEqual(
-    await select(protobuf<JsonValue>({ path: '$.rpcs[*].http.bindings[*].url' }), 'x.proto', PROTO_DOTTED_VERB),
-    [
-      {
-        id: 'acme.billing.v1.BillingService.GetInvoice:/http/bindings/0/url',
-        source: '"/v1/billing/invoices"',
-        lines: { start: 7, end: 7 },
-        data: '/v1/billing/invoices',
-      },
-    ],
-  );
-});
-
-test('protobuf keeps empty URL values as real selections', async () => {
-  assert.deepEqual(
-    await select(protobuf<JsonValue>({ path: '$.rpcs[*].http.bindings[*].url' }), 'x.proto', PROTO_EMPTY_URL),
-    [
-      {
-        id: 'acme.billing.v1.BillingService.GetInvoice:/http/bindings/0/url',
-        source: '""',
-        lines: { start: 8, end: 8 },
-        data: '',
-      },
-    ],
-  );
-});
-
-test('protobuf reads custom http bindings in block and dotted forms', async () => {
-  const url = '$.rpcs[*].http.bindings[*].url';
-  const method = '$.rpcs[*].http.bindings[*].method';
-
-  assert.deepEqual(await select(protobuf<JsonValue>({ path: url }), 'x.proto', PROTO_CUSTOM_BLOCK), [
-    {
-      id: 'acme.billing.v1.BillingService.GetInvoice:/http/bindings/0/url',
-      source: '"/v1/billing/invoices"',
-      lines: { start: 10, end: 10 },
-      data: '/v1/billing/invoices',
-    },
-  ]);
-  assert.deepEqual(await select(protobuf<JsonValue>({ path: method }), 'x.proto', PROTO_CUSTOM_BLOCK), [
-    {
-      id: 'acme.billing.v1.BillingService.GetInvoice:/http/bindings/0/method',
-      source: '"HEAD"',
-      lines: { start: 9, end: 9 },
-      data: 'HEAD',
-    },
-  ]);
-  assert.deepEqual(await select(protobuf<JsonValue>({ path: url }), 'x.proto', PROTO_CUSTOM_DOTTED), [
-    {
-      id: 'acme.billing.v1.BillingService.GetInvoice:/http/bindings/0/url',
-      source: '"/v1/billing/invoices"',
-      lines: { start: 8, end: 8 },
-      data: '/v1/billing/invoices',
-    },
-  ]);
-  assert.deepEqual(await select(protobuf<JsonValue>({ path: method }), 'x.proto', PROTO_CUSTOM_DOTTED), [
-    {
-      id: 'acme.billing.v1.BillingService.GetInvoice:/http/bindings/0/method',
-      source: '"HEAD"',
-      lines: { start: 7, end: 7 },
-      data: 'HEAD',
-    },
-  ]);
-});
-
-test('protobuf reads comments, escaped strings, and list or nested additional bindings', async () => {
-  const recordId = 'acme.billing.v1.BillingService.ListInvoices';
-  const recordSource = [
-    'rpc ListInvoices(ListInvoicesRequest) returns (ListInvoicesResponse) {',
-    '    option (google.api.http) = {',
-    '      # search form',
-    '      get: "/v1/billing/invoices?filter=open\\u0026sort=asc"',
-    '      additional_bindings: [',
-    '        { post: "/v1/billing/invoices\\/search" }',
-    '        {',
-    '          custom {',
-    '            kind: "HEAD"',
-    "            path: '/v1/billing/invoices/head'",
-    '          }',
-    '        }',
-    '        { patch: "/v1/billing/invoices/patch"',
-    '          additional_bindings {',
-    '            delete: "/v1/billing/invoices/{invoice_id}"',
-    '          }',
-    '        }',
-    '      ]',
-    '    };',
-    '  }',
-  ].join('\n');
-
-  assert.deepEqual(await select(protobuf<JsonValue>(), 'x.proto', PROTO_NESTED_BINDINGS), [
-    {
-      id: recordId,
-      source: recordSource,
-      lines: { start: 9, end: 28 },
-      data: billingRecord(recordId, 'ListInvoices', [
-        { method: 'GET', url: '/v1/billing/invoices?filter=open&sort=asc' },
-        { method: 'POST', url: '/v1/billing/invoices/search' },
-        { method: 'HEAD', url: '/v1/billing/invoices/head' },
-        { method: 'PATCH', url: '/v1/billing/invoices/patch' },
-        { method: 'DELETE', url: '/v1/billing/invoices/{invoice_id}' },
-      ]),
-    },
-  ]);
-
-  assert.deepEqual(
-    await select(protobuf<JsonValue>({ path: '$.rpcs[*].http.bindings[*].url' }), 'x.proto', PROTO_NESTED_BINDINGS),
-    [
-      {
-        id: `${recordId}:/http/bindings/0/url`,
-        source: '"/v1/billing/invoices?filter=open\\u0026sort=asc"',
-        lines: { start: 12, end: 12 },
-        data: '/v1/billing/invoices?filter=open&sort=asc',
-      },
-      {
-        id: `${recordId}:/http/bindings/1/url`,
-        source: '"/v1/billing/invoices\\/search"',
-        lines: { start: 14, end: 14 },
-        data: '/v1/billing/invoices/search',
-      },
-      {
-        id: `${recordId}:/http/bindings/2/url`,
-        source: "'/v1/billing/invoices/head'",
-        lines: { start: 18, end: 18 },
-        data: '/v1/billing/invoices/head',
-      },
-      {
-        id: `${recordId}:/http/bindings/3/url`,
-        source: '"/v1/billing/invoices/patch"',
-        lines: { start: 21, end: 21 },
-        data: '/v1/billing/invoices/patch',
-      },
-      {
-        id: `${recordId}:/http/bindings/4/url`,
-        source: '"/v1/billing/invoices/{invoice_id}"',
-        lines: { start: 23, end: 23 },
-        data: '/v1/billing/invoices/{invoice_id}',
-      },
-    ],
-  );
-
-  assert.deepEqual(
-    readRpcRecords(PROTO_NESTED_BINDINGS).map((record) =>
-      record.spans.bindings.map((binding) => ({
-        span: PROTO_NESTED_BINDINGS.slice(binding.span.start, binding.span.end),
-        method: PROTO_NESTED_BINDINGS.slice(binding.method.start, binding.method.end),
-        url: PROTO_NESTED_BINDINGS.slice(binding.url.start, binding.url.end),
-      })),
-    ),
-    [
-      [
-        {
-          span: 'get: "/v1/billing/invoices?filter=open\\u0026sort=asc"',
-          method: 'get',
-          url: '"/v1/billing/invoices?filter=open\\u0026sort=asc"',
-        },
-        { span: 'post: "/v1/billing/invoices\\/search"', method: 'post', url: '"/v1/billing/invoices\\/search"' },
-        {
-          span: 'custom {\n            kind: "HEAD"\n            path: \'/v1/billing/invoices/head\'\n          }',
-          method: '"HEAD"',
-          url: "'/v1/billing/invoices/head'",
-        },
-        { span: 'patch: "/v1/billing/invoices/patch"', method: 'patch', url: '"/v1/billing/invoices/patch"' },
-        {
-          span: 'delete: "/v1/billing/invoices/{invoice_id}"',
-          method: 'delete',
-          url: '"/v1/billing/invoices/{invoice_id}"',
-        },
-      ],
-    ],
-  );
-});
-
-test('protobuf rejects selections outside the RPC and http subtrees', async () => {
-  for (const path of ['$', '$.rpcs', '$.rpcs[*].id']) {
-    const message = await selectionError(protobuf<JsonValue>({ path }), 'x.proto', PROTO_MULTI);
-    assert.match(message, /not an RPC record or its http annotation/, path);
-  }
-});
-
-test('protobuf rejects forbidden pointers even when no RPC matched the selection', async () => {
-  for (const path of ['$', '$.rpcs']) {
-    const message = await selectionError(protobuf<JsonValue>({ path }), 'x.proto', PROTO_NO_RPCS);
-    assert.match(message, /not an RPC record or its http annotation/, path);
-  }
-  assert.deepEqual(await select(protobuf<JsonValue>(), 'x.proto', PROTO_NO_RPCS), []);
-  assert.deepEqual(
-    await select(protobuf<JsonValue>({ path: '$.rpcs[*].http.bindings[*].url' }), 'x.proto', PROTO_NO_RPCS),
-    [],
-  );
-});
-
-test('protobuf extracts RPCs without validating imports, types, or unknown options', async () => {
+test('protobuf extracts declarations without validating imports, types, or unknown options', async () => {
   assert.deepEqual(await select(protobuf<JsonValue>(), 'x.proto', PROTO_UNVALIDATED), [
     {
       id: 'acme.billing.v1.BillingService.GetInvoice',
       source:
         'rpc GetInvoice(NonexistentRequest) returns (stream NonexistentResponse) {\n    option (google.api.http) = {\n      get: "/v1/billing/invoices"\n      body: "*"\n    };\n    option (my.custom.method_option).value = 42;\n  }',
       lines: { start: 14, end: 20 },
-      data: billingRecord('acme.billing.v1.BillingService.GetInvoice', 'GetInvoice', [
-        { method: 'GET', url: '/v1/billing/invoices' },
-      ]),
+      data: rpcRecord('GetInvoice', { 'google.api.http': { get: '/v1/billing/invoices', body: '*' }, 'my.custom.method_option': { value: 42 } }),
     },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: '$.services[*].options' }), 'x.proto', PROTO_UNVALIDATED), [
+    { id: 'acme.billing.v1.BillingService:/options', source: 'option (my.custom.service_option) = true;', lines: { start: 12, end: 12 }, data: { 'my.custom.service_option': true } },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: '$.fields[*].id' }), 'x.proto', PROTO_UNVALIDATED), [
+    { id: 'acme.billing.v1.Invoice.id:/id', source: 'unknown_field_type id = 1;', lines: { start: 8, end: 8 }, data: 'acme.billing.v1.Invoice.id' },
   ]);
 });
 
-test('protobuf reader reports normalized records with exact source spans', () => {
-  const records = readRpcRecords(PROTO_DOTTED_VERB);
-  assert.deepEqual(records, [
-    {
-      id: 'acme.billing.v1.BillingService.GetInvoice',
-      source:
-        'rpc GetInvoice(GetInvoiceRequest) returns (GetInvoiceResponse) {\n    option (google.api.http).get = "/v1/billing/invoices";\n  }',
-      start: 73,
-      end: 200,
-      data: {
-        id: 'acme.billing.v1.BillingService.GetInvoice',
-        package: 'acme.billing.v1',
-        service: 'BillingService',
-        name: 'GetInvoice',
-        http: { bindings: [{ method: 'GET', url: '/v1/billing/invoices' }] },
-      },
-      spans: {
-        http: { start: 142, end: 196 },
-        bindings: [
-          { span: { start: 167, end: 195 }, method: { start: 167, end: 170 }, url: { start: 173, end: 195 } },
-        ],
-      },
-    },
+const PROTO_EVERYWHERE = `syntax = "proto3";
+
+package acme.billing.v1;
+
+option go_package = "acme/billing/v1;billingv1";
+option (acme.file_owner) = "billing";
+
+service BillingService {
+  option (acme.service_tier) = 1;
+
+  rpc GetInvoice(GetInvoiceRequest) returns (Invoice) {
+    option deprecated = true;
+  }
+}
+
+message Invoice {
+  option (acme.table) = { name: "invoices" shard: 4 };
+
+  string id = 1 [(validate.rules).string.uuid = true, deprecated = true];
+  map<string, string> labels = 2 [(acme.redact) = true];
+
+  oneof payer {
+    option (acme.required_oneof) = true;
+    string customer_id = 3 [(acme.ref) = "Customer"];
+  }
+
+  message Line {
+    int64 amount = 1 [(validate.rules).int64 = { gte: -5, lte: 1e3 }];
+  }
+
+  enum Status {
+    option allow_alias = true;
+    STATUS_UNSPECIFIED = 0;
+    STATUS_PAID = 1 [(acme.label) = "Paid"];
+  }
+}
+
+extend google.protobuf.MethodOptions {
+  Route route = 50001 [(acme.internal) = true];
+}
+`;
+
+test('protobuf reads options on every declaration kind', async () => {
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: '$.options' }), 'everywhere.proto', PROTO_EVERYWHERE), [
+    { id: '/options', source: 'option go_package = "acme/billing/v1;billingv1";\noption (acme.file_owner) = "billing";', lines: { start: 5, end: 6 }, data: { go_package: 'acme/billing/v1;billingv1', 'acme.file_owner': 'billing' } },
   ]);
-  assert.equal(PROTO_DOTTED_VERB.slice(73, 200), records[0]?.source);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: '$.services[*]' }), 'everywhere.proto', PROTO_EVERYWHERE), [
+    { id: 'acme.billing.v1.BillingService', source: 'service BillingService {\n  option (acme.service_tier) = 1;\n\n  rpc GetInvoice(GetInvoiceRequest) returns (Invoice) {\n    option deprecated = true;\n  }\n}', lines: { start: 8, end: 14 }, data: protoRecord('acme.billing.v1.BillingService', 'BillingService', null, { 'acme.service_tier': 1 }) },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: '$.rpcs[*].options.deprecated' }), 'everywhere.proto', PROTO_EVERYWHERE), [
+    { id: 'acme.billing.v1.BillingService.GetInvoice:/options/deprecated', source: 'true', lines: { start: 12, end: 12 }, data: true },
+  ]);
 
-  const unannotated = readRpcRecords(PROTO_UNANNOTATED);
-  assert.deepEqual(unannotated[0]?.spans, { http: { start: 73, end: 148 }, bindings: [] });
-  assert.deepEqual(unannotated[0]?.data.http.bindings, []);
-  assert.deepEqual(readRpcRecords('syntax = "proto3";\n'), [], 'a source without services has no records');
-});
-
-test('protobuf reader reports lexical, RPC, and annotation errors', () => {
-  const cases: readonly (readonly [string, string, string])[] = [
-    [
-      'unterminated string',
-      'service BillingService {\n  rpc GetInvoice(A) returns (B) {\n    option (google.api.http) = {\n      get: "/v1/billing/invoices\n    };\n  }\n}\n',
-      'Unterminated string literal in protobuf source',
+  const declarations: Readonly<Record<string, readonly { id: string; name: string; parent: string | null; options: JsonValue; lines: LineSpan }[]>> = {
+    messages: [
+      { id: 'acme.billing.v1.Invoice', name: 'Invoice', parent: null, options: { 'acme.table': { name: 'invoices', shard: 4 } }, lines: { start: 16, end: 36 } },
+      { id: 'acme.billing.v1.Invoice.Line', name: 'Line', parent: 'acme.billing.v1.Invoice', options: {}, lines: { start: 27, end: 29 } },
     ],
+    fields: [
+      { id: 'acme.billing.v1.Invoice.id', name: 'id', parent: 'acme.billing.v1.Invoice', options: { 'validate.rules': { string: { uuid: true } }, deprecated: true }, lines: { start: 19, end: 19 } },
+      { id: 'acme.billing.v1.Invoice.labels', name: 'labels', parent: 'acme.billing.v1.Invoice', options: { 'acme.redact': true }, lines: { start: 20, end: 20 } },
+      { id: 'acme.billing.v1.Invoice.customer_id', name: 'customer_id', parent: 'acme.billing.v1.Invoice', options: { 'acme.ref': 'Customer' }, lines: { start: 24, end: 24 } },
+      { id: 'acme.billing.v1.Invoice.Line.amount', name: 'amount', parent: 'acme.billing.v1.Invoice.Line', options: { 'validate.rules': { int64: { gte: -5, lte: 1000 } } }, lines: { start: 28, end: 28 } },
+    ],
+    oneofs: [
+      { id: 'acme.billing.v1.Invoice.payer', name: 'payer', parent: 'acme.billing.v1.Invoice', options: { 'acme.required_oneof': true }, lines: { start: 22, end: 25 } },
+    ],
+    enums: [
+      { id: 'acme.billing.v1.Invoice.Status', name: 'Status', parent: 'acme.billing.v1.Invoice', options: { allow_alias: true }, lines: { start: 31, end: 35 } },
+    ],
+    enumValues: [
+      { id: 'acme.billing.v1.Invoice.Status.STATUS_UNSPECIFIED', name: 'STATUS_UNSPECIFIED', parent: 'acme.billing.v1.Invoice.Status', options: {}, lines: { start: 33, end: 33 } },
+      { id: 'acme.billing.v1.Invoice.Status.STATUS_PAID', name: 'STATUS_PAID', parent: 'acme.billing.v1.Invoice.Status', options: { 'acme.label': 'Paid' }, lines: { start: 34, end: 34 } },
+    ],
+    extensions: [
+      { id: 'acme.billing.v1.route', name: 'route', parent: null, options: { 'acme.internal': true }, lines: { start: 39, end: 39 } },
+    ],
+  };
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: '$.extensions[0]' }), 'everywhere.proto', PROTO_EVERYWHERE), [
+    { id: 'acme.billing.v1.route', source: 'Route route = 50001 [(acme.internal) = true];', lines: { start: 39, end: 39 }, data: protoRecord('acme.billing.v1.route', 'route', null, { 'acme.internal': true }) },
+  ]);
+  for (const [list, expected] of Object.entries(declarations)) {
+    const matches = await select(protobuf<JsonValue>({ path: `$.${list}[*]` }), 'everywhere.proto', PROTO_EVERYWHERE);
+    assert.deepEqual(matches.map(({ id, lines, data }) => ({ id, lines, data })), expected.map(({ id, name, parent, options, lines }) => ({ id, lines, data: protoRecord(id, name, parent, options) })), list);
+  }
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: "$.fields[0].options['validate.rules']" }), 'everywhere.proto', PROTO_EVERYWHERE), [
+    { id: 'acme.billing.v1.Invoice.id:/options/validate.rules', source: '(validate.rules).string.uuid = true', lines: { start: 19, end: 19 }, data: { string: { uuid: true } } },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: "$.fields[0].options['validate.rules'].string.uuid" }), 'everywhere.proto', PROTO_EVERYWHERE), [
+    { id: 'acme.billing.v1.Invoice.id:/options/validate.rules/string/uuid', source: 'true', lines: { start: 19, end: 19 }, data: true },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: '$.fields[0].options' }), 'everywhere.proto', PROTO_EVERYWHERE), [
+    { id: 'acme.billing.v1.Invoice.id:/options', source: '(validate.rules).string.uuid = true, deprecated = true', lines: { start: 19, end: 19 }, data: { 'validate.rules': { string: { uuid: true } }, deprecated: true } },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: "$.messages[0].options['acme.table']" }), 'everywhere.proto', PROTO_EVERYWHERE), [
+    { id: 'acme.billing.v1.Invoice:/options/acme.table', source: '{ name: "invoices" shard: 4 }', lines: { start: 17, end: 17 }, data: { name: 'invoices', shard: 4 } },
+  ]);
+});
+
+const PROTO_VALUES = `syntax = "proto2";
+
+package acme.values;
+
+message Holder {
+  option (acme.values) = {
+    text: "a" 'b' "\\x41\\u00e9"
+    count: -42
+    big: 9223372036854775807
+    hex: 0x1F
+    octal: 017
+    ratio: .5
+    tiny: -1e-5
+    flag: false
+    level: LEVEL_HIGH
+    limit: -inf
+    tags: ["x", "y"]
+    empty: []
+    item { id: 1 }
+    item: { id: 2 }
+    [acme.ext.note]: "n"
+    any { [type.googleapis.com/acme.Thing] { id: 3 } }
+  };
+  optional group Result = 1 [deprecated = true] {
+    optional string url = 2;
+  }
+}
+`;
+
+test('protobuf converts option values without a schema', async () => {
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: "$.messages[0].options['acme.values']" }), 'values.proto', PROTO_VALUES), [
+    { id: 'acme.values.Holder:/options/acme.values', source: '{\n    text: "a" \'b\' "\\x41\\u00e9"\n    count: -42\n    big: 9223372036854775807\n    hex: 0x1F\n    octal: 017\n    ratio: .5\n    tiny: -1e-5\n    flag: false\n    level: LEVEL_HIGH\n    limit: -inf\n    tags: ["x", "y"]\n    empty: []\n    item { id: 1 }\n    item: { id: 2 }\n    [acme.ext.note]: "n"\n    any { [type.googleapis.com/acme.Thing] { id: 3 } }\n  }', lines: { start: 6, end: 23 }, data: { text: 'abAé', count: -42, big: '9223372036854775807', hex: '0x1F', octal: '017', ratio: 0.5, tiny: -1e-5, flag: false, level: 'LEVEL_HIGH', limit: '-inf', tags: ['x', 'y'], empty: [], item: [{ id: 1 }, { id: 2 }], 'acme.ext.note': 'n', any: { 'type.googleapis.com/acme.Thing': { id: 3 } } } },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: "$.messages[0].options['acme.values'].item" }), 'values.proto', PROTO_VALUES), [
+    { id: 'acme.values.Holder:/options/acme.values/item', source: '{ id: 1 }\n    item: { id: 2 }', lines: { start: 19, end: 20 }, data: [{ id: 1 }, { id: 2 }] },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: "$.messages[0].options['acme.values'].empty" }), 'values.proto', PROTO_VALUES), [
+    { id: 'acme.values.Holder:/options/acme.values/empty', source: '[]', lines: { start: 18, end: 18 }, data: [] },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: "$.messages[0].options['acme.values'].tiny" }), 'values.proto', PROTO_VALUES), [
+    { id: 'acme.values.Holder:/options/acme.values/tiny', source: '-1e-5', lines: { start: 13, end: 13 }, data: -1e-5 },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: "$.messages[0].options['acme.values'].text" }), 'values.proto', PROTO_VALUES), [
+    { id: 'acme.values.Holder:/options/acme.values/text', source: '"a" \'b\' "\\x41\\u00e9"', lines: { start: 7, end: 7 }, data: 'abAé' },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: "$.messages[0].options['acme.values'].any['type.googleapis.com/acme.Thing'].id" }), 'values.proto', PROTO_VALUES), [
+    { id: 'acme.values.Holder:/options/acme.values/any/type.googleapis.com~1acme.Thing/id', source: '3', lines: { start: 22, end: 22 }, data: 3 },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: '$.messages[*]' }), 'values.proto', PROTO_VALUES), [
+    { id: 'acme.values.Holder', source: 'message Holder {\n  option (acme.values) = {\n    text: "a" \'b\' "\\x41\\u00e9"\n    count: -42\n    big: 9223372036854775807\n    hex: 0x1F\n    octal: 017\n    ratio: .5\n    tiny: -1e-5\n    flag: false\n    level: LEVEL_HIGH\n    limit: -inf\n    tags: ["x", "y"]\n    empty: []\n    item { id: 1 }\n    item: { id: 2 }\n    [acme.ext.note]: "n"\n    any { [type.googleapis.com/acme.Thing] { id: 3 } }\n  };\n  optional group Result = 1 [deprecated = true] {\n    optional string url = 2;\n  }\n}', lines: { start: 5, end: 27 }, data: protoRecord('acme.values.Holder', 'Holder', null, { 'acme.values': { text: 'abAé', count: -42, big: '9223372036854775807', hex: '0x1F', octal: '017', ratio: 0.5, tiny: -1e-5, flag: false, level: 'LEVEL_HIGH', limit: '-inf', tags: ['x', 'y'], empty: [], item: [{ id: 1 }, { id: 2 }], 'acme.ext.note': 'n', any: { 'type.googleapis.com/acme.Thing': { id: 3 } } } }) },
+    { id: 'acme.values.Holder.Result', source: 'optional group Result = 1 [deprecated = true] {\n    optional string url = 2;\n  }', lines: { start: 24, end: 26 }, data: protoRecord('acme.values.Holder.Result', 'Result', 'acme.values.Holder', {}) },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: '$.fields[*]' }), 'values.proto', PROTO_VALUES), [
+    { id: 'acme.values.Holder.result', source: 'optional group Result = 1 [deprecated = true] {\n    optional string url = 2;\n  }', lines: { start: 24, end: 26 }, data: protoRecord('acme.values.Holder.result', 'result', 'acme.values.Holder', { deprecated: true }) },
+    { id: 'acme.values.Holder.Result.url', source: 'optional string url = 2;', lines: { start: 25, end: 25 }, data: protoRecord('acme.values.Holder.Result.url', 'url', 'acme.values.Holder.Result', {}) },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: '$.fields[0].name' }), 'values.proto', PROTO_VALUES), [
+    { id: 'acme.values.Holder.result:/name', source: 'Result', lines: { start: 24, end: 24 }, data: 'result' },
+  ]);
+});
+
+const PROTO_HTTP = `syntax = "proto3";
+
+package acme.billing.v1;
+
+service BillingService {
+  rpc ListInvoices(ListInvoicesRequest) returns (ListInvoicesResponse) {
+    option (google.api.http) = {
+      get: "/v1/invoices"
+      additional_bindings { post: "/v1/invoices:search" body: "*" }
+      additional_bindings {
+        custom { kind: "HEAD" path: "/v1/invoices" }
+      }
+    };
+  }
+
+  rpc GetInvoice(GetInvoiceRequest) returns (Invoice) {
+    option (google.api.http).get = "/v1/invoices/{id}";
+    option (google.api.http).additional_bindings = { delete: "/v1/invoices/{id}" };
+  }
+}
+`;
+
+test('protobuf selects google.api.http through generic options', async () => {
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: "$.rpcs[*].options['google.api.http']" }), 'http.proto', PROTO_HTTP), [
+    { id: 'acme.billing.v1.BillingService.ListInvoices:/options/google.api.http', source: '{\n      get: "/v1/invoices"\n      additional_bindings { post: "/v1/invoices:search" body: "*" }\n      additional_bindings {\n        custom { kind: "HEAD" path: "/v1/invoices" }\n      }\n    }', lines: { start: 7, end: 13 }, data: { get: '/v1/invoices', additional_bindings: [{ post: '/v1/invoices:search', body: '*' }, { custom: { kind: 'HEAD', path: '/v1/invoices' } }] } },
+    { id: 'acme.billing.v1.BillingService.GetInvoice:/options/google.api.http', source: 'option (google.api.http).get = "/v1/invoices/{id}";\n    option (google.api.http).additional_bindings = { delete: "/v1/invoices/{id}" };', lines: { start: 17, end: 18 }, data: { get: '/v1/invoices/{id}', additional_bindings: { delete: '/v1/invoices/{id}' } } },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: "$.rpcs[*].options['google.api.http']..['get','put','post','delete','patch','path']" }), 'http.proto', PROTO_HTTP), [
+    { id: 'acme.billing.v1.BillingService.ListInvoices:/options/google.api.http/get', source: '"/v1/invoices"', lines: { start: 8, end: 8 }, data: '/v1/invoices' },
+    { id: 'acme.billing.v1.BillingService.ListInvoices:/options/google.api.http/additional_bindings/0/post', source: '"/v1/invoices:search"', lines: { start: 9, end: 9 }, data: '/v1/invoices:search' },
+    { id: 'acme.billing.v1.BillingService.ListInvoices:/options/google.api.http/additional_bindings/1/custom/path', source: '"/v1/invoices"', lines: { start: 11, end: 11 }, data: '/v1/invoices' },
+    { id: 'acme.billing.v1.BillingService.GetInvoice:/options/google.api.http/get', source: '"/v1/invoices/{id}"', lines: { start: 17, end: 17 }, data: '/v1/invoices/{id}' },
+    { id: 'acme.billing.v1.BillingService.GetInvoice:/options/google.api.http/additional_bindings/delete', source: '"/v1/invoices/{id}"', lines: { start: 18, end: 18 }, data: '/v1/invoices/{id}' },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: "$.rpcs[*].options['google.api.http']..custom.path" }), 'http.proto', PROTO_HTTP), [
+    { id: 'acme.billing.v1.BillingService.ListInvoices:/options/google.api.http/additional_bindings/1/custom/path', source: '"/v1/invoices"', lines: { start: 11, end: 11 }, data: '/v1/invoices' },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: "$.rpcs[0].options['google.api.http'].additional_bindings" }), 'http.proto', PROTO_HTTP), [
+    { id: 'acme.billing.v1.BillingService.ListInvoices:/options/google.api.http/additional_bindings', source: '{ post: "/v1/invoices:search" body: "*" }\n      additional_bindings {\n        custom { kind: "HEAD" path: "/v1/invoices" }\n      }', lines: { start: 9, end: 12 }, data: [{ post: '/v1/invoices:search', body: '*' }, { custom: { kind: 'HEAD', path: '/v1/invoices' } }] },
+  ]);
+});
+
+const PROTO_DOTTED_NAMES = `syntax = "proto3";
+
+option features.field_presence = EXPLICIT;
+option (acme.a).(acme.b).c = 1;
+option (acme.tag) = "x";
+option (acme.tag) = "y";
+`;
+
+test('protobuf merges dotted names and repeated statements', async () => {
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: '$.options' }), 'dotted.proto', PROTO_DOTTED_NAMES), [
+    { id: '/options', source: 'option features.field_presence = EXPLICIT;\noption (acme.a).(acme.b).c = 1;\noption (acme.tag) = "x";\noption (acme.tag) = "y";', lines: { start: 3, end: 6 }, data: { features: { field_presence: 'EXPLICIT' }, 'acme.a': { 'acme.b': { c: 1 } }, 'acme.tag': ['x', 'y'] } },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: "$.options['acme.tag']" }), 'dotted.proto', PROTO_DOTTED_NAMES), [
+    { id: '/options/acme.tag', source: '"x";\noption (acme.tag) = "y"', lines: { start: 5, end: 6 }, data: ['x', 'y'] },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: "$.options['acme.a']" }), 'dotted.proto', PROTO_DOTTED_NAMES), [
+    { id: '/options/acme.a', source: 'option (acme.a).(acme.b).c = 1;', lines: { start: 4, end: 4 }, data: { 'acme.b': { c: 1 } } },
+  ]);
+});
+
+test('protobuf selects HTTP verb and custom path leaves across single and repeated forms', async () => {
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: "$.rpcs[*].options['google.api.http']..['get','put','post','delete','patch','path']" }), 'http.proto', PROTO_HTTP), [
+    { id: 'acme.billing.v1.BillingService.ListInvoices:/options/google.api.http/get', source: '"/v1/invoices"', lines: { start: 8, end: 8 }, data: '/v1/invoices' },
+    { id: 'acme.billing.v1.BillingService.ListInvoices:/options/google.api.http/additional_bindings/0/post', source: '"/v1/invoices:search"', lines: { start: 9, end: 9 }, data: '/v1/invoices:search' },
+    { id: 'acme.billing.v1.BillingService.ListInvoices:/options/google.api.http/additional_bindings/1/custom/path', source: '"/v1/invoices"', lines: { start: 11, end: 11 }, data: '/v1/invoices' },
+    { id: 'acme.billing.v1.BillingService.GetInvoice:/options/google.api.http/get', source: '"/v1/invoices/{id}"', lines: { start: 17, end: 17 }, data: '/v1/invoices/{id}' },
+    { id: 'acme.billing.v1.BillingService.GetInvoice:/options/google.api.http/additional_bindings/delete', source: '"/v1/invoices/{id}"', lines: { start: 18, end: 18 }, data: '/v1/invoices/{id}' },
+  ]);
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: "$.rpcs[*].options['google.api.http']..custom.path" }), 'http.proto', PROTO_HTTP), [
+    { id: 'acme.billing.v1.BillingService.ListInvoices:/options/google.api.http/additional_bindings/1/custom/path', source: '"/v1/invoices"', lines: { start: 11, end: 11 }, data: '/v1/invoices' },
+  ]);
+});
+
+test('protobuf selects dotted repeated option paths with escaped ids', async () => {
+  assert.deepEqual(await select(protobuf<JsonValue>({ path: "$.options['acme.tag']" }), 'dotted.proto', PROTO_DOTTED_NAMES), [
+    { id: '/options/acme.tag', source: '"x";\noption (acme.tag) = "y"', lines: { start: 5, end: 6 }, data: ['x', 'y'] },
+  ]);
+});
+
+
+test('protobuf reports parser errors through selection', async () => {
+  const cases: readonly (readonly [string, string, string])[] = [
+    ['unterminated string', 'service BillingService {\n  rpc GetInvoice(A) returns (B) {\n    option (google.api.http) = {\n      get: "/v1/billing/invoices\n    };\n  }\n}\n', 'Unterminated string literal in protobuf source'],
     ['unterminated block comment', '/* comment\nservice S {\n', 'Unterminated block comment in protobuf source'],
     ['malformed package', 'package 42;\n', 'Malformed package declaration in protobuf source'],
-    [
-      'malformed rpc declaration',
-      'service S {\n  rpc (A) returns (B);\n}\n',
-      'Malformed rpc declaration in protobuf source',
-    ],
+    ['malformed rpc declaration', 'service S {\n  rpc (A) returns (B);\n}\n', 'Malformed rpc declaration in protobuf source'],
     ['malformed rpc signature', 'service S {\n  rpc A returns (B);\n}\n', 'Malformed rpc signature in protobuf source'],
     ['unterminated rpc body', 'service S {\n  rpc A(C) returns (D) {\n', 'Unterminated rpc body in protobuf source'],
     ['unterminated service body', 'service S {\n', 'Unterminated service body in protobuf source'],
-    [
-      'expected string literal',
-      'service S {\n  rpc A(C) returns (D) {\n    option (google.api.http) = {\n      get: 42\n    };\n  }\n}\n',
-      'Expected a string literal in google.api.http option',
-    ],
-    [
-      'unterminated http option',
-      'service S {\n  rpc A(C) returns (D) {\n    option (google.api.http) = {\n      get: "/x"\n',
-      'Unterminated google.api.http option in protobuf source',
-    ],
-    [
-      'unterminated additional bindings',
-      'service S {\n  rpc A(C) returns (D) {\n    option (google.api.http).additional_bindings = [ { get: "/x" }\n',
-      'Unterminated additional_bindings list in protobuf source',
-    ],
-    [
-      'unterminated custom binding',
-      'service S {\n  rpc A(C) returns (D) {\n    option (google.api.http).custom = { kind: "HEAD"\n',
-      'Unterminated custom http binding in protobuf source',
-    ],
+    ['malformed message', 'message {\n}\n', 'Malformed message declaration in protobuf source'],
+    ['unterminated message body', 'message M {\n  string a = 1;\n', 'Unterminated message body in protobuf source'],
+    ['malformed field', 'message M {\n  string name;\n}\n', 'Malformed field declaration in protobuf source'],
+    ['malformed enum value', 'enum E {\n  A;\n}\n', 'Malformed enum value declaration in protobuf source'],
+    ['unterminated option name', 'option (a.b', 'Unterminated option name in protobuf source'],
+    ['missing equals', 'option (a.b) 1;\n', 'Expected "=" after option name in protobuf source'],
+    ['missing value', 'option (a.b) = ;\n', 'Expected an option value in protobuf source'],
+    ['missing semicolon', 'option (a.b) = 1\nmessage M {}\n', 'Expected ";" after option in protobuf source'],
+    ['unterminated value', 'option (a.b) = { c: "x"\n', 'Unterminated option value in protobuf source'],
+    ['malformed value', 'option (a) = { 42 };\n', 'Malformed option value in protobuf source'],
+    ['unterminated inline options', 'message M {\n  string a = 1 [deprecated = true\n', 'Unterminated inline options in protobuf source'],
+    ['option conflict', 'option (a) = 1;\noption (a).b = 2;\n', 'Option "a.b" sets a field inside a non-message value'],
   ];
   for (const [label, source, message] of cases) {
-    assert.equal(caughtError(() => readRpcRecords(source)).message, message, label);
+    assert.equal(await selectionError(protobuf<JsonValue>(), 'x.proto', source), message, label);
   }
-});
-
-test('protobuf selector reports parser errors through selection', async () => {
-  const message = await selectionError(
-    protobuf<JsonValue>(),
-    'x.proto',
-    'service BillingService {\n  rpc (A) returns (B);\n}\n',
-  );
-  assert.equal(message, 'Malformed rpc declaration in protobuf source');
 });
 
 test('protobuf reports lines consistently for LF, CRLF, and lone-CR sources', async () => {
@@ -1291,15 +1068,8 @@ test('protobuf reports lines consistently for LF, CRLF, and lone-CR sources', as
       label,
     );
     assert.deepEqual(
-      await select(protobuf<JsonValue>({ path: '$.rpcs[*].http.bindings[*].url' }), 'x.proto', source),
-      [
-        {
-          id: 'acme.billing.v1.BillingService.GetInvoice:/http/bindings/0/url',
-          source: '"/v1/billing/invoices"',
-          lines: { start: 6, end: 6 },
-          data: '/v1/billing/invoices',
-        },
-      ],
+      await select(protobuf<JsonValue>({ path: "$.rpcs[*].options['google.api.http'].get" }), 'x.proto', source),
+      [{ id: 'acme.billing.v1.BillingService.GetInvoice:/options/google.api.http/get', source: '"/v1/billing/invoices"', lines: { start: 6, end: 6 }, data: '/v1/billing/invoices' }],
       label,
     );
   }
@@ -1310,7 +1080,7 @@ test('protobuf validates the path option eagerly and defaults to every RPC recor
   assert.throws(() => protobuf<JsonValue>({ path: 'rpcs' }), /\$/, 'unrooted path must require the $ root');
   assert.throws(() => protobuf<JsonValue>({ path: '$[?(@.id)]' }), /executable/i, 'executable path');
   assert.throws(() => protobuf<JsonValue>({ path: '$.@' }), /unknown value type/i, 'library-reported path');
-  for (const path of ['$.rpcs[*]', '$..rpcs', '$.rpcs[0]', '$.rpcs[*].http.bindings[*].url']) {
+  for (const path of ['$.rpcs[*]', '$..rpcs', '$.rpcs[0]', "$.rpcs[*].options['google.api.http']..['get','put','post','delete','patch']"]) {
     assert.doesNotThrow(() => protobuf<JsonValue>({ path }), `path ${path}`);
   }
   assert.deepEqual(

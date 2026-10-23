@@ -63,8 +63,8 @@ service BillingService {
     };
   }
 }`;
----
 
+---
 <section class="rule-examples page-shell" id="examples" aria-labelledby="rule-examples-title" data-rule-tabs>
   <header class="rule-examples-heading">
     <h2 id="rule-examples-title">Some ideas for you…</h2>
@@ -119,7 +119,7 @@ service BillingService {
   <article id="rule-panel-service" class="rule-example" aria-labelledby="service-example-title" data-rule-example="service" data-rule-panel>
     <div class="rule-example-copy">
       <h3 id="service-example-title">Keep the service prefix.</h3>
-      <p>This rule selects HTTP binding URLs in internal Protobuf files. Each URL must match <code>/service/vN/plural_resource</code>, with optional subpaths.</p>
+      <p>This rule selects HTTP option values in internal Protobuf files. Each URL must match <code>/service/vN/plural_resource</code>, with optional subpaths.</p>
       <p>The selected URL, <code>/v1/invoices</code>, is missing <code>/service</code>.</p>
       <Violation
         rule="service-proto"

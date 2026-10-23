@@ -60,24 +60,84 @@ The parser supports quoted values, multiline records, BOM, and line-ending varia
 ## Protobuf
 
 ```ts
-scope = scopes.protobuf({ path: '$.rpcs[*].http.bindings[*].url' });
+scope = scopes.protobuf({ path: "$.rpcs[*].options['corp.http.route'].*" });
 ```
 
-Signature: `scopes.protobuf<T>({ path?: string }?)`.
+Signature: `scopes.protobuf<T>({ path?: string }?)`. The default path is `$.rpcs[*]`.
 
-The default path is `$.rpcs[*]`. An RPC record has this shape:
+The selector reads one file. It does not resolve imports or check types.
+
+The document contains file `options` and these declaration lists:
 
 ```ts
-{
-  id,
-  package,
-  service,
-  name,
-  http: { bindings: [{ method, url }] }
+type ProtoDeclaration = { id: string; name: string; parent: string | null; options: object };
+type ProtoDocument = {
+  options: object;
+  services: ProtoDeclaration[]; rpcs: ProtoDeclaration[]; messages: ProtoDeclaration[];
+  fields: ProtoDeclaration[]; oneofs: ProtoDeclaration[]; enums: ProtoDeclaration[];
+  enumValues: ProtoDeclaration[]; extensions: ProtoDeclaration[];
+};
+```
+
+Each declaration has `{ id, name, parent, options }`. `id` is fully qualified, `parent` is the enclosing declaration ID or `null`, and each list follows source order.
+
+### Options
+
+Options include built-in and custom values. Custom option names omit parentheses, so use bracket notation for dotted names:
+
+```proto
+rpc Close(Request) returns (Response) {
+  option (corp.http.route) = {post: "/v3/accounts/:id/close"};
 }
 ```
 
-Paths can select RPC records or their `http`, `bindings`, `method`, and `url` subtrees. Selecting an existing node outside these subtrees fails. Paths with no matches return no scopes. An RPC-free file does not prove that the path selects a supported subtree.
+Select the `post` value with `$.rpcs[*].options['corp.http.route'].post`.
+
+| Protobuf value | Data |
+| --- | --- |
+| `"a" "b"` | Concatenated string, `"ab"` |
+| `true` | Boolean |
+| `42`, `-1.5`, `1e3` | Number |
+| `0x1F`, `017`, `9223372036854775807`, `inf` | Source text string |
+| `ENUM_VALUE` | String |
+| `{ ... }` | Object |
+| `[ ... ]` | Array |
+
+A field that occurs more than once becomes an array in source order; a single occurrence stays a plain value. Use `..` to reach both forms. Dotted names build nested objects. Extension and `Any` keys omit their brackets. JSONPath unions return matches in union order.
+
+### Common paths
+
+| Data | Path |
+| --- | --- |
+| HTTP URLs | `$.rpcs[*].options['google.api.http']..['get','put','post','delete','patch']` |
+| Custom HTTP path | `$.rpcs[*].options['google.api.http']..custom.path` |
+| Field validation | `$.fields[*].options['validate.rules']` |
+| Deprecated RPCs | `$.rpcs[*].options.deprecated` |
+| File Go package | `$.options.go_package` |
+
+### IDs and source lines
+
+Declaration IDs use these rules:
+
+- A service is `Service`; an RPC is `Service.Rpc`.
+- A top-level message or enum is `Name`; a nested one is `<enclosing message>.Name`.
+- A field or oneof is `<message>.name`. Oneof fields use the message as their parent.
+- An enum value is `<enum>.VALUE`.
+- An extension is `<enclosing message>.name`, or `name` at file level.
+- A group creates a message named as written and a lowercase field with the same parent.
+- The package prefixes every ID, wherever the package statement appears.
+
+Selected declarations use their `id`; a nested node uses `<id>:/<pointer suffix>`. Other nodes use their JSONPath pointer, and the root ID is `$`.
+
+Source spans follow these rules:
+
+- The root spans the whole file. A declaration starts at its first token and ends at `;` or `}`; an RPC includes a semicolon directly after its closing brace. A group message and field share the group statement span.
+- A declaration name spans its name token. A group field's `name` span uses the written group name, though its data name is lowercase.
+- An `options` span covers all its entries. A standalone entry runs from `option` through `;`; an inline entry runs from its first name through its value.
+- A scalar spans its tokens, including a sign and all adjacent string tokens. A message node spans its literal delimiters and entries that touch it. Repeated values span their occurrence value spans; list occurrences include their brackets.
+- A node without its own span uses the nearest ancestor span.
+
+Malformed syntax fails selection with an error.
 
 ## Code syntax with ast-grep
 

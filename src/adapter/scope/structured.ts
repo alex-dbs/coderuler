@@ -55,10 +55,14 @@ export function query(data: JsonValue, path: string): readonly QueryMatch[] {
   });
 }
 
+export function pointerSegment(key: string): string {
+  return key.replaceAll('~', '~0').replaceAll('/', '~1');
+}
+
 function pointerOf(path: readonly (string | number)[]): string {
   let pointer = '';
   for (let index = 1; index < path.length; index += 1) {
-    pointer += `/${String(path[index]).replaceAll('~', '~0').replaceAll('/', '~1')}`;
+    pointer += `/${pointerSegment(String(path[index]))}`;
   }
   return pointer;
 }
