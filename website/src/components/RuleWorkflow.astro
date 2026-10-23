@@ -52,7 +52,7 @@ const checks = [
       `  files = ['**/*.proto'];
   exclude = ['vendor/**'];`,
       `  scope = scopes.protobuf({
-    path: '$.rpcs[*].http.bindings[*].url',
+    path: "$.rpcs[*].options['google.api.http']..['get','put','post','delete','patch']",
   });`,
       `  filter = (subject: ScopeSubject) =>
     !subject.filepath.startsWith('proto/public/');`,

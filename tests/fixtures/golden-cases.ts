@@ -18,15 +18,15 @@ export const GOLDEN_CASES: readonly GoldenCase[] = [
     status: "pass",
     evaluations: [
       {
-        subject: { kind: 'scope', filepath: "proto/billing/v1/invoice.proto", id: "acme.billing.v1.BillingService.GetInvoice:/http/bindings/0/url", source: "\"/v1/billing/invoices/{invoice_id}\"", data: "/v1/billing/invoices/{invoice_id}", lines: { start: 8, end: 8 } },
+        subject: { kind: 'scope', filepath: "proto/billing/v1/invoice.proto", id: "acme.billing.v1.BillingService.GetInvoice:/options/google.api.http/get", source: "\"/v1/billing/invoices/{invoice_id}\"", data: "/v1/billing/invoices/{invoice_id}", lines: { start: 8, end: 8 } },
         result: { status: 'pass' },
       },
       {
-        subject: { kind: 'scope', filepath: "proto/billing/v1/invoice.proto", id: "acme.billing.v1.BillingService.CreateInvoice:/http/bindings/0/url", source: "\"/v1/billing/invoices\"", data: "/v1/billing/invoices", lines: { start: 16, end: 16 } },
+        subject: { kind: 'scope', filepath: "proto/billing/v1/invoice.proto", id: "acme.billing.v1.BillingService.CreateInvoice:/options/google.api.http/post", source: "\"/v1/billing/invoices\"", data: "/v1/billing/invoices", lines: { start: 16, end: 16 } },
         result: { status: 'pass' },
       },
       {
-        subject: { kind: 'scope', filepath: "proto/billing/v1/invoice.proto", id: "acme.billing.v1.BillingService.CreateInvoice:/http/bindings/1/url", source: "\"/v1/billing/invoices/{invoice_id}/items\"", data: "/v1/billing/invoices/{invoice_id}/items", lines: { start: 18, end: 18 } },
+        subject: { kind: 'scope', filepath: "proto/billing/v1/invoice.proto", id: "acme.billing.v1.BillingService.CreateInvoice:/options/google.api.http/additional_bindings/get", source: "\"/v1/billing/invoices/{invoice_id}/items\"", data: "/v1/billing/invoices/{invoice_id}/items", lines: { start: 18, end: 18 } },
         result: { status: 'pass' },
       },
     ],
@@ -37,7 +37,7 @@ export const GOLDEN_CASES: readonly GoldenCase[] = [
     status: "pass",
     evaluations: [
       {
-        subject: { kind: 'scope', filepath: "proto/billing/v1/invoice.proto", id: "acme.billing.v1.BillingService.GetInvoice:/http/bindings/0/url", source: "\"\"", data: "", lines: { start: 8, end: 8 } },
+        subject: { kind: 'scope', filepath: "proto/billing/v1/invoice.proto", id: "acme.billing.v1.BillingService.GetInvoice:/options/google.api.http/get", source: "\"\"", data: "", lines: { start: 8, end: 8 } },
         result: { status: 'pass' },
       },
     ],
@@ -56,7 +56,7 @@ export const GOLDEN_CASES: readonly GoldenCase[] = [
     status: "pass",
     evaluations: [
       {
-        subject: { kind: 'scope', filepath: "proto/billing/v1/invoice.proto", id: "acme.billing.v1.BillingService.GetInvoice:/http/bindings/0/url", source: "\"/v1/billing/invoices\"", data: "/v1/billing/invoices", lines: { start: 7, end: 7 } },
+        subject: { kind: 'scope', filepath: "proto/billing/v1/invoice.proto", id: "acme.billing.v1.BillingService.GetInvoice:/options/google.api.http/get", source: "\"/v1/billing/invoices\"", data: "/v1/billing/invoices", lines: { start: 7, end: 7 } },
         result: { status: 'pass' },
       },
     ],
@@ -67,7 +67,7 @@ export const GOLDEN_CASES: readonly GoldenCase[] = [
     status: "pass",
     evaluations: [
       {
-        subject: { kind: 'scope', filepath: "proto/billing/v1/invoice.proto", id: "acme.billing.v1.BillingService.GetInvoice:/http/bindings/0/url", source: "\"/v1/billing/invoices\"", data: "/v1/billing/invoices", lines: { start: 10, end: 10 } },
+        subject: { kind: 'scope', filepath: "proto/billing/v1/invoice.proto", id: "acme.billing.v1.BillingService.GetInvoice:/options/google.api.http/custom/path", source: "\"/v1/billing/invoices\"", data: "/v1/billing/invoices", lines: { start: 10, end: 10 } },
         result: { status: 'pass' },
       },
     ],
@@ -86,11 +86,11 @@ export const GOLDEN_CASES: readonly GoldenCase[] = [
     status: "pass",
     evaluations: [
       {
-        subject: { kind: 'scope', filepath: "proto/billing/v1/invoice.proto", id: "acme.billing.v1.BillingService.GetInvoice", source: "rpc GetInvoice(GetInvoiceRequest) returns (GetInvoiceResponse) {\n    option (google.api.http) = {\n      get: \"/v1/billing/invoices/{invoice_id}\"\n    };\n  }", data: {"id":"acme.billing.v1.BillingService.GetInvoice","package":"acme.billing.v1","service":"BillingService","name":"GetInvoice","http":{"bindings":[{"method":"GET","url":"/v1/billing/invoices/{invoice_id}"}]}}, lines: { start: 6, end: 10 } },
+        subject: { kind: 'scope', filepath: "proto/billing/v1/invoice.proto", id: "acme.billing.v1.BillingService.GetInvoice", source: "rpc GetInvoice(GetInvoiceRequest) returns (GetInvoiceResponse) {\n    option (google.api.http) = {\n      get: \"/v1/billing/invoices/{invoice_id}\"\n    };\n  }", data: {"id":"acme.billing.v1.BillingService.GetInvoice","name":"GetInvoice","parent":"acme.billing.v1.BillingService","options":{"google.api.http":{"get":"/v1/billing/invoices/{invoice_id}"}}}, lines: { start: 6, end: 10 } },
         result: { status: 'pass' },
       },
       {
-        subject: { kind: 'scope', filepath: "proto/billing/v1/invoice.proto", id: "acme.billing.v1.BillingService.CreateInvoice", source: "rpc CreateInvoice(CreateInvoiceRequest) returns (CreateInvoiceResponse) {\n    option (google.api.http) = {\n      post: \"/v1/billing/invoices\"\n      additional_bindings {\n        get: \"/v1/billing/invoices/{invoice_id}/items\"\n      }\n    };\n  }", data: {"id":"acme.billing.v1.BillingService.CreateInvoice","package":"acme.billing.v1","service":"BillingService","name":"CreateInvoice","http":{"bindings":[{"method":"POST","url":"/v1/billing/invoices"},{"method":"GET","url":"/v1/billing/invoices/{invoice_id}/items"}]}}, lines: { start: 14, end: 21 } },
+        subject: { kind: 'scope', filepath: "proto/billing/v1/invoice.proto", id: "acme.billing.v1.BillingService.CreateInvoice", source: "rpc CreateInvoice(CreateInvoiceRequest) returns (CreateInvoiceResponse) {\n    option (google.api.http) = {\n      post: \"/v1/billing/invoices\"\n      additional_bindings {\n        get: \"/v1/billing/invoices/{invoice_id}/items\"\n      }\n    };\n  }", data: {"id":"acme.billing.v1.BillingService.CreateInvoice","name":"CreateInvoice","parent":"acme.billing.v1.BillingService","options":{"google.api.http":{"post":"/v1/billing/invoices","additional_bindings":{"get":"/v1/billing/invoices/{invoice_id}/items"}}}}, lines: { start: 14, end: 21 } },
         result: { status: 'pass' },
       },
     ],
@@ -109,6 +109,21 @@ export const GOLDEN_CASES: readonly GoldenCase[] = [
     status: "skipped",
     reason: 'no matching subjects',
     evaluations: [
+    ],
+  },
+  {
+    group: "corp-http-route",
+    name: "01-route-paths",
+    status: "pass",
+    evaluations: [
+      {
+        subject: { kind: 'scope', filepath: "proto/organization_deactivations/firstparty/v3/deactivation_voucher_service.proto", id: "corp.account_management.api.organization_deactivations.firstparty.v3.DeactivationVoucherService.GetDeactivationVoucherEligibility:/options/corp.http.route/get", source: "\"/v3/organizations/:id/deactivation_voucher_eligibility\"", data: "/v3/organizations/:id/deactivation_voucher_eligibility", lines: { start: 16, end: 16 } },
+        result: { status: 'pass' },
+      },
+      {
+        subject: { kind: 'scope', filepath: "proto/organization_deactivations/firstparty/v3/deactivation_voucher_service.proto", id: "corp.account_management.api.organization_deactivations.firstparty.v3.DeactivationVoucherService.DeactivationVoucherRedeem:/options/corp.http.route/post", source: "\"/v3/organizations/:id/deactivation_voucher_redeem\"", data: "/v3/organizations/:id/deactivation_voucher_redeem", lines: { start: 23, end: 23 } },
+        result: { status: 'pass' },
+      },
     ],
   },
   {

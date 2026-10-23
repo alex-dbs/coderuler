@@ -3,7 +3,7 @@ import { Rule, regex, scopes, test } from '@alex-dbs/rulekeeper';
 export default class PublicProto extends Rule {
   files = ['tests/manual/proto/public/*.proto'];
 
-  scope = scopes.protobuf({ path: '$.rpcs[*].http.bindings[*].url' });
+  scope = scopes.protobuf({ path: "$.rpcs[*].options['google.api.http']..['get','put','post','delete','patch','path']" });
 
   check = regex({
     pattern: /^\/v\d+\/[a-z][a-z0-9_]*s(?:\/.*)?$/,
@@ -45,5 +45,13 @@ export const tests = [
   ),
   test('a later invalid additional binding violates after valid bindings').withFiles({
     'tests/manual/proto/public/service.proto': proto('/v1/invoices', '/v2/accounts/{account_id}', '/public/v1/invoices'),
-  }).violates()
+  }).violates(),
+  test('a custom binding path is checked').withFiles({
+    'tests/manual/proto/public/service.proto': `syntax = "proto3";
+service BillingService {
+  rpc ListInvoices(Request) returns (Response) {
+    option (google.api.http) = { custom { kind: "HEAD" path: "/public/v1/invoices" } };
+  }
+}`,
+  }).violates(),
 ] as const;

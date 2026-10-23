@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package corp.account_management.api.organization_deactivations.firstparty.v3;
+
+import "corp/api/annotations.proto";
+import "corp/organization_deactivations/firstparty/v3/deactivation_voucher.proto";
+import "corp/common/v1/empty.proto";
+
+// Service for managing deactivation vouchers.
+// It exposes eligibility and redemption endpoints.
+service DeactivationVoucherService {
+  // Checks whether an organization can redeem a deactivation voucher.
+  // Returns the eligibility result and any blocking reasons.
+  // This endpoint reports the current eligibility state.
+  rpc GetDeactivationVoucherEligibility(GetDeactivationVoucherEligibilityRequest) returns (GetDeactivationVoucherEligibilityResponse) {
+    option (corp.http.route) = {get: "/v3/organizations/:id/deactivation_voucher_eligibility"};
+  }
+
+  // Redeems the deactivation voucher for an organization.
+  // The operation starts the deactivation flow.
+  // The response is empty when redemption succeeds.
+  rpc DeactivationVoucherRedeem(DeactivationVoucherRedeemRequest) returns (google.protobuf.Empty) {
+    option (corp.http.route) = {post: "/v3/organizations/:id/deactivation_voucher_redeem"};
+  }
+}

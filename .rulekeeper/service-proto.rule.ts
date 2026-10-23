@@ -3,7 +3,7 @@ import { Rule, regex, scopes, test } from '@alex-dbs/rulekeeper';
 export default class ServiceProto extends Rule {
   files = ['tests/manual/proto/internal/*.proto'];
 
-  scope = scopes.protobuf({ path: '$.rpcs[*].http.bindings[*].url' });
+  scope = scopes.protobuf({ path: "$.rpcs[*].options['google.api.http']..['get','put','post','delete','patch','path']" });
 
   check = regex({
     pattern: /^\/service\/v\d+\/[a-z][a-z0-9_]*s(?:\/.*)?$/,
@@ -53,4 +53,12 @@ export const tests = [
       '/v1/invoices',
     ),
   }).violates(),
+  test('a custom binding path is checked').withFiles({
+    'tests/manual/proto/internal/service.proto': `syntax = "proto3";
+service BillingService {
+  rpc ListInvoices(Request) returns (Response) {
+    option (google.api.http) = { custom { kind: "GET" path: "/service/v1/invoices" } };
+  }
+}`,
+  }).passes(),
 ] as const;

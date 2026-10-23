@@ -292,7 +292,7 @@ function nonEmpty(value: JsonValue | undefined, ...segments: string[]): boolean 
 class BillingUrlLeavesGoldenRule extends Rule {
   files = ['proto/billing/**/*.proto'];
   exclude = ['proto/billing/generated/**'];
-  scope = scopes.protobuf({ path: '$.rpcs[*].http.bindings[*].url' });
+  scope = scopes.protobuf({ path: "$.rpcs[*].options['google.api.http']..['get','put','post','delete','patch','path']" });
 
   check = (): CheckResult => pass();
 }
@@ -303,8 +303,15 @@ class BillingRpcsGoldenRule extends Rule {
   scope = scopes.protobuf({ path: '$.rpcs[*]' });
 
   filter(subject: ScopeSubject<JsonValue>): boolean {
-    return nonEmpty(subject.data, 'http', 'bindings');
+    return nonEmpty(subject.data, 'options', 'google.api.http');
   }
+
+  check = (): CheckResult => pass();
+}
+
+class CorpRouteGoldenRule extends Rule {
+  files = ['proto/**/*.proto'];
+  scope = scopes.protobuf({ path: "$.rpcs[*].options['corp.http.route'].*" });
 
   check = (): CheckResult => pass();
 }
@@ -343,6 +350,7 @@ class GoAppendSliceGoldenRule extends Rule {
 const GOLDEN_RULE_FACTORIES: Readonly<Record<string, () => Rule>> = {
   'billing-http-url-leaves': () => new BillingUrlLeavesGoldenRule(),
   'billing-http-url': () => new BillingRpcsGoldenRule(),
+  'corp-http-route': () => new CorpRouteGoldenRule(),
   'memory-ratio': () => new MemoryContainersGoldenRule(),
   'go-slice-append': () => new GoAppendSliceGoldenRule(),
 };

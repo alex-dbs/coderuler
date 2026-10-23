@@ -92,14 +92,14 @@ export const tests = [
 
 ### Regular-expression rule
 
-Use a regular expression for a pattern with a clear pass or fail condition. This rule selects HTTP binding URLs from protobuf files and requires versioned lowercase plural paths, such as `/v1/invoices`.
+Use a regular expression for a pattern with a clear pass or fail condition. This rule selects `google.api.http` URLs from protobuf files and requires versioned lowercase plural paths, such as `/v1/invoices`.
 
 ```ts
 import { Rule, regex, scopes } from '@alex-dbs/rulekeeper';
 
 export default class PublicApiPaths extends Rule {
   files = ['api/**/*.proto'];
-  scope = scopes.protobuf({ path: '$.rpcs[*].http.bindings[*].url' });
+  scope = scopes.protobuf({ path: "$.rpcs[*].options['google.api.http']..['get','put','post','delete','patch','path']" });
   check = regex({
     pattern: /^\/v\d+\/[a-z][a-z0-9_]*s(?:\/.*)?$/,
     violationMessage: 'Use a versioned lowercase plural path.',

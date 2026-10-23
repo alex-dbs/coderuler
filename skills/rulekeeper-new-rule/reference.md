@@ -40,10 +40,10 @@ Good: explain an out-of-domain scope with a filter reason. Bad: return `pass()` 
 | `scopes.yaml<T>({ path?, key? }?)`                               | Same options/default as JSON. Selects every nonempty document in order; aliases/merge keys resolve with a bounded alias count. ID is `<doc-index>:<pointer-or-key>`. Empty/comment-only documents are omitted without renumbering.                                                                                                                                    |
 | `scopes.csv({ headers?, delimiter?, key? }?)`                    | `headers: boolean = true`, `delimiter: string = ','`, `key?: string`. Header mode yields string records; otherwise string arrays. IDs are `row:<n>` (1-based data record) or the nonblank, unique key-column value. `key` requires headers and an existing column. Quoting, multiline records, BOM, and line-ending variants are supported; record widths are strict. |
 | `scopes.astGrep({ language, rule, constraints?, utils?, tsx? })` | Required language string and native ast-grep query; optional metavariable constraints and reusable query utilities. Returns source/captures/line spans, not parsed `data`; queries validate at factory construction.                                                                                                                                                  |
-| `scopes.protobuf<T>({ path? }?)`                                 | String `path` defaults to `$.rpcs[*]`. RPC data is `{ id, package, service, name, http: { bindings: [{ method, url }] } }`; paths may instead select its HTTP subtrees.                                                                                                                                                                                               |
+| `scopes.protobuf<T>({ path? }?)`                                 | String `path` defaults to `$.rpcs[*]`. Reads declarations and their options from one file; see [Protobuf data](#protobuf-data).                                                                                                                                                                                                                                         |
 
 
-JSON/YAML `path` addresses the document; `key` is a JSONPath evaluated against each selected value and must produce exactly one string or finite number. All structured paths are nonempty `$`-rooted JSONPath; executable expressions are rejected and evaluation errors propagate. Protobuf paths may select RPC records or their `http`/`bindings`/`method`/`url` subtrees only; forbidden selections error even without RPCs.
+JSON/YAML `path` addresses the document; `key` is a JSONPath evaluated against each selected value and must produce exactly one string or finite number. All structured paths are nonempty `$`-rooted JSONPath; executable expressions are rejected and evaluation errors propagate. Protobuf paths may select any node of the protobuf document.
 
 Omitted/`undefined` options retain defaults; explicit `null` is invalid for structured paths and CSV headers/delimiters. A CSV delimiter is one Unicode code point other than CR, LF, or a quote; CSV scopes preserve exact record source slices with multibyte delimiters too.
 
@@ -86,6 +86,86 @@ const assertions = scopes.astGrep({
 ```
 
 `tsx: { rule, constraints?, utils? }` is valid only with TypeScript selection and replaces the **complete** query; repeat any needed constraints/utilities. Captures follow the selected query: metavariables provide strings or string arrays, and supported named declarations/Go receivers provide identity captures. Good: query syntax with AST structure. Bad: infer code semantics from line-oriented regular expressions or assume `tsx` merges options.
+
+### Protobuf data
+
+`scopes.protobuf` parses one file without resolving imports or checking types. Its document has this shape:
+
+```ts
+type ProtoDeclaration = {
+  readonly id: string;
+  readonly name: string;
+  readonly parent: string | null;
+  readonly options: { readonly [key: string]: JsonValue };
+};
+
+type ProtoDocument = {
+  readonly options: { readonly [key: string]: JsonValue };
+  readonly services: readonly ProtoDeclaration[];
+  readonly rpcs: readonly ProtoDeclaration[];
+  readonly messages: readonly ProtoDeclaration[];
+  readonly fields: readonly ProtoDeclaration[];
+  readonly oneofs: readonly ProtoDeclaration[];
+  readonly enums: readonly ProtoDeclaration[];
+  readonly enumValues: readonly ProtoDeclaration[];
+  readonly extensions: readonly ProtoDeclaration[];
+};
+```
+
+Each declaration has a fully qualified `id`, its source `name`, its enclosing declaration ID as `parent` (or `null` at file level), and an `options` object. Each list follows source order.
+
+IDs follow these rules:
+
+- Services use `Service`; RPCs use `Service.Rpc`.
+- Top-level messages and enums use `Name`; nested messages and enums use `<enclosing message>.Name`.
+- Fields and oneofs use `<message>.name`. A oneof member field has the message as its parent.
+- Enum values use `<enum>.VALUE`.
+- Extensions use `<enclosing message>.name`, or `name` at file level.
+- A group creates a message with its written name and a lowercase field in the same scope. Fields in its body use the group message as parent.
+- The package prefixes all IDs, regardless of where its statement appears.
+
+Options include built-in and custom options. Custom names omit parentheses: `(corp.http.route)` becomes the key `corp.http.route`. Use bracket notation for dotted names, such as `$.rpcs[*].options['corp.http.route']`. Dotted assignments create nested objects. Extension keys such as `[acme.ext.note]` and `Any` keys such as `[type.googleapis.com/acme.Thing]` lose their brackets.
+
+Adjacent string literals concatenate. Booleans stay booleans. Safe integers and finite decimal or exponent numbers become numbers; other number spellings, including hex, octal, suffixed, unsafe, and nonfinite values, remain source-text strings. Enum names become strings. Message literals become objects and lists become arrays. A key with multiple occurrences or any list occurrence becomes an array in source order; one list occurrence contributes its elements, including an empty list. A single non-list occurrence remains a plain value. Dotted paths cannot place a field inside a scalar or repeated value. Use JSONPath `..` to reach fields whether their containing option is a single object or an array. JSONPath unions return matches in union order.
+
+Common paths:
+
+| Data | Path |
+| --- | --- |
+| HTTP URLs | `$.rpcs[*].options['google.api.http']..['get','put','post','delete','patch']` |
+| Custom HTTP path | `$.rpcs[*].options['google.api.http']..custom.path` |
+| Field validation | `$.fields[*].options['validate.rules']` |
+| Deprecated RPCs | `$.rpcs[*].options.deprecated` |
+| File Go package | `$.options.go_package` |
+
+IDs select declarations directly; selecting a nested node adds `:/<pointer suffix>` to its declaration ID. Other nodes use their JSONPath pointer as the ID, and the root ID is `$`. Source spans cover the whole file at the root; declarations run from their first token through `;` or `}`, with RPC semicolons included. Name spans cover the name token. Option spans cover their entries; scalar spans cover their tokens, message and list spans include their delimiters, and combined or repeated values span all contributing entries. A node without its own span uses the nearest ancestor span. Line spans are 1-based and inclusive. Malformed syntax fails selection with an error.
+
+Use a protobuf option to enforce a route version:
+
+```ts
+import { Rule, regex, scopes, test } from '@alex-dbs/rulekeeper';
+
+export default class ProtoRouteVersion extends Rule {
+  files = ['proto/**/*.proto'];
+  scope = scopes.protobuf({ path: "$.rpcs[*].options['corp.http.route'].*" });
+  check = regex({ pattern: /^\/v\d+\//, violationMessage: 'Start the route with /v<N>/' });
+}
+
+const service = (route: string) => `syntax = "proto3";
+package acme.v3;
+service Accounts {
+  rpc Close(Request) returns (Response) {
+    option (corp.http.route) = {post: "${route}"};
+  }
+}`;
+
+export const tests = [
+  test('a versioned route passes').withFiles({ 'proto/accounts.proto': service('/v3/accounts/:id/close') }).passes(),
+  test('an unversioned route violates').withFiles({ 'proto/accounts.proto': service('/accounts/:id/close') }).violates(),
+];
+```
+
+The rule name is `proto-route-version`, saved as `.rulekeeper/proto-route-version.rule.ts`.
 
 ## Custom scope, selection, and filters
 
