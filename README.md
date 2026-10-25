@@ -207,7 +207,7 @@ Before you contribute, install dependencies and run the project checks from the 
 
 ```sh
 npm ci
-NODE_COMPILE_CACHE="${TMPDIR:-/tmp}/rulekeeper-node-compile-cache" npm test
+npm test
 node dist/cli.js deps sync
 npm run typecheck
 ```
