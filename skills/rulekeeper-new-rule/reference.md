@@ -12,6 +12,7 @@ Default-export a constructible class extending `Rule<T>` (`T = JsonValue`). Extr
 | `enabled: boolean`                                                                      | `true`     | `false` skips with reason `disabled`; structural validation still runs.                                      |
 | `files: readonly string[]`                                                              | `['**/*']` | Nonempty root-relative glob list.                                                                            |
 | `exclude: readonly string[]`                                                            | `[]`       | Root-relative globs; exclusion wins.                                                                         |
+| `tags?: readonly string[]`                                                              | Absent     | Labels for `check --tags` and `--exclude-tags`.                                                              |
 | `scope?: ScopeSelector<T>`                                                              | Absent     | One whole-file scope per eligible file unless supplied.                                                      |
 | `settings: RuleSettings` | `{}` | Optional backend, model, threshold, and input/output USD-per-million token prices; see AI below. |
 | `group: Grouping`                                                                       | `'scope'`  | Groups surviving scopes before evaluation.                                                                   |
@@ -22,9 +23,9 @@ Default-export a constructible class extending `Rule<T>` (`T = JsonValue`). Extr
 | `check: Evaluator<T>`                                                                   | Required   | Function-valued property, such as `check = regex(...)` or `check: Evaluator<T> = ...`, rather than a method. |
 
 
-Execution: validate all rules → enabled → when → select → validate subjects → filter → group → check → report. `Awaitable<T>` means `T | Promise<T>`. `files`/`exclude` must be dense arrays of nonempty strings, including on disabled rules.
+Execution: load and validate all rules → apply `check` tag filters → enabled → `when` → select → validate subjects → filter → group → check → report. `Awaitable<T>` means `T | Promise<T>`.
 
-`PredicateResult = boolean | { readonly applies: boolean; readonly reason?: string }`. Return `false` or `{ applies: false, reason }` only for inapplicable input; it is a skip, not a pass. Invalid returns and thrown errors are runtime errors. Put required-data validation and applicability in filters; let checks decide policy on those established preconditions. Generic selector types describe expected data; they do not validate the parsed shape.
+`files` and `exclude` must be dense arrays of nonempty strings, including on disabled rules. `tags`, when present, must be dense arrays of nonempty strings.
 
 Good: explain an out-of-domain scope with a filter reason. Bad: return `pass()` from a check because required data is missing, or filter out a genuine violation. Keep instance/module state independent of evaluation ordering: checks can run concurrently, and test workers reuse imported modules.
 

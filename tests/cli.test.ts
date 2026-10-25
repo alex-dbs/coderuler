@@ -461,6 +461,98 @@ test('check reports a passing rule in the complete JSON envelope with --output-a
   assert.deepEqual(report.evaluations.map(evaluation => evaluation.result.status), ['pass']);
 });
 
+test('check filters rules by tags', async () => {
+  const target = sandbox.isolated('check-tags');
+  writeFiles(target, { 'src/a.txt': 'alpha' });
+  const definitions: readonly (readonly [string, readonly string[] | undefined, string])[] = [
+    ['a-go', ['go'], 'pass()'],
+    ['b-go-security', ['go', 'security'], "violation('tagged violation')"],
+    ['c-security', ['security'], 'pass()'],
+    ['d-untagged', undefined, 'pass()'],
+    ['e-empty', [], 'pass()'],
+  ];
+  for (const [name, tags, result] of definitions) {
+    writeRule(target, name, `import { Rule, pass, violation } from '@alex-dbs/rulekeeper';
+export default class extends Rule {
+  ${tags === undefined ? '' : `tags = ${JSON.stringify(tags)};`}
+  files = ['src/*.txt'];
+  check = () => ${result};
+}
+`);
+  }
+
+  const cases = [
+    {
+      name: 'default',
+      args: [],
+      names: ['a-go', 'b-go-security', 'c-security', 'd-untagged', 'e-empty'],
+      status: 1,
+    },
+    { name: 'include either tag', args: ['--tags', 'go', 'security'], names: ['a-go', 'b-go-security', 'c-security'], status: 1 },
+    { name: 'exclude security', args: ['--exclude-tags', 'security'], names: ['a-go', 'd-untagged', 'e-empty'], status: 0 },
+    { name: 'exclude wins', args: ['--tags', 'go', '--exclude-tags', 'security'], names: ['a-go'], status: 0 },
+    { name: 'exclude all included rules', args: ['--tags', 'security', '--exclude-tags', 'security'], names: [], status: 0 },
+    { name: 'unknown tag', args: ['--tags', 'unknown'], names: [], status: 0 },
+    { name: 'case-sensitive tag', args: ['--tags', 'GO'], names: [], status: 0 },
+    {
+      name: 'explicit rule filtered by tag',
+      args: ['--rules', '.rulekeeper/a-go.rule.ts', '--tags', 'security'],
+      names: [],
+      status: 0,
+    },
+  ] as const;
+  for (const { name, args, names, status } of cases) {
+    const result = await runCli(['check', '--json', '--output-all', ...args], target);
+    assert.equal(result.status, status, `${name}: ${result.stderr}`);
+    const reports = parseCheckOutput(result, name);
+    assert.deepEqual(reports.map(report => report.name).sort(), names, name);
+    for (const report of reports) {
+      assert.equal(report.status, report.name === 'b-go-security' ? 'violation' : 'pass', name);
+    }
+  }
+});
+
+test('check excludes tagged rules before running hooks', async () => {
+  const target = sandbox.isolated('check-tags-hooks');
+  writeFiles(target, { 'src/a.txt': 'alpha' });
+  writeRule(target, 'go', `import { Rule, pass } from '@alex-dbs/rulekeeper';
+export default class extends Rule {
+  tags = ['go'];
+  files = ['src/*.txt'];
+  check = () => pass();
+}
+`);
+  writeRule(target, 'security', `import { Rule, pass } from '@alex-dbs/rulekeeper';
+export default class extends Rule {
+  tags = ['security'];
+  files = ['src/*.txt'];
+  when = () => { throw new Error('excluded hook ran'); };
+  check = () => pass();
+}
+`);
+
+  const result = await runCli(['check', '--json', '--output-all', '--exclude-tags', 'security'], target);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(parseCheckOutput(result, 'filtered hooks').map(report => report.name), ['go']);
+});
+
+test('check validates tags before filtering rules', async () => {
+  const target = sandbox.isolated('check-tags-invalid');
+  writeFiles(target, { 'src/a.txt': 'alpha' });
+  writeRule(target, 'broken-tags', `import { Rule, pass } from '@alex-dbs/rulekeeper';
+export default class extends Rule {
+  tags = 'security';
+  files = ['src/*.txt'];
+  check = () => pass();
+}
+`);
+
+  const result = await runCli(['check', '--tags', 'go'], target);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /broken-tags\.rule\.ts/);
+  assert.match(result.stderr, /tags/);
+});
+
 test('check JSONL preserves complete ordered reports and machine exit statuses', async () => {
   const target = sandbox.isolated('check-jsonl');
   writeFiles(target, { 'src/a.txt': 'alpha\ncafé 中文' });

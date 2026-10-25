@@ -26,6 +26,7 @@ Use `validate <rule-path>`, `test <rule-path>`, or `check --rules <path>` to rep
 | `enabled: boolean` | `true` | Disable evaluation without bypassing structural validation |
 | `files: readonly string[]` | `['**/*']` | Nonempty root-relative glob list |
 | `exclude: readonly string[]` | `[]` | Remove matching paths, even if included by `files` |
+| `tags?: readonly string[]` | Absent | Labels used by `check --tags` and `--exclude-tags` |
 | `scope?: ScopeSelector<T>` | Absent | Select parts of a file instead of its whole source |
 | `settings: RuleSettings` | `{}` | AI backend, model, threshold, and token prices |
 | `group: Grouping` | `'scope'` | Decide which scopes a check sees together |
@@ -39,7 +40,8 @@ Hooks and checks receive the rule instance as `this`. Additional class fields an
 
 `when` and `filter` return `boolean` or `{ applies: boolean, reason?: string }`, directly or through a promise. A false result skips the rule or scope. Invalid results and thrown errors fail execution.
 
-`files` and `exclude` must be dense arrays of nonempty strings, including on disabled rules. Do not set an empty `files` list to disable a rule. Set `enabled = false`.
+`files` and `exclude` must be dense arrays of nonempty strings, including on disabled rules. `tags`, when present, must be a dense array of nonempty strings. An empty `tags` array is valid.
+Use class field syntax such as `tags = ['go', 'security'];`.
 
 ## File boundaries
 

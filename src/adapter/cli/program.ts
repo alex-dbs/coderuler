@@ -112,6 +112,8 @@ export interface CliServices {
 
 interface CheckOptions {
   readonly rules?: string;
+  readonly tags: readonly string[];
+  readonly excludeTags: readonly string[];
   readonly json?: boolean;
   readonly jsonl?: boolean;
   readonly outputAll?: boolean;
@@ -411,6 +413,8 @@ export function createProgram(services: CliServices): Command {
     .description('Evaluate every selected rule against the working tree')
     .argument('[path]', 'target file or folder that narrows selection', '.')
     .option('--rules <path>', 'explicit rule module or directory instead of discovery')
+    .option('--tags <tags...>', 'run rules matching any listed tag', [])
+    .option('--exclude-tags <tags...>', 'exclude rules matching any listed tag', [])
     .option('--json', 'print violations as {durationMs, reports} JSON on stdout')
     .option('--jsonl', 'print violation rule records as JSON Lines')
     .option('--output-all', 'include passing and skipped rules and every verification in the output')
@@ -467,7 +471,13 @@ export function createProgram(services: CliServices): Command {
             options.rules === undefined ? {} : { rulesPath: options.rules },
             checkout?.rulesRoot ?? area.root,
           );
-          rules = prepared.rules;
+          rules = options.tags.length === 0 && options.excludeTags.length === 0
+            ? prepared.rules
+            : prepared.rules.filter(({ rule }) =>
+              (options.tags.length === 0 ||
+                rule.tags?.some(tag => options.tags.includes(tag)) === true) &&
+              !rule.tags?.some(tag => options.excludeTags.includes(tag)),
+            );
           if (changedFiles !== undefined) {
             const ruleFiles = new Set(prepared.rules.map(entry => relative(area.root, resolve(entry.ruleFile)).split(sep).join('/')));
             changedFiles = new Set([...changedFiles].filter(path => !ruleFiles.has(path)));
@@ -476,7 +486,7 @@ export function createProgram(services: CliServices): Command {
           walkthrough = verbose
             ? createWalkthroughRenderer({
               write: services.writeError,
-              headings: createRuleHeadings(prepared.rules),
+              headings: createRuleHeadings(rules),
               redact: services.redact,
               columns: () => services.terminal?.columns ?? 80,
               concurrency,
@@ -494,7 +504,7 @@ export function createProgram(services: CliServices): Command {
             ...(changedFiles === undefined ? {} : { changedFiles }),
           };
           const startedAt = performance.now();
-          reports = await services.runRules(prepared.rules, context);
+          reports = await services.runRules(rules, context);
           durationMs = performance.now() - startedAt;
         } finally {
           walkthrough?.finish();

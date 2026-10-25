@@ -69,6 +69,8 @@ The default target is `.`. A file or folder target narrows selection inside the 
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--rules <path>` | Discovery | Select an explicit rule module or directory |
+| `--tags <tags...>` | `[]` | Run rules that match any listed tag |
+| `--exclude-tags <tags...>` | `[]` | Exclude rules that match any listed tag |
 | `--json` | Off | Print one JSON document |
 | `--jsonl` | Off | Print JSON Lines rule records |
 | `--output-all` | Off | Include passes, skips, and every evaluation |
@@ -80,6 +82,12 @@ The default target is `.`. A file or folder target narrows selection inside the 
 | `--base <ref>` | `HEAD` for diff | Set the diff base, or the base branch for a PR |
 | `--concurrency <number>` | `8` | Maximum in-flight selection and evaluation tasks |
 | `--threshold <number>` | Rule/environment | Override the AI decision threshold |
+
+Tags are space-separated, exact, and case-sensitive. Exclusion takes precedence over inclusion. With no tag flags, `check` uses every rule. If the filters match no rules, `check` succeeds with zero rules.
+
+```sh
+rulekeeper check src --tags go security --exclude-tags experimental
+```
 
 `--json` and `--jsonl` are mutually exclusive. `--base` requires diff mode or `--pr`. `--auto-comment` also requires diff mode or `--pr`.
 
