@@ -105,7 +105,7 @@ The repository's contribution workflow is:
 
 ```sh
 npm ci
-npm test
+NODE_COMPILE_CACHE="${TMPDIR:-/tmp}/rulekeeper-node-compile-cache" npm test
 node dist/cli.js deps sync
 npm run typecheck
 ```

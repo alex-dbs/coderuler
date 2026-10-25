@@ -3,7 +3,8 @@ import { test } from 'node:test';
 import { stripVTControlCharacters } from 'node:util';
 import stringWidth from 'string-width';
 
-import { createInspectRenderer, createRedactor, createWalkthroughRenderer } from '../dist/adapter/cli/reports.js';
+import { createInspectRenderer, createWalkthroughRenderer } from '../dist/adapter/cli/reports.js';
+import { createRedactor } from '../dist/adapter/cli/text.js';
 import type { RuleReport, RunEvent } from '../src/app/ports.js';
 import type { CheckResult, GroupSubject, ScopeSubject, Subject } from '../src/app/rule.js';
 

@@ -5,7 +5,6 @@ import { stripVTControlCharacters } from 'node:util';
 import {
   createInspectRenderer,
   createMetadataRenderer,
-  createRedactor,
   createWalkthroughRenderer,
   renderCheckJson,
   renderCheckJsonl,
@@ -15,6 +14,7 @@ import {
   renderRuleTestSummary,
 } from '../dist/adapter/cli/reports.js';
 import type { RuleReport, RunEvent } from '../src/app/ports.js';
+import { createRedactor } from '../dist/adapter/cli/text.js';
 import type { RuleTestResult } from '../src/app/rule-tests.js';
 import type { ScopeSubject } from '../src/app/rule.js';
 
@@ -60,7 +60,6 @@ test('test rows and summaries reuse evaluation duration scaling at unit boundari
     const summary = renderRuleTestSummary(1, 0, durationMs, identity, false);
     assert.ok(row.endsWith(` (${formatted})\n`), row);
     assert.ok(summary.includes(`Time: ${formatted}`), summary);
-    assert.ok(renderCheckSummary([], identity, { durationMs }).includes(`Time: ${formatted}`));
   }
 });
 

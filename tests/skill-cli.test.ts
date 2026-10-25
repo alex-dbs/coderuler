@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { createProgram, runProgram } from '../dist/adapter/cli/program.js';
 import { createSkillManager, SKILL_NAME, SKILL_SOURCE } from '../dist/adapter/skills/cli.js';
 import { createServices } from '../dist/infra/runtime.js';
-import { createSandbox, ROOT, writeFile } from './support.ts';
+import { createSandbox, ROOT, withLoadOverrides, writeFile } from './support.ts';
 
 const sandbox = createSandbox('rulekeeper-skill-cli-');
 after(() => sandbox.cleanup());
@@ -49,11 +49,12 @@ function fixture(overrides: NodeJS.ProcessEnv = {}) {
     ...overrides,
   };
   const stderr: string[] = [];
-  const services = {
+  const services = withLoadOverrides({
     ...createServices(target.cwd, env),
-    manageSkill: createSkillManager(target.cwd, env, executable),
     writeError: (text: string) => { stderr.push(text); },
-  };
+  }, {
+    skill: { manageSkill: createSkillManager(target.cwd, env, executable) },
+  });
   return {
     target, executable, env, services, stderr,
     calls: (): readonly Invocation[] => readFileSync(logfile, 'utf8').trim().split('\n').map(line => JSON.parse(line) as Invocation),
@@ -244,7 +245,9 @@ test('malformed discovery output fails closed before any refresh', async () => {
 
 test('a subprocess that cannot start is reported as an operational failure', async () => {
   const target = fixture();
-  const services = { ...target.services, manageSkill: createSkillManager(join(target.target.root, 'missing'), target.env, target.executable) };
+  const services = withLoadOverrides(target.services, {
+    skill: { manageSkill: createSkillManager(join(target.target.root, 'missing'), target.env, target.executable) },
+  });
   assert.equal(await runProgram(['skill', 'install'], services), 2);
   assert.match(target.stderr.join(''), /ENOENT/);
 });

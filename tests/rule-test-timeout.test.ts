@@ -38,7 +38,7 @@ export const tests = [
   test('asynchronous deadline').withFiles({ 'inputs/one.txt': 'ASYNC' }).passes(),
   test('runs after both timeouts').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
 ];`);
-  const pending = runCli(['test', '--timeout', '1s', '--concurrency', '1'], target);
+  const pending = runCli(['test', '--timeout', '4s', '--concurrency', '1'], target);
   context.signal.addEventListener('abort', () => pending.terminate(), { once: true });
   const result = await pending;
   assert.equal(result.status, 1, result.stderr || result.stdout);

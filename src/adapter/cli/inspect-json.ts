@@ -1,6 +1,7 @@
 import type { RuleReport, RunEvent } from '../../app/ports.js';
 import type { CheckResult, GroupSubject, JsonValue, ScopeSubject, Subject } from '../../app/rule.js';
-import type { InspectRenderer, TextRedactor, TextWriter } from './reports.js';
+import type { InspectRenderer } from './reports.js';
+import type { TextRedactor, TextWriter } from './text.js';
 import { createUsageTracker } from './inspect-usage.js';
 
 interface InspectJsonOptions {

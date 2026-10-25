@@ -1,4 +1,4 @@
-import axios, { type AxiosInstance } from 'axios';
+import type { AxiosInstance, AxiosStatic } from 'axios';
 
 import type {
   DecisionBackend,
@@ -54,7 +54,7 @@ function redact(text: string, needles: readonly string[]): string {
   return redacted;
 }
 
-function requestFailure(error: unknown): Error {
+function requestFailure(error: unknown, axios: AxiosStatic): Error {
   if (axios.isAxiosError(error)) {
     const status = error.response?.status;
     if (status !== undefined) {
@@ -108,22 +108,25 @@ function readDecision(data: unknown): DecisionOutcome {
 }
 
 export class JevAdapter implements DecisionBackend {
-  readonly #client: AxiosInstance;
+  readonly #clientOptions: Parameters<AxiosStatic['create']>[0];
+  #client: AxiosInstance | undefined;
   readonly #model: string;
   readonly #needles: readonly string[];
 
   constructor({ model, baseUrl, apiKey }: JevOptions) {
     this.#model = model;
     this.#needles = redactionNeedles(apiKey);
-    this.#client = axios.create({
+    this.#clientOptions = {
       baseURL: baseUrlOf(baseUrl),
       timeout: TIMEOUT_MS,
       maxRedirects: 0,
       headers: { Authorization: `Bearer ${apiKey}` },
-    });
+    };
   }
 
   async decide(request: DecisionRequest, observer?: DecisionObserver): Promise<DecisionOutcome> {
+    const { default: axios } = await import('axios');
+    const client = this.#client ??= axios.create(this.#clientOptions);
     const body = {
       model: this.#model,
       state: request.state,
@@ -137,7 +140,7 @@ export class JevAdapter implements DecisionBackend {
 
     let data: unknown;
     try {
-      const response = await this.#client.post<unknown>(ENDPOINT, wire, {
+      const response = await client.post<unknown>(ENDPOINT, wire, {
         headers: { 'Content-Type': 'application/json' },
       });
       data = response.data;
@@ -150,7 +153,7 @@ export class JevAdapter implements DecisionBackend {
           body: redact(JSON.stringify(error.response.data) ?? '', this.#needles),
         });
       }
-      throw requestFailure(error);
+      throw requestFailure(error, axios);
     }
 
     return readDecision(data);

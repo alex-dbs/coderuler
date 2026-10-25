@@ -1,44 +1,16 @@
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-
 import { Command, CommanderError, InvalidArgumentError, Option } from 'commander';
 
-import type {
-  LoadedRule,
-  Project,
-  RuleReport,
-  RuleSelection,
-  RunContext,
-} from '../../app/ports.js';
-import type { RuleTestResult } from '../../app/rule-tests.js';
-import type { TokenPricing } from '../../app/rule.js';
-import type { ViolationComment } from '../../app/violation-comments.js';
-import type { PullRequest, PullRequestCheckout } from '../github/pull-request.js';
 import type { SkillOptions } from '../skills/cli.js';
-import { createInspectJsonRenderer } from './inspect-json.js';
-import { createProgress, type TerminalCapabilities } from './progress.js';
-import {
-  countViolations,
-  createInspectRenderer,
-  createMetadataRenderer,
-  createRuleHeadings,
-  createWalkthroughRenderer,
-  escapeText,
-  renderCheckJson,
-  renderCheckJsonl,
-  renderCheckSummary,
-  renderRuleTestHeading,
-  renderRuleTestResult,
-  renderRuleTestSummary,
-  renderViolationComments,
-  type InspectRenderer,
-  type TextRedactor,
-  type TextWriter,
-  type WalkthroughRenderer,
-} from './reports.js';
+import { CliExit, EXIT_FAILURE, EXIT_OK } from './exit.js';
+import type {
+  CheckOptions,
+  CliServices,
+  DependencyOptions,
+  InspectOptions,
+  TestOptions,
+} from './services.js';
+import { escapeDiagnostic } from './text.js';
 
-const EXIT_OK = 0;
-const EXIT_VIOLATION = 1;
-const EXIT_FAILURE = 2;
 const SUCCESSFUL_COMMANDER_CODES: Record<string, true> = {
   'commander.help': true,
   'commander.helpDisplayed': true,
@@ -49,122 +21,6 @@ const THRESHOLD_HINT = 'must be a decimal number between 0 and 1';
 const THRESHOLD_PATTERN = /^(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)$/;
 const TIMEOUT_HINT = 'must be a positive duration in ms, s, or m, at most 2147483647ms';
 const TIMEOUT_UNITS = { ms: 1, s: 1_000, m: 60_000 } as const;
-
-export interface CliTarget {
-  readonly root: string;
-  readonly path: string;
-  readonly kind: 'file' | 'directory';
-  contains(filepath: string): boolean;
-}
-
-export interface RuleSelectorResolution {
-  readonly explicit?: string;
-  readonly name?: string;
-}
-
-export interface CliServices {
-  readonly cwd: string;
-  readonly version: string;
-  readonly updateTool: () => Promise<number>;
-  readonly loadRules: (selection: RuleSelection) => Promise<readonly LoadedRule[]>;
-  readonly runRules: (
-    rules: readonly LoadedRule[],
-    context: RunContext,
-  ) => Promise<readonly RuleReport[]>;
-  readonly testRules: (
-    rules: readonly LoadedRule[],
-    onResult: (result: RuleTestResult, lastInRule: boolean) => void,
-    timeoutMs: number,
-    concurrency: number,
-    includeAI: boolean,
-  ) => Promise<readonly RuleTestResult[]>;
-  readonly createProject: (
-    root: string,
-    options?: { readonly excludeFiles?: readonly string[] },
-  ) => Project;
-  readonly resolveTarget: (root: string, target: string) => Promise<CliTarget>;
-  readonly changedFiles: (root: string, base: string) => Promise<ReadonlySet<string>>;
-  readonly checkoutPullRequest: (selector: string, baseBranch?: string) => Promise<PullRequestCheckout>;
-  readonly commentOnPullRequest: (
-    root: string,
-    comments: readonly ViolationComment[],
-    pullRequest?: PullRequest,
-  ) => Promise<void>;
-  readonly resolveRuleSelector: (
-    selector: string,
-    invocationCwd: string,
-    allowDirectory?: boolean,
-  ) => Promise<RuleSelectorResolution>;
-  readonly manageSkill: (operation: 'install' | 'update', options: SkillOptions) => Promise<number>;
-  readonly manageDependencies: (
-    operation: 'add' | 'remove' | 'sync',
-    packages: readonly string[],
-    options: { readonly global?: boolean; readonly directory?: string },
-  ) => Promise<void>;
-  readonly decisionResolver: (
-    thresholdOverride?: number,
-    pricingOverrides?: Partial<TokenPricing>,
-  ) => RunContext['resolveDecision'];
-  readonly redact: TextRedactor;
-  readonly write: TextWriter;
-  readonly writeError: TextWriter;
-  readonly terminal?: TerminalCapabilities;
-}
-
-interface CheckOptions {
-  readonly rules?: string;
-  readonly tags: readonly string[];
-  readonly excludeTags: readonly string[];
-  readonly json?: boolean;
-  readonly jsonl?: boolean;
-  readonly outputAll?: boolean;
-  readonly debug?: boolean;
-  readonly verbose?: boolean;
-  readonly diffOnly?: boolean;
-  readonly pr?: string;
-  readonly autoComment?: boolean;
-  readonly base?: string;
-  readonly concurrency: number;
-  readonly threshold?: number;
-}
-
-interface InspectOptions {
-  readonly json?: boolean;
-  readonly jsonl?: boolean;
-  readonly raw?: boolean;
-  readonly inputCostPerMillion?: number;
-  readonly outputCostPerMillion?: number;
-}
-
-interface TestOptions {
-  readonly timeout: number;
-  readonly concurrency: number;
-  readonly ai?: boolean;
-  readonly failuresOnly?: boolean;
-}
-
-
-interface ExecutionPlan {
-  readonly rules: readonly LoadedRule[];
-  readonly project: Project;
-  readonly isTarget: (filepath: string) => boolean;
-}
-
-class CliExit extends Error {
-  readonly exitCode: number;
-
-  constructor(exitCode: number) {
-    super(`rulekeeper exit ${exitCode}`);
-    this.exitCode = exitCode;
-  }
-}
-
-export function escapeDiagnostic(text: string): string {
-  return text
-    .split('\n')
-    .map(segment => escapeText(segment))
-    .join('\n');
-}
 
 function parseConcurrency(value: string): number {
   const parsed = Number(value);
@@ -203,35 +59,6 @@ function parseTimeout(value: string): number {
   return durationMs;
 }
 
-function ruleSelection(
-  services: CliServices,
-  choice: RuleSelectorResolution,
-  root: string,
-): RuleSelection {
-  const invocationCwd = services.cwd;
-  if (choice.explicit !== undefined) {
-    return { root, explicit: choice.explicit, invocationCwd };
-  }
-  if (choice.name !== undefined) {
-    return { root, name: choice.name, invocationCwd };
-  }
-  return { root, invocationCwd };
-}
-
-async function planWalk(
-  services: CliServices,
-  root: string,
-  isTarget: (filepath: string) => boolean,
-  choice: RuleSelectorResolution,
-  rulesRoot: string = root,
-): Promise<ExecutionPlan> {
-  const rules = await services.loadRules(ruleSelection(services, choice, rulesRoot));
-  const project = services.createProject(root, {
-    excludeFiles: rules.map(entry => entry.ruleFile),
-  });
-  return { rules, project, isTarget };
-}
-
 export function createProgram(services: CliServices): Command {
   const program = new Command();
   program
@@ -248,8 +75,9 @@ export function createProgram(services: CliServices): Command {
     .command('update')
     .description('Upgrade the active global npm installation of Rulekeeper to the latest version')
     .action(async () => {
-      const status = await services.updateTool();
-      if (status !== EXIT_OK) throw new CliExit(status);
+      const { runUpdate } = await import('./commands/update.js');
+      const commandServices = await services.load.update(services);
+      await runUpdate(commandServices);
     });
 
   const skill = program
@@ -264,8 +92,9 @@ export function createProgram(services: CliServices): Command {
     .option('-y, --yes', 'skip prompts (project scope unless --global)')
     .option('--copy', 'copy files instead of symlinking agent directories')
     .action(async (options: SkillOptions) => {
-      const status = await services.manageSkill('install', options);
-      if (status !== EXIT_OK) throw new CliExit(status);
+      const { runSkill } = await import('./commands/skill.js');
+      const commandServices = await services.load.skill(services);
+      await runSkill('install', options, commandServices);
     });
 
   skill
@@ -277,8 +106,9 @@ export function createProgram(services: CliServices): Command {
     .option('--copy', 'copy files instead of symlinking agent directories')
     .addHelpText('after', '\nUpgrade Rulekeeper first to obtain newer skill content. Local sources are refreshed with skills add, not skills update.')
     .action(async (options: SkillOptions) => {
-      const status = await services.manageSkill('update', options);
-      if (status !== EXIT_OK) throw new CliExit(status);
+      const { runSkill } = await import('./commands/skill.js');
+      const commandServices = await services.load.skill(services);
+      await runSkill('update', options, commandServices);
     });
 
   const dependencies = program
@@ -291,14 +121,18 @@ export function createProgram(services: CliServices): Command {
     dependencyOptions(dependencies.command(operation))
       .description(operation === 'add' ? 'Add or update packages and save exact locked versions' : 'Remove declared direct packages')
       .argument(operation === 'add' ? '<packages...>' : '<names...>', 'public npm packages')
-      .action(async (packages: string[], options: { readonly global?: boolean; readonly directory?: string }) => {
-        await services.manageDependencies(operation, packages, options);
+      .action(async (packages: string[], options: DependencyOptions) => {
+        const { runDeps } = await import('./commands/deps.js');
+        const commandServices = await services.load.deps(services);
+        await runDeps(operation, packages, options, commandServices);
       });
-  }
+    }
   dependencyOptions(dependencies.command('sync'))
     .description('Acquire locked packages and refresh SDK and dependency editor links')
-    .action(async (options: { readonly global?: boolean; readonly directory?: string }) => {
-      await services.manageDependencies('sync', [], options);
+    .action(async (options: DependencyOptions) => {
+      const { runDeps } = await import('./commands/deps.js');
+      const commandServices = await services.load.deps(services);
+      await runDeps('sync', [], options, commandServices);
     });
 
   program
@@ -306,13 +140,9 @@ export function createProgram(services: CliServices): Command {
     .description('Load and structurally validate the selected rules without running them')
     .argument('[rule]', 'rule name, module path, or directory')
     .action(async (rulePath: string | undefined) => {
-      const choice = rulePath === undefined
-        ? {}
-        : await services.resolveRuleSelector(rulePath, services.cwd, true);
-      const rules = await services.loadRules(ruleSelection(services, choice, services.cwd));
-      for (const entry of rules) {
-        services.write(services.redact(`Valid rule: ${escapeText(entry.name)}\n`));
-      }
+      const { runValidate } = await import('./commands/validate.js');
+      const commandServices = await services.load.validate(services);
+      await runValidate(rulePath, services, commandServices);
     });
 
   program
@@ -333,70 +163,9 @@ export function createProgram(services: CliServices): Command {
       1,
     )
     .action(async (rulePath: string | undefined, options: TestOptions) => {
-      const progress = services.terminal?.interactive === true
-        ? createProgress(services.writeError, () => services.terminal?.columns ?? 80)
-        : undefined;
-      const color = services.terminal?.color === true;
-      let passed = 0;
-      let failed = 0;
-      let durationMs = 0;
-      let previousRuleName: string | undefined;
-      const failures: RuleTestResult[] | undefined = options.failuresOnly ? [] : undefined;
-      let testsStarted = false;
-      const flushFailures = () => {
-        if (failures === undefined || failures.length === 0) return;
-        if (previousRuleName !== undefined) services.write('\n');
-        const ruleName = failures[0]!.ruleName;
-        services.write(renderRuleTestHeading(ruleName, services.redact, color));
-        previousRuleName = ruleName;
-        for (let index = 0; index < failures.length; index += 1) {
-          services.write(renderRuleTestResult(
-            failures[index]!,
-            services.redact,
-            color,
-            index === failures.length - 1,
-          ));
-        }
-        failures.length = 0;
-      };
-      try {
-        const choice = rulePath === undefined
-          ? {}
-          : await services.resolveRuleSelector(rulePath, services.cwd, true);
-        const rules = await services.loadRules(ruleSelection(services, choice, services.cwd));
-        progress?.message('Running tests');
-        testsStarted = true;
-        await services.testRules(rules, (result, lastInRule) => {
-          progress?.clear();
-          if (result.expected === result.actual) passed += 1;
-          else failed += 1;
-          durationMs += result.durationMs;
-          if (failures !== undefined) {
-            if (result.expected !== result.actual) failures.push(result);
-            if (lastInRule) flushFailures();
-          } else {
-            if (result.ruleName !== previousRuleName) {
-              if (previousRuleName !== undefined) services.write('\n');
-              services.write(renderRuleTestHeading(result.ruleName, services.redact, color));
-              previousRuleName = result.ruleName;
-            }
-            services.write(renderRuleTestResult(result, services.redact, color, lastInRule));
-          }
-          progress?.message(`Running tests (${passed + failed} completed)`);
-        }, options.timeout, options.concurrency, options.ai === true);
-      } finally {
-        progress?.stop();
-        if (failures !== undefined && testsStarted) {
-          flushFailures();
-          if (previousRuleName !== undefined) services.write('\n');
-          services.write(renderRuleTestSummary(passed, failed, durationMs, services.redact, color));
-        }
-      }
-      if (failures === undefined) {
-        if (previousRuleName !== undefined) services.write('\n');
-        services.write(renderRuleTestSummary(passed, failed, durationMs, services.redact, color));
-      }
-      if (failed > 0) throw new CliExit(EXIT_VIOLATION);
+      const { runTest } = await import('./commands/test.js');
+      const commandServices = await services.load.test(services);
+      await runTest(rulePath, options, services, commandServices);
     });
 
   program
@@ -433,102 +202,9 @@ export function createProgram(services: CliServices): Command {
       if (options.autoComment === true && !diffOnly) {
         throw new Error('--auto-comment requires --diff (or --diff-only) or --pr');
       }
-      const debug = options.debug === true;
-      const verbose = options.verbose === true;
-      const machine = options.json === true || options.jsonl === true;
-      const progress = services.terminal?.interactive === true && !machine && !debug && !verbose
-        ? createProgress(services.writeError, () => services.terminal?.columns ?? 80)
-        : undefined;
-      let checkout: PullRequestCheckout | undefined;
-      try {
-        let reports: readonly RuleReport[];
-        let durationMs: number;
-        let root: string;
-        let rules: readonly LoadedRule[];
-        let walkthrough: WalkthroughRenderer | undefined;
-        try {
-          if (options.pr !== undefined) {
-            checkout = await services.checkoutPullRequest(options.pr, options.base);
-          }
-          const area = await services.resolveTarget(checkout?.root ?? services.cwd, target);
-          root = area.root;
-          let changedFiles = checkout?.changedFiles ?? (diffOnly
-            ? await services.changedFiles(area.root, options.base ?? 'HEAD')
-            : undefined);
-          const choice = options.rules === undefined
-            ? {}
-            : await services.resolveRuleSelector(options.rules, services.cwd, true);
-          const prepared = await planWalk(
-            services,
-            area.root,
-            filepath => area.contains(filepath),
-            choice,
-            checkout?.rulesRoot ?? area.root,
-          );
-          rules = options.tags.length === 0 && options.excludeTags.length === 0
-            ? prepared.rules
-            : prepared.rules.filter(({ rule }) =>
-              (options.tags.length === 0 ||
-                rule.tags?.some(tag => options.tags.includes(tag)) === true) &&
-              !rule.tags?.some(tag => options.excludeTags.includes(tag)),
-            );
-          if (changedFiles !== undefined) {
-            const ruleFiles = new Set(prepared.rules.map(entry => relative(area.root, resolve(entry.ruleFile)).split(sep).join('/')));
-            changedFiles = new Set([...changedFiles].filter(path => !ruleFiles.has(path)));
-          }
-          const concurrency = debug ? 1 : options.concurrency;
-          walkthrough = verbose
-            ? createWalkthroughRenderer({
-              write: services.writeError,
-              headings: createRuleHeadings(rules),
-              redact: services.redact,
-              columns: () => services.terminal?.columns ?? 80,
-              concurrency,
-            })
-            : undefined;
-          const emit = walkthrough?.emit ?? (debug
-            ? createMetadataRenderer(services.writeError, services.redact)
-            : progress?.emit);
-          const context: RunContext = {
-            project: prepared.project,
-            isTarget: prepared.isTarget,
-            concurrency,
-            resolveDecision: services.decisionResolver(options.threshold),
-            ...(emit === undefined ? {} : { emit }),
-            ...(changedFiles === undefined ? {} : { changedFiles }),
-          };
-          const startedAt = performance.now();
-          reports = await services.runRules(rules, context);
-          durationMs = performance.now() - startedAt;
-        } finally {
-          walkthrough?.finish();
-          progress?.stop();
-        }
-        const reportOptions = {
-          durationMs,
-          outputAll: options.outputAll === true,
-          color: services.terminal?.color === true,
-        };
-        services.write(
-          options.json === true
-            ? renderCheckJson(reports, reportOptions)
-            : options.jsonl === true
-              ? renderCheckJsonl(reports, reportOptions)
-              : renderCheckSummary(reports, services.redact, reportOptions),
-        );
-        if (countViolations(reports) > 0) {
-          if (options.autoComment === true) {
-            await services.commentOnPullRequest(
-              root,
-              renderViolationComments(reports, services.redact, rules),
-              checkout?.pullRequest,
-            );
-          }
-          throw new CliExit(EXIT_VIOLATION);
-        }
-      } finally {
-        await checkout?.cleanup();
-      }
+      const { runCheck } = await import('./commands/check.js');
+      const commandServices = await services.load.check(services);
+      await runCheck(target, options, services, commandServices);
     });
 
   program
@@ -550,62 +226,9 @@ export function createProgram(services: CliServices): Command {
       if (formats.length > 1) {
         throw new Error(`${formats.join(', ')} are mutually exclusive`);
       }
-      let inspect: InspectRenderer | undefined = options.json === true || options.jsonl === true
-        ? createInspectJsonRenderer({
-          write: services.write,
-          redact: services.redact,
-          format: options.json === true ? 'json' : 'jsonl',
-        })
-        : undefined;
-      try {
-        const resolved = await services.resolveRuleSelector(rule, services.cwd);
-        const folderPath = resolve(services.cwd, folder);
-        const relativeFolder = relative(services.cwd, folderPath);
-        const insideInvocationRoot =
-          relativeFolder !== '..' &&
-          !relativeFolder.startsWith(`..${sep}`) &&
-          !isAbsolute(relativeFolder);
-        const area = await services.resolveTarget(
-          insideInvocationRoot ? services.cwd : folderPath,
-          insideInvocationRoot ? (relativeFolder === '' ? '.' : relativeFolder) : '.',
-        );
-        if (area.kind !== 'directory') {
-          throw new Error(`Inspect folder ${escapeText(folder)} is not a directory`);
-        }
-        const prepared = await planWalk(
-          services,
-          join(area.root, area.path),
-          () => true,
-          resolved,
-        );
-        inspect ??= createInspectRenderer({
-          write: services.write,
-          headings: createRuleHeadings(prepared.rules),
-          redact: services.redact,
-          color: options.raw !== true && services.terminal?.color === true,
-          columns: () => services.terminal?.stdoutColumns ?? services.terminal?.columns ?? 80,
-          raw: options.raw === true,
-        });
-        const reports = await services.runRules(prepared.rules, {
-          project: prepared.project,
-          isTarget: prepared.isTarget,
-          concurrency: 1,
-          resolveDecision: services.decisionResolver(undefined, {
-            ...(options.inputCostPerMillion === undefined ? {} : { inputCostPerMillion: options.inputCostPerMillion }),
-            ...(options.outputCostPerMillion === undefined ? {} : { outputCostPerMillion: options.outputCostPerMillion }),
-          }),
-          emit: inspect.emit,
-        });
-        inspect.finish(reports);
-        if (countViolations(reports) > 0) throw new CliExit(EXIT_VIOLATION);
-      } catch (error) {
-        if (!(error instanceof CliExit)) {
-          inspect?.finish([], error instanceof Error ? error.message : String(error));
-        }
-        throw error;
-      } finally {
-        inspect?.finish([]);
-      }
+      const { runInspect } = await import('./commands/inspect.js');
+      const commandServices = await services.load.inspect(services);
+      await runInspect(rule, folder, options, services, commandServices);
     });
 
   return program;

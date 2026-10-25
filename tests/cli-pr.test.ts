@@ -30,7 +30,7 @@ import {
   type PrFixture,
   type RequestRecord,
 } from './pr-support.ts';
-import { createSandbox, parseCheckOutput, runCli, writeFile, type CheckReportShape, type Sandbox } from './support.ts';
+import { createSandbox, parseCheckOutput, runCli, withLoadOverrides, writeFile, type CheckReportShape, type Sandbox } from './support.ts';
 
 const sandbox = createSandbox('rulekeeper-cli-pr-');
 after(() => sandbox.cleanup());
@@ -56,13 +56,14 @@ async function check(target: PrFixture, args: readonly string[] = [], invocation
   const stdout: string[] = [];
   const stderr: string[] = [];
   const loader = createRuleLoader({ home: target.home });
-  const services = {
+  const services = withLoadOverrides({
     ...createServices(invocation.cwd ?? target.cwd, { ...target.env, ...invocation.env }),
-    loadRules: loader.load,
     terminal: { color: false, interactive: false },
     write: (text: string) => { stdout.push(text); },
     writeError: (text: string) => { stderr.push(text); },
-  };
+  }, {
+    check: { loadRules: loader.load },
+  });
   const status = await runProgram(['check', ...args, '--json', '--output-all'], services);
   assertClean(target);
   return { status, stdout: stdout.join(''), stderr: stderr.join('') };
@@ -104,13 +105,14 @@ test('--pr uses current committed base and global policy only on PR changes', as
   const stdout: string[] = [];
   const stderr: string[] = [];
   const loader = createRuleLoader({ home: target.home });
-  const services = {
+  const services = withLoadOverrides({
     ...createServices(target.cwd, target.env),
-    loadRules: loader.load,
     terminal: { color: false, interactive: false },
     write: (text: string) => { stdout.push(text); },
     writeError: (text: string) => { stderr.push(text); },
-  };
+  }, {
+    check: { loadRules: loader.load },
+  });
   const status = await runProgram(['check', '--pr', String(PR_NUMBER), '--json', '--output-all'], services);
   const result = { status, stdout: stdout.join(''), stderr: stderr.join('') };
   assert.equal(result.status, 1, result.stderr);
@@ -360,25 +362,30 @@ test('PR advancement after actual analysis refuses stale inline and fallback fin
       const stdout: string[] = [];
       const stderr: string[] = [];
       const runtime = createServices(target.cwd, target.env);
+      const runtimeCheck = await runtime.load.check(runtime);
       const loader = createRuleLoader({ home: target.home });
       let evaluated = false;
-      const status = await runProgram(['check', '--pr', '42', '--auto-comment', '--json', '--output-all'], {
+      const services = withLoadOverrides({
         ...runtime,
-        loadRules: loader.load,
-        runRules: async (...args: Parameters<typeof runtime.runRules>) => {
-          const reports = await runtime.runRules(...args);
-          assert.ok(reports.some(report => report.status === 'violation'), 'real evaluation must finish against the old fetched head');
-          evaluated = true;
-          target = publish(target, 'feature/pr-fixture', () => {
-            writeFile(join(target.cwd, 'src/changed.txt'), `${located ? 'unchanged anchor\n' : ''}GOOD fixed by the PR\n`);
-          });
-          metadata.head.sha = target.head;
-          return reports;
-        },
         terminal: { color: false, interactive: false },
         write: (text: string) => { stdout.push(text); },
         writeError: (text: string) => { stderr.push(text); },
+      }, {
+        check: {
+          loadRules: loader.load,
+          runRules: async (...args: Parameters<typeof runtimeCheck.runRules>) => {
+            const reports = await runtimeCheck.runRules(...args);
+            assert.ok(reports.some(report => report.status === 'violation'), 'real evaluation must finish against the old fetched head');
+            evaluated = true;
+            target = publish(target, 'feature/pr-fixture', () => {
+              writeFile(join(target.cwd, 'src/changed.txt'), `${located ? 'unchanged anchor\n' : ''}GOOD fixed by the PR\n`);
+            });
+            metadata.head.sha = target.head;
+            return reports;
+          },
+        },
       });
+      const status = await runProgram(['check', '--pr', '42', '--auto-comment', '--json', '--output-all'], services);
       assert.equal(evaluated, true);
       assert.notEqual(target.head, analyzedHead);
       assert.equal(git(target, '--git-dir', target.remote, 'rev-parse', 'refs/pull/42/head'), target.head);

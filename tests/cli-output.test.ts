@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 
-import { runProgram, type CliServices } from '../dist/adapter/cli/program.js';
+import { runProgram } from '../dist/adapter/cli/program.js';
+import type { CliContext, CliServices } from '../dist/adapter/cli/services.js';
 import { terminalCapabilities } from '../dist/adapter/cli/progress.js';
+import { createRuleDependencyManager } from '../dist/adapter/filesystem/dependencies.js';
+import { createRuleLoader } from '../dist/adapter/filesystem/rules.js';
 import type { RuleReport } from '../dist/app/ports.js';
 import { createServices } from '../dist/infra/runtime.js';
 import {
@@ -14,7 +18,9 @@ import {
   writeFile,
   type CheckReportShape,
   type CliResult,
+  type CliLoadOverrides,
   type Sandbox,
+  withLoadOverrides,
 } from './support.ts';
 
 const sandbox = createSandbox('rulekeeper-cli-output-');
@@ -68,6 +74,104 @@ function readMachine(result: CliResult, mode: '--json' | '--jsonl'): {
   assert.ok(Number.isFinite(durationMs) && (durationMs as number) >= 0);
   return { durationMs: durationMs as number, reports };
 }
+
+async function runCommand(argv: readonly string[], target: Sandbox, overrides: NodeJS.ProcessEnv = {}): Promise<CliResult> {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const env = { ...target.env, ...overrides };
+  const loader = createRuleLoader({
+    home: target.home,
+    dependencies: createRuleDependencyManager({ cacheRoot: join(target.home, '.cache', 'rulekeeper', 'dependencies') }),
+  });
+  const services = withLoadOverrides({
+    ...createServices(target.cwd, env),
+    write: text => { stdout.push(text); },
+    writeError: text => { stderr.push(text); },
+    terminal: terminalCapabilities({ stdoutIsTTY: false, stderrIsTTY: false }, env),
+  }, {
+    check: { loadRules: selection => loader.load(selection) },
+    inspect: { loadRules: selection => loader.load(selection) },
+    test: { loadRules: selection => loader.load(selection) },
+    validate: { loadRules: selection => loader.load(selection) },
+  });
+  const status = await runProgram(argv, services);
+  return { status, stdout: stdout.join(''), stderr: stderr.join('') };
+}
+
+test('real CLI scheduling honors debug concurrency and preserves lexical report order', async context => {
+  const checkArgs = ['check', '--json', '--output-all', '--concurrency', '2'];
+  const rows = [
+    { name: 'check default concurrency', argv: checkArgs, peak: 2 },
+    { name: 'check verbose concurrency', argv: [...checkArgs, '--verbose'], peak: 2 },
+    { name: 'check debug concurrency', argv: [...checkArgs, '--debug'], peak: 1 },
+    { name: 'check debug and verbose concurrency', argv: [...checkArgs, '--debug', '--verbose'], peak: 1 },
+    { name: 'inspect concurrency', argv: ['inspect', 'scheduling', '--json'], peak: 1 },
+  ] as const;
+  const expectedFilepaths = ['inputs/a.txt', 'inputs/b.txt', 'inputs/c.txt'];
+
+  for (const row of rows) {
+    await context.test(row.name, async () => {
+      const target = sandbox.isolated(row.name);
+      for (const filepath of expectedFilepaths) writeFile(join(target.cwd, filepath), 'GOOD');
+      const journal = join(target.cwd, 'scheduling.journal');
+      writeFile(join(target.cwd, '.rulekeeper/scheduling.rule.ts'), `import { appendFileSync } from 'node:fs';
+import { setImmediate } from 'node:timers/promises';
+import { Rule, pass } from '@alex-dbs/rulekeeper';
+const journal = ${JSON.stringify(journal)};
+export default class Scheduling extends Rule {
+  files = ['inputs/*.txt'];
+  check = async subject => {
+    appendFileSync(journal, 'start ' + subject.filepath + '\\n');
+    await setImmediate();
+    appendFileSync(journal, 'end ' + subject.filepath + '\\n');
+    return pass();
+  };
+}
+`);
+
+      const result = await runCommand(row.argv, target);
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.equal(result.stdout.includes('\u001b'), false);
+      const document = asMapping(JSON.parse(result.stdout), row.name);
+      const reports = document['reports'];
+      assert.ok(Array.isArray(reports));
+      assert.equal(reports.length, 1);
+      const report = asMapping(reports[0], 'scheduling report');
+      assert.equal(report['name'], 'scheduling');
+      const evaluations = report['evaluations'];
+      assert.ok(Array.isArray(evaluations));
+      const reportedFilepaths = evaluations.map((value, index) => {
+        const evaluation = asMapping(value, `scheduling evaluation ${index}`);
+        const subject = asMapping(evaluation['subject'], `scheduling subject ${index}`);
+        assert.equal(subject['kind'], 'scope');
+        assert.equal(typeof subject['filepath'], 'string');
+        return subject['filepath'] as string;
+      });
+      assert.deepEqual(reportedFilepaths, expectedFilepaths);
+
+      const active = new Set<string>();
+      const completed: string[] = [];
+      let peak = 0;
+      for (const record of readFileSync(journal, 'utf8').trimEnd().split('\n')) {
+        const [action, filepath] = record.split(' ', 2);
+        assert.ok(filepath, record);
+        if (action === 'start') {
+          assert.equal(active.has(filepath), false, record);
+          active.add(filepath);
+          peak = Math.max(peak, active.size);
+        } else {
+          assert.equal(action, 'end', record);
+          assert.equal(active.delete(filepath), true, record);
+          completed.push(filepath);
+        }
+      }
+      assert.equal(active.size, 0);
+      assert.equal(peak, row.peak);
+      assert.equal(completed.length, expectedFilepaths.length);
+      assert.deepEqual([...completed].sort(), expectedFilepaths);
+    });
+  }
+});
 
 function verificationGolden(reports: readonly CheckReportShape[]): unknown {
   return reports.map(report => ({
@@ -126,17 +230,22 @@ test('machine report parsing preserves optional thresholds and rejects invalid t
   }
 });
 
-test('real machine outputs filter passing evaluations inside a mixed rule by default and preserve every verification with --output-all', async () => {
+test('real machine outputs filter passing evaluations inside a mixed rule by default and preserve every verification with --output-all', async context => {
   const target = mixedProject();
   for (const mode of ['--json', '--jsonl'] as const) {
     for (const outputAll of [false, true]) {
-      const result = await runCli(['check', mode, ...(outputAll ? ['--output-all'] : [])], target, { FORCE_COLOR: '1', NO_COLOR: undefined });
-      assert.equal(result.status, 1, result.stderr);
-      const { reports } = readMachine(result, mode);
-      assert.deepEqual(verificationGolden(reports), outputAll ? ALL_GOLDEN : VIOLATION_GOLDEN);
-      assert.equal(result.stdout.includes('GOOD SOURCE'), outputAll);
-      assert.equal(result.stdout.includes('CLEAN SOURCE'), outputAll);
-      assert.ok(result.stdout.includes('BAD SOURCE'));
+      await context.test(`${mode} ${outputAll ? 'with' : 'without'} --output-all`, async () => {
+        const result = await runCommand(['check', mode, ...(outputAll ? ['--output-all'] : [])], target, {
+          FORCE_COLOR: '1',
+          NO_COLOR: undefined,
+        });
+        assert.equal(result.status, 1, result.stderr);
+        const { reports } = readMachine(result, mode);
+        assert.deepEqual(verificationGolden(reports), outputAll ? ALL_GOLDEN : VIOLATION_GOLDEN);
+        assert.equal(result.stdout.includes('GOOD SOURCE'), outputAll);
+        assert.equal(result.stdout.includes('CLEAN SOURCE'), outputAll);
+        assert.ok(result.stdout.includes('BAD SOURCE'));
+      });
     }
   }
 });
@@ -225,19 +334,29 @@ test('real console uses bold red violation names and green checkmarks and passin
   assert.equal(terminalCapabilities({ stdoutIsTTY: true, stderrIsTTY: true }, { NO_COLOR: '' }).color, false);
 });
 
-function injected(reports: readonly RuleReport[], overrides: Partial<CliServices> = {}) {
+function injected(
+  reports: readonly RuleReport[],
+  contextOverrides: Partial<CliContext> = {},
+  loadOverrides: CliLoadOverrides = {},
+) {
   const stdout: string[] = [];
   const stderr: string[] = [];
-  const services: CliServices = {
+  const context: CliServices = {
     ...createServices('/project', {}),
     terminal: { color: true, interactive: true, columns: 80 },
-    resolveTarget: async () => ({ root: '/project', path: '.', kind: 'directory', contains: () => true }),
-    loadRules: async () => [],
-    runRules: async () => reports,
     write: text => { stdout.push(text); },
     writeError: text => { stderr.push(text); },
-    ...overrides,
+    ...contextOverrides,
   };
+  const services = withLoadOverrides(context, {
+    ...loadOverrides,
+    check: {
+      resolveTarget: async () => ({ root: '/project', path: '.', kind: 'directory', contains: () => true }),
+      loadRules: async () => [],
+      runRules: async () => reports,
+      ...loadOverrides.check,
+    },
+  });
   return { services, stdout, stderr };
 }
 
@@ -248,23 +367,27 @@ test('duration measures only the monotonic awaited runRules boundary in every ou
     for (const outputAll of [false, true]) {
       let runCompleted = false;
       const base = createServices('/project', {});
+      const baseCheck = await base.load.check(base);
       const target = injected([], {
         terminal: { color: false, interactive: false },
-        resolveTarget: async () => {
-          clock = 100;
-          return { root: '/project', path: '.', kind: 'directory', contains: () => true };
-        },
-        loadRules: async () => { clock = 200; return []; },
-        createProject: (...args) => { clock = 500; return base.createProject(...args); },
-        decisionResolver: threshold => { clock = 1000; return base.decisionResolver(threshold); },
-        runRules: async () => {
-          clock = 1005;
-          await Promise.resolve();
-          clock = 1037.5;
-          runCompleted = true;
-          return [];
-        },
         redact: text => { clock = 9000; return text; },
+      }, {
+        check: {
+          resolveTarget: async () => {
+            clock = 100;
+            return { root: '/project', path: '.', kind: 'directory', contains: () => true };
+          },
+          loadRules: async () => { clock = 200; return []; },
+          createProject: (...args) => { clock = 500; return baseCheck.createProject(...args); },
+          decisionResolver: threshold => { clock = 1000; return baseCheck.decisionResolver(threshold); },
+          runRules: async () => {
+            clock = 1005;
+            await Promise.resolve();
+            clock = 1037.5;
+            runCompleted = true;
+            return [];
+          },
+        },
       });
       assert.equal(await runProgram(['check', ...mode, ...(outputAll ? ['--output-all'] : [])], target.services), 0);
       assert.equal(runCompleted, true);
@@ -281,8 +404,8 @@ test('duration measures only the monotonic awaited runRules boundary in every ou
   }
 });
 
-test('clean, all-skipped and no-subject real runs retain rule durations with output-all and emit no default JSONL records', async () => {
-  for (const kind of ['clean', 'skipped', 'empty']) {
+test('clean, all-skipped and no-subject real runs retain rule durations with output-all and emit no default JSONL records', async context => {
+  for (const kind of ['clean', 'skipped', 'empty'] as const) {
     const target = sandbox.isolated(kind);
     if (kind !== 'empty') {
       writeFile(join(target.cwd, '.rulekeeper', `${kind}.rule.ts`), kind === 'clean' ? CLEAN_RULE : SKIPPED_RULE);
@@ -290,23 +413,28 @@ test('clean, all-skipped and no-subject real runs retain rule durations with out
     } else {
       writeFile(join(target.cwd, '.rulekeeper/empty.rule.ts'), CLEAN_RULE);
     }
-    for (const args of [[], ['--output-all']]) {
-      const human = await runCli(['check', ...args], target);
-      assert.equal(human.status, 0, human.stderr);
-      assert.equal(human.stderr, '');
-      assert.match(human.stdout, /Time: \d+\.\d{2}(?:ms|s|min|h|d)\b/);
-    }
-    for (const mode of ['--json', '--jsonl'] as const) {
+    for (const mode of ['human', '--json', '--jsonl'] as const) {
       for (const outputAll of [false, true]) {
-        const result = await runCli(['check', mode, ...(outputAll ? ['--output-all'] : [])], target);
-        assert.equal(result.status, 0, result.stderr);
-        const { reports } = readMachine(result, mode);
-        assert.equal(reports.length, outputAll ? 1 : 0);
-        if (mode === '--jsonl') {
-          assert.equal(result.stdout === '', !outputAll);
-          assert.equal(result.stdout.trimEnd().split('\n').filter(Boolean).length, reports.length);
-        }
-        if (outputAll) assert.equal(reports[0]!.status, kind === 'clean' ? 'pass' : 'skipped');
+        await context.test(`${kind} ${mode} ${outputAll ? 'with' : 'without'} --output-all`, async () => {
+          const result = await runCommand([
+            'check',
+            ...(mode === 'human' ? [] : [mode]),
+            ...(outputAll ? ['--output-all'] : []),
+          ], target);
+          assert.equal(result.status, 0, result.stderr);
+          if (mode === 'human') {
+            assert.equal(result.stderr, '');
+            assert.match(result.stdout, /Time: \d+\.\d{2}(?:ms|s|min|h|d)\b/);
+            return;
+          }
+          const { reports } = readMachine(result, mode);
+          assert.equal(reports.length, outputAll ? 1 : 0);
+          if (mode === '--jsonl') {
+            assert.equal(result.stdout === '', !outputAll);
+            assert.equal(result.stdout.trimEnd().split('\n').filter(Boolean).length, reports.length);
+          }
+          if (outputAll) assert.equal(reports[0]!.status, kind === 'clean' ? 'pass' : 'skipped');
+        });
       }
     }
   }
@@ -315,7 +443,7 @@ test('clean, all-skipped and no-subject real runs retain rule durations with out
 test('machine failures leave stdout empty with output-all and mutually exclusive formats still fail', async () => {
   for (const mode of ['--json', '--jsonl']) {
     for (const stage of ['resolveTarget', 'loadRules', 'runRules'] as const) {
-      const target = injected([], { [stage]: async () => { throw new Error('evaluation failed'); } });
+      const target = injected([], {}, { check: { [stage]: async () => { throw new Error('evaluation failed'); } } });
       assert.equal(await runProgram(['check', mode, '--output-all'], target.services), 2);
       assert.equal(target.stdout.join(''), '');
       assert.match(target.stderr.join(''), /evaluation failed/);

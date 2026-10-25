@@ -2494,56 +2494,65 @@ test('progress observers do not change execution reports', async () => {
   );
 });
 
-test('evaluation concurrency is bounded, ordered, and uses the configured limit', async () => {
-  const scope: ScopeSelector = file => Array.from({ length: 6 }, (_unused, index) => ({ id: String(index), source: file.source }));
-  let inFlight = 0;
-  let maxInFlight = 0;
-  const completed: string[] = [];
-  const rule = new TestRule({
-    files: ['**/*.txt'],
-    scope,
-    check: async subject => {
-      inFlight += 1;
-      maxInFlight = Math.max(maxInFlight, inFlight);
-      await new Promise<void>(resolve => { setImmediate(resolve); });
-      completed.push(asScope(subject).id);
-      inFlight -= 1;
-      return pass();
-    },
-  });
+test('evaluation concurrency is bounded, ordered, and uses the configured limit', async context => {
+  for (const concurrency of [1, 2]) {
+    await context.test(`limit ${concurrency}`, async () => {
+      const scope: ScopeSelector = file => Array.from({ length: 6 }, (_unused, index) => ({ id: String(index), source: file.source }));
+      let inFlight = 0;
+      let maxInFlight = 0;
+      const completed: string[] = [];
+      const rule = new TestRule({
+        files: ['**/*.txt'],
+        scope,
+        check: async subject => {
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          await new Promise<void>(resolve => { setImmediate(resolve); });
+          completed.push(asScope(subject).id);
+          inFlight -= 1;
+          return pass();
+        },
+      });
 
-  const { report } = await runRule(rule, new MemoryProject('/repo', { 'a.txt': 'A' }), { concurrency: 2 }, 'bounded');
+      const { report } = await runRule(rule, new MemoryProject('/repo', { 'a.txt': 'A' }), { concurrency }, 'bounded');
 
-  assert.equal(maxInFlight, 2);
-  assert.deepEqual(completed, ['0', '1', '2', '3', '4', '5']);
-  assert.deepEqual(report.evaluations.map(evaluation => asScope(evaluation.subject).id), ['0', '1', '2', '3', '4', '5']);
-});
-
-test('the flattened evaluation map bounds concurrency across rules', async () => {
-  const scope: ScopeSelector = file => Array.from({ length: 3 }, (_unused, index) => ({ id: String(index), source: file.source }));
-  let inFlight = 0;
-  let maxInFlight = 0;
-  const makeRule = (): TestRule =>
-    new TestRule({
-      files: ['a.txt'],
-      scope,
-      check: async () => {
-        inFlight += 1;
-        maxInFlight = Math.max(maxInFlight, inFlight);
-        await new Promise<void>(resolve => { setImmediate(resolve); });
-        inFlight -= 1;
-        return pass();
-      },
+      assert.equal(maxInFlight, concurrency);
+      assert.deepEqual(completed, ['0', '1', '2', '3', '4', '5']);
+      assert.deepEqual(report.evaluations.map(evaluation => asScope(evaluation.subject).id), ['0', '1', '2', '3', '4', '5']);
     });
-
-  const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }), { concurrency: 2 });
-  const reports = await executeRules([loaded('one', makeRule()), loaded('two', makeRule())], harness.context);
-
-  assert.equal(reports.length, 2);
-  assert.ok(maxInFlight <= 2, `expected at most 2 in flight, saw ${maxInFlight}`);
-  assert.ok(maxInFlight >= 1);
-  assert.deepEqual(reports.map(report => report.evaluations.length), [3, 3]);
+  }
 });
+
+test('the flattened evaluation map bounds concurrency across rules', async context => {
+  for (const concurrency of [1, 2]) {
+    await context.test(`limit ${concurrency}`, async () => {
+      const scope: ScopeSelector = file => Array.from({ length: 3 }, (_unused, index) => ({ id: String(index), source: file.source }));
+      let inFlight = 0;
+      let maxInFlight = 0;
+      const makeRule = (): TestRule =>
+        new TestRule({
+          files: ['a.txt'],
+          scope,
+          check: async () => {
+            inFlight += 1;
+            maxInFlight = Math.max(maxInFlight, inFlight);
+            await new Promise<void>(resolve => { setImmediate(resolve); });
+            inFlight -= 1;
+            return pass();
+          },
+        });
+
+      const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }), { concurrency });
+      const reports = await executeRules([loaded('one', makeRule()), loaded('two', makeRule())], harness.context);
+
+      assert.equal(reports.length, 2);
+      assert.equal(maxInFlight, concurrency);
+      assert.deepEqual(reports.map(report => report.name), ['one', 'two']);
+      assert.deepEqual(reports.map(report => report.evaluations.length), [3, 3]);
+    });
+  }
+});
+
 
 test('a failing evaluation stops scheduling and awaits in-flight work', async () => {
   const scope: ScopeSelector = file => Array.from({ length: 6 }, (_unused, index) => ({ id: String(index), source: file.source }));

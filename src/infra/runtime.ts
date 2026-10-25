@@ -1,22 +1,19 @@
 import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import npa from 'npm-package-arg';
 
-import { escapeDiagnostic, runProgram, type CliServices } from '../adapter/cli/program.js';
+import { runProgram } from '../adapter/cli/program.js';
 import { terminalCapabilities } from '../adapter/cli/progress.js';
-import { createRedactor } from '../adapter/cli/reports.js';
-import { createToolUpdater, installedVersion } from '../adapter/cli/self-update.js';
-import { createRuleDependencyManager } from '../adapter/filesystem/dependencies.js';
-import { createProject, resolveTarget } from '../adapter/filesystem/project.js';
-import { runRuleTests } from '../adapter/filesystem/rule-tests.js';
-import { createRuleLoader, resolveRuleSelector } from '../adapter/filesystem/rules.js';
-import { changedFiles } from '../adapter/git/changes.js';
-import { createGithubCommenter } from '../adapter/github/comments.js';
-import { createPullRequestCheckout } from '../adapter/github/pull-request.js';
-import { createSkillManager } from '../adapter/skills/cli.js';
-import { executeRules } from '../app/execute.js';
-import { createDecisionResolver } from './settings.js';
+import type {
+  CliContext,
+  CliServices,
+  DependencyOptions,
+  RuleServices,
+} from '../adapter/cli/services.js';
+import { createRedactor, escapeDiagnostic } from '../adapter/cli/text.js';
+import { installedVersion } from '../adapter/cli/version.js';
+import type { RuleDependencyManager } from '../adapter/filesystem/dependencies.js';
+import type { TokenPricing } from '../app/rule.js';
 
 const EXIT_FAILURE = 2;
 const ENVIRONMENT_FILE = '.env';
@@ -34,15 +31,29 @@ export function createServices(
   env: Readonly<Record<string, string | undefined>>,
 ): CliServices {
   const redact = createRedactor([env.TYPESAFE_API_KEY, env.GITHUB_TOKEN]);
-  const dependencies = createRuleDependencyManager({
-    ...(env.RK_DEPENDENCY_CACHE === undefined ? {} : { cacheRoot: resolve(cwd, env.RK_DEPENDENCY_CACHE) }),
-    onWarning: message => services.writeError(`rulekeeper: ${redact(escapeDiagnostic(message))}\n`),
-  });
-  const loader = createRuleLoader({ dependencies });
+  let dependenciesPromise: Promise<RuleDependencyManager> | undefined;
+  let ruleServicesPromise: Promise<RuleServices> | undefined;
+  const getDependencies = (context: CliContext): Promise<RuleDependencyManager> =>
+    dependenciesPromise ??= (async () => {
+      const { createRuleDependencyManager } = await import('../adapter/filesystem/dependencies.js');
+      return createRuleDependencyManager({
+        ...(env.RK_DEPENDENCY_CACHE === undefined ? {} : { cacheRoot: resolve(cwd, env.RK_DEPENDENCY_CACHE) }),
+        onWarning: message => context.writeError(`rulekeeper: ${context.redact(escapeDiagnostic(message))}\n`),
+      });
+    })();
+  const getRuleServices = (context: CliContext): Promise<RuleServices> =>
+    ruleServicesPromise ??= (async () => {
+      const dependencies = await getDependencies(context);
+      const { createRuleLoader, resolveRuleSelector } = await import('../adapter/filesystem/rules.js');
+      const loader = createRuleLoader({ dependencies });
+      return {
+        loadRules: selection => loader.load(selection),
+        resolveRuleSelector,
+      };
+    })();
   const services: CliServices = {
     cwd,
     version: installedVersion,
-    updateTool: createToolUpdater(cwd, env),
     redact,
     terminal: terminalCapabilities({
       stdoutIsTTY: process.stdout.isTTY === true,
@@ -50,64 +61,112 @@ export function createServices(
       get columns() { return process.stderr.columns; },
       get stdoutColumns() { return process.stdout.columns; },
     }, env),
-
-    loadRules: selection => loader.load(selection),
-
-    runRules: executeRules,
-
-    testRules: (rules, onResult, timeoutMs, concurrency, includeAI) =>
-      runRuleTests(rules, onResult, timeoutMs, concurrency, includeAI),
-
-    createProject,
-
-    resolveTarget,
-
-    changedFiles,
-
-    checkoutPullRequest: createPullRequestCheckout(cwd, env),
-
-    commentOnPullRequest: createGithubCommenter(env),
-
-    resolveRuleSelector,
-
-    manageSkill: createSkillManager(cwd, env),
-    async manageDependencies(operation, packages, options) {
-      if (options.global === true && options.directory !== undefined) {
-        throw new Error('--global and --directory are mutually exclusive');
-      }
-      const directory = options.global === true
-        ? resolve(homedir(), '.rulekeeper')
-        : resolve(cwd, options.directory ?? '.rulekeeper');
-      if (operation !== 'add' && !(await stat(directory)).isDirectory()) {
-        throw new Error(`Rule dependency directory is not a directory: ${directory}`);
-      }
-      if (operation === 'sync') {
-        const prepared = await dependencies.sync(directory);
-        this.write(redact(escapeDiagnostic(`Rule dependencies ready: ${prepared.directory}`)) + '\n');
-        return;
-      }
-      const prepared = await dependencies.change(directory, operation, packages);
-      if (operation === 'add') {
-        for (const specifier of packages) {
-          const name = npa(specifier).name!;
-          this.write(redact(escapeDiagnostic(`Added ${name}@${prepared.directVersions[name]}`)) + '\n');
-        }
-      } else {
-        for (const name of packages) this.write(redact(escapeDiagnostic(`Removed ${name}`)) + '\n');
-      }
-      this.write(redact(escapeDiagnostic(join(prepared.directory, 'rulekeeper.lock'))) + '\n');
-    },
-
-    decisionResolver(thresholdOverride, pricingOverrides) {
-      return createDecisionResolver(env, thresholdOverride, pricingOverrides);
-    },
-
     write(text) {
       process.stdout.write(text);
     },
-
     writeError(text) {
       process.stderr.write(text);
+    },
+    load: {
+      async validate(context) {
+        return getRuleServices(context);
+      },
+      async check(context) {
+        const [ruleServices, project, execution, settings] = await Promise.all([
+          getRuleServices(context),
+          import('../adapter/filesystem/project.js'),
+          import('../app/execute.js'),
+          import('./settings.js'),
+        ]);
+        return {
+          ...ruleServices,
+          createProject: project.createProject,
+          resolveTarget: project.resolveTarget,
+          runRules: execution.executeRules,
+          decisionResolver: (thresholdOverride?: number, pricingOverrides?: Partial<TokenPricing>) =>
+            settings.createDecisionResolver(env, thresholdOverride, pricingOverrides),
+          async changedFiles(root: string, base: string) {
+            const { changedFiles } = await import('../adapter/git/changes.js');
+            return changedFiles(root, base);
+          },
+          async checkoutPullRequest(selector: string, baseBranch?: string) {
+            const { createPullRequestCheckout } = await import('../adapter/github/pull-request.js');
+            return createPullRequestCheckout(cwd, env)(selector, baseBranch);
+          },
+          async commentOnPullRequest(root, comments, pullRequest) {
+            const { createGithubCommenter } = await import('../adapter/github/comments.js');
+            return createGithubCommenter(env)(root, comments, pullRequest);
+          },
+        };
+      },
+      async inspect(context) {
+        const [ruleServices, project, execution, settings] = await Promise.all([
+          getRuleServices(context),
+          import('../adapter/filesystem/project.js'),
+          import('../app/execute.js'),
+          import('./settings.js'),
+        ]);
+        return {
+          ...ruleServices,
+          createProject: project.createProject,
+          resolveTarget: project.resolveTarget,
+          runRules: execution.executeRules,
+          decisionResolver: (thresholdOverride?: number, pricingOverrides?: Partial<TokenPricing>) =>
+            settings.createDecisionResolver(env, thresholdOverride, pricingOverrides),
+        };
+      },
+      async test(context) {
+        const ruleServices = await getRuleServices(context);
+        const { runRuleTests } = await import('../adapter/filesystem/rule-tests.js');
+        return {
+          ...ruleServices,
+          testRules: (rules, onResult, timeoutMs, concurrency, includeAI) =>
+            runRuleTests(rules, onResult, timeoutMs, concurrency, includeAI),
+        };
+      },
+      async update(_context: CliContext) {
+        const { createToolUpdater } = await import('../adapter/cli/self-update.js');
+        return { updateTool: createToolUpdater(cwd, env) };
+      },
+      async skill(_context: CliContext) {
+        const { createSkillManager } = await import('../adapter/skills/cli.js');
+        return { manageSkill: createSkillManager(cwd, env) };
+      },
+      async deps(context) {
+        const dependencies = await getDependencies(context);
+        const { default: npa } = await import('npm-package-arg');
+        const manageDependencies = async (
+          operation: 'add' | 'remove' | 'sync',
+          packages: readonly string[],
+          options: DependencyOptions,
+        ): Promise<void> => {
+          if (options.global === true && options.directory !== undefined) {
+            throw new Error('--global and --directory are mutually exclusive');
+          }
+          const directory = options.global === true
+            ? resolve(homedir(), '.rulekeeper')
+            : resolve(cwd, options.directory ?? '.rulekeeper');
+          if (operation !== 'add' && !(await stat(directory)).isDirectory()) {
+            throw new Error(`Rule dependency directory is not a directory: ${directory}`);
+          }
+          if (operation === 'sync') {
+            const prepared = await dependencies.sync(directory);
+            context.write(context.redact(escapeDiagnostic(`Rule dependencies ready: ${prepared.directory}`)) + '\n');
+            return;
+          }
+          const prepared = await dependencies.change(directory, operation, packages);
+          if (operation === 'add') {
+            for (const specifier of packages) {
+              const name = npa(specifier).name!;
+              context.write(context.redact(escapeDiagnostic(`Added ${name}@${prepared.directVersions[name]}`)) + '\n');
+            }
+          } else {
+            for (const name of packages) context.write(context.redact(escapeDiagnostic(`Removed ${name}`)) + '\n');
+          }
+          context.write(context.redact(escapeDiagnostic(join(prepared.directory, 'rulekeeper.lock'))) + '\n');
+        };
+        return { manageDependencies };
+      },
     },
   };
   return services;

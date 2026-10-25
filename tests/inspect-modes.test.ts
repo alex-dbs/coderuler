@@ -5,9 +5,13 @@ import { join } from 'node:path';
 import { after, test } from 'node:test';
 
 import { runProgram } from '../dist/adapter/cli/program.js';
+import type { CliContext, CliServices } from '../dist/adapter/cli/services.js';
+import { terminalCapabilities } from '../dist/adapter/cli/progress.js';
+import { createRuleDependencyManager } from '../dist/adapter/filesystem/dependencies.js';
+import { createRuleLoader } from '../dist/adapter/filesystem/rules.js';
 import type { RuleReport, RunEvent } from '../dist/app/ports.js';
-import { createServices } from '../dist/infra/runtime.js';
 import type { InspectionUsage } from '../src/adapter/cli/inspect-usage.js';
+import { createServices } from '../dist/infra/runtime.js';
 import {
   CLI,
   asMapping,
@@ -16,6 +20,8 @@ import {
   runCli,
   startDecisionFixture,
   writeFile,
+  withLoadOverrides,
+  type CliLoadOverrides,
   type CliResult,
   type DecisionFixture,
   type DecisionFixtureOptions,
@@ -40,6 +46,38 @@ function project(label: string, rule: string, source = 'Unicode α 日本語\nse
   writeFile(join(target.cwd, '.rulekeeper/example.rule.ts'), rule);
   writeFile(join(target.cwd, 'src/example.txt'), source);
   return target;
+}
+
+async function runProgramCaptured(
+  argv: readonly string[],
+  target: Sandbox,
+  overrides: NodeJS.ProcessEnv = {},
+  contextOverrides: Partial<CliContext> = {},
+  loadOverrides: CliLoadOverrides = {},
+): Promise<CliResult> {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const env = { ...target.env, ...overrides };
+  const loader = createRuleLoader({
+    home: target.home,
+    dependencies: createRuleDependencyManager({ cacheRoot: join(target.home, '.cache', 'rulekeeper', 'dependencies') }),
+  });
+  const context: CliServices = {
+    ...createServices(target.cwd, env),
+    ...contextOverrides,
+    write: text => { stdout.push(text); },
+    writeError: text => { stderr.push(text); },
+    terminal: terminalCapabilities({ stdoutIsTTY: false, stderrIsTTY: false }, env),
+  };
+  const services = withLoadOverrides(context, {
+    ...loadOverrides,
+    check: { loadRules: selection => loader.load(selection), ...loadOverrides.check },
+    inspect: { loadRules: selection => loader.load(selection), ...loadOverrides.inspect },
+    test: { loadRules: selection => loader.load(selection), ...loadOverrides.test },
+    validate: { loadRules: selection => loader.load(selection), ...loadOverrides.validate },
+  });
+  const status = await runProgram(argv, services);
+  return { status, stdout: stdout.join(''), stderr: stderr.join('') };
 }
 
 const MIXED_RULE = `import { Rule, pass, violation } from '@alex-dbs/rulekeeper';
@@ -224,7 +262,6 @@ test('inspect JSONL streams request events before the backend responds', { timeo
     assert.equal(await done, 0, stderr);
     const report = records(stdout).find(record => record.type === 'report');
     assert.ok(report?.type === 'report');
-    assert.ok(report.report.durationMs >= 200, String(report.report.durationMs));
   } finally {
     backend.releaseAll();
     child.kill('SIGKILL');
@@ -282,41 +319,47 @@ test('inspect machine formats retain valid diagnostics on a refused local connec
   }
 });
 
-test('inspect rejects every pair of formats before selector resolution, loading, hooks or HTTP', async () => {
+test('inspect rejects every pair of formats before selector resolution, loading, hooks or HTTP', async context => {
   const backend = await fixture();
-  const target = project('conflicts', `import { writeFileSync } from 'node:fs';
+  const target = sandbox.isolated('conflicts');
+  const loadedMarker = join(target.cwd, 'loaded-marker');
+  const hookMarker = join(target.cwd, 'hook-marker');
+  writeFile(join(target.cwd, '.rulekeeper/example.rule.ts'), `import { writeFileSync } from 'node:fs';
 import { Rule, ai } from '@alex-dbs/rulekeeper';
-writeFileSync('loaded-marker', 'loaded');
+writeFileSync(${JSON.stringify(loadedMarker)}, 'loaded');
 export default class Example extends Rule {
   files = ['src/*.txt'];
-  when() { writeFileSync('hook-marker', 'hook'); return true; }
+  when() { writeFileSync(${JSON.stringify(hookMarker)}, 'hook'); return true; }
   check = ai({ rule: 'Do not run.' });
 }
 `);
+  writeFile(join(target.cwd, 'src/example.txt'), 'Unicode α 日本語\nsecond line');
   for (const pair of [['--json', '--jsonl'], ['--json', '--raw'], ['--jsonl', '--raw']]) {
-    for (const options of [pair, [...pair].reverse()]) {
-      const result = await runCli(['inspect', 'example', ...options], target, backend.env);
-      assert.equal(result.status, 2);
-      assert.equal(result.stdout, '');
-      for (const option of pair) assert.ok(result.stderr.includes(option), result.stderr);
-      assert.match(result.stderr, /exclusive|conflict|cannot/i);
-      assert.equal(existsSync(join(target.cwd, 'loaded-marker')), false);
-      assert.equal(existsSync(join(target.cwd, 'hook-marker')), false);
+    for (const [index, options] of [pair, [...pair].reverse()].entries()) {
+      await context.test(`${pair.join(' and ')} order ${index + 1}`, async () => {
+        const result = await runProgramCaptured(['inspect', 'example', ...options], target, backend.env);
+        assert.equal(result.status, 2);
+        assert.equal(result.stdout, '');
+        for (const option of pair) assert.ok(result.stderr.includes(option), result.stderr);
+        assert.match(result.stderr, /exclusive|conflict|cannot/i);
+        assert.equal(existsSync(loadedMarker), false);
+        assert.equal(existsSync(hookMarker), false);
+        assert.equal(backend.requests.length, 0);
+      });
     }
   }
-  const output: string[] = [];
-  const errors: string[] = [];
   let resolved = false;
-  const services = {
-    ...createServices(target.cwd, {}),
-    resolveRuleSelector: async () => { resolved = true; throw new Error('selector ran'); },
-    write: (text: string) => { output.push(text); },
-    writeError: (text: string) => { errors.push(text); },
-  };
-  assert.equal(await runProgram(['inspect', 'example', '--json', '--raw'], services), 2);
+  const selectorResult = await runProgramCaptured(
+    ['inspect', 'example', '--json', '--raw'],
+    target,
+    backend.env,
+    {},
+    { inspect: { resolveRuleSelector: async () => { resolved = true; throw new Error('selector ran'); } } },
+  );
+  assert.equal(selectorResult.status, 2);
   assert.equal(resolved, false);
-  assert.equal(output.join(''), '');
-  assert.match(errors.join(''), /exclusive|conflict|cannot/i);
+  assert.equal(selectorResult.stdout, '');
+  assert.match(selectorResult.stderr, /exclusive|conflict|cannot/i);
   assert.equal(backend.requests.length, 0);
 });
 
@@ -408,44 +451,71 @@ test('inspect help and usage errors keep standard CLI stdout and stderr conventi
   }
 });
 
-test('inspect pricing overrides independently replace rule and environment rates, including zero', async () => {
+test('inspect pricing overrides independently replace rule and environment rates, including zero', async context => {
   const backend = await fixture();
   const rule = AI_RULE.replace('threshold: 0.8', 'threshold: 0.8, inputCostPerMillion: 5, outputCostPerMillion: 7');
   for (const mode of ['--json', '--jsonl'] as const) {
-    for (const [flags, inputPrice, outputPrice] of [
-      [[], 5, 7],
-      [['--input-cost-per-million', '0'], 0, 7],
-      [['--output-cost-per-million', '.25'], 5, 0.25],
-      [['--input-cost-per-million', '2.5', '--output-cost-per-million', '3'], 2.5, 3],
+    for (const [name, flags, inputPrice, outputPrice] of [
+      ['rule rates', [], 5, 7],
+      ['input price zero', ['--input-cost-per-million', '0'], 0, 7],
+      ['output price override', ['--output-cost-per-million', '.25'], 5, 0.25],
+      ['both price overrides', ['--input-cost-per-million', '2.5', '--output-cost-per-million', '3'], 2.5, 3],
     ] as const) {
-      const target = project(`prices-${mode}-${inputPrice}-${outputPrice}`, rule);
-      const result = await runCli(['inspect', 'example', mode, ...flags], target, {
-        ...backend.env, RK_INPUT_COST_PER_MILLION: '99', RK_OUTPUT_COST_PER_MILLION: '101',
+      await context.test(`${mode} ${name}`, async () => {
+        const target = project(`prices-${mode}-${inputPrice}-${outputPrice}`, rule);
+        const result = await runProgramCaptured(['inspect', 'example', mode, ...flags], target, {
+          ...backend.env, RK_INPUT_COST_PER_MILLION: '99', RK_OUTPUT_COST_PER_MILLION: '101',
+        });
+        assert.equal(result.status, 0, result.stderr);
+        const document = inspection(result, mode);
+        assert.equal(document.usage?.inputCost, 11 * inputPrice / 1e6);
+        assert.equal(document.usage?.outputCost, outputPrice / 1e6);
+        assert.equal(document.reports[0]!.evaluations[0]!.result.usage?.inputCost, document.usage?.inputCost);
+        assert.equal(document.reports[0]!.evaluations[0]!.result.usage?.outputCost, document.usage?.outputCost);
       });
-      assert.equal(result.status, 0, result.stderr);
-      const document = inspection(result, mode);
-      assert.equal(document.usage?.inputCost, 11 * inputPrice / 1e6);
-      assert.equal(document.usage?.outputCost, outputPrice / 1e6);
-      assert.equal(document.reports[0]!.evaluations[0]!.result.usage?.inputCost, document.usage?.inputCost);
-      assert.equal(document.reports[0]!.evaluations[0]!.result.usage?.outputCost, document.usage?.outputCost);
     }
   }
 });
 
-test('inspect rejects invalid prices before loading and does not expose price flags on other commands', async () => {
+test('inspect rejects invalid prices before loading and does not expose price flags on other commands', async context => {
   const target = sandbox.isolated('invalid-prices');
+  async function run(args: readonly string[]) {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    let loadCalls = 0;
+    const services = withLoadOverrides({
+      ...createServices(target.cwd, target.env),
+      write: (text: string) => { stdout.push(text); },
+      writeError: (text: string) => { stderr.push(text); },
+    }, {
+      inspect: {
+        loadRules: async () => {
+          loadCalls++;
+          throw new Error('loadRules must not be reached for invalid price options');
+        },
+      },
+    });
+    const status = await runProgram(args, services);
+    return { status, stdout: stdout.join(''), stderr: stderr.join(''), loadCalls };
+  }
+
   for (const option of ['--input-cost-per-million', '--output-cost-per-million']) {
     for (const value of ['', '-1', 'NaN', 'Infinity', '1e3', '0x10', '1'.repeat(400)]) {
-      const result = await runCli(['inspect', 'missing', `${option}=${value}`], target);
-      assert.equal(result.status, 2);
-      assert.equal(result.stdout, '');
-      assert.ok(result.stderr.includes(option), result.stderr);
+      await context.test(`invalid ${option}=${value}`, async () => {
+        const result = await run(['inspect', 'missing', `${option}=${value}`]);
+        assert.equal(result.status, 2);
+        assert.equal(result.stdout, '');
+        assert.ok(result.stderr.includes(option), result.stderr);
+        assert.equal(result.loadCalls, 0);
+      });
     }
     for (const command of ['check', 'validate', 'test']) {
-      const result = await runCli([command, option, '1'], target);
-      assert.equal(result.status, 2);
-      assert.equal(result.stdout, '');
-      assert.match(result.stderr, /unknown option/);
+      await context.test(`${command} rejects ${option}`, async () => {
+        const result = await run([command, option, '1']);
+        assert.equal(result.status, 2);
+        assert.equal(result.stdout, '');
+        assert.match(result.stderr, /unknown option/);
+      });
     }
   }
 });

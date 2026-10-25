@@ -1,29 +1,47 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { runProgram, type CliServices } from '../dist/adapter/cli/program.js';
+import { runProgram } from '../dist/adapter/cli/program.js';
+import type { CheckServices, CliContext, CliServices } from '../dist/adapter/cli/services.js';
 import { createProgress, terminalCapabilities } from '../dist/adapter/cli/progress.js';
 import type { RuleReport } from '../dist/app/ports.js';
 import type { RuleTestResult } from '../dist/app/rule-tests.js';
 import { createServices } from '../dist/infra/runtime.js';
+import { withLoadOverrides, type CliLoadOverrides } from './support.ts';
 
 const TTY = { stdoutIsTTY: true, stderrIsTTY: true, columns: 80 };
 const REPORT: RuleReport = { name: 'example', ruleFile: '/rules/example.rule.ts', status: 'pass', durationMs: 4.25, evaluations: [] };
 const TEST_RESULT: RuleTestResult = { ruleName: 'example', name: 'first case', expected: 'pass', actual: 'pass', durationMs: 12.5 };
 
-function fixture(overrides: Partial<CliServices> = {}) {
+function fixture(contextOverrides: Partial<CliContext> = {}, loadOverrides: CliLoadOverrides = {}) {
   const stdout: string[] = [];
   const stderr: string[] = [];
-  const services: CliServices = {
+  const context: CliServices = {
     ...createServices('/project', {}),
     terminal: { color: false, interactive: true, columns: 80 },
-    resolveTarget: async () => ({ root: '/project', path: '.', kind: 'directory', contains: () => true }),
-    loadRules: async () => [],
-    runRules: async () => [REPORT],
     write: text => { stdout.push(text); },
     writeError: text => { stderr.push(text); },
-    ...overrides,
+    ...contextOverrides,
   };
+  const services = withLoadOverrides(context, {
+    ...loadOverrides,
+    check: {
+      resolveTarget: async () => ({ root: '/project', path: '.', kind: 'directory', contains: () => true }),
+      loadRules: async () => [],
+      runRules: async () => [REPORT],
+      ...loadOverrides.check,
+    },
+    test: {
+      loadRules: async () => [],
+      testRules: async () => [],
+      ...loadOverrides.test,
+    },
+    inspect: {
+      resolveTarget: async () => ({ root: '/project', path: '.', kind: 'directory', contains: () => true }),
+      loadRules: async () => [],
+      ...loadOverrides.inspect,
+    },
+  });
   return { services, stdout, stderr };
 }
 
@@ -136,27 +154,30 @@ test('progress messages reset phase rendering and clearing preserves the animati
 test('interactive check starts feedback before target and rule loading and clears before its summary', async context => {
   context.mock.timers.enable({ apis: ['setInterval'] });
   const target = fixture();
-  const services: CliServices = {
+  const services = withLoadOverrides({
     ...target.services,
-    resolveTarget: async () => {
-      assert.ok(target.stderr.length > 0);
-      context.mock.timers.tick(160);
-      return { root: '/project', path: '.', kind: 'directory', contains: () => true };
-    },
-    loadRules: async () => {
-      assert.ok(target.stderr.length > 1);
-      return [];
-    },
-    runRules: async (_rules, run) => {
-      run.emit?.({ type: 'progress', phase: 'selection', completed: 0, total: 0 });
-      run.emit?.({ type: 'progress', phase: 'evaluation', completed: 0, total: 0 });
-      return [REPORT];
-    },
     write: text => {
       assert.equal(target.stderr.at(-1), '\r\u001b[2K');
       target.stdout.push(text);
     },
-  };
+  }, {
+    check: {
+      resolveTarget: async () => {
+        assert.ok(target.stderr.length > 0);
+        context.mock.timers.tick(160);
+        return { root: '/project', path: '.', kind: 'directory', contains: () => true };
+      },
+      loadRules: async () => {
+        assert.ok(target.stderr.length > 1);
+        return [];
+      },
+      runRules: async (_rules, run) => {
+        run.emit?.({ type: 'progress', phase: 'selection', completed: 0, total: 0 });
+        run.emit?.({ type: 'progress', phase: 'evaluation', completed: 0, total: 0 });
+        return [REPORT];
+      },
+    },
+  });
   assert.equal(await runProgram(['check'], services), 0);
   assert.ok(target.stdout.join('').includes('1'));
   const count = target.stderr.length;
@@ -167,7 +188,7 @@ test('interactive check starts feedback before target and rule loading and clear
 test('interactive check clears progress and cancels animation after loading or evaluation errors', async context => {
   context.mock.timers.enable({ apis: ['setInterval'] });
   for (const stage of ['resolveTarget', 'loadRules', 'runRules'] as const) {
-    const target = fixture({ [stage]: async () => { throw new Error('intentional failure'); } });
+    const target = fixture({}, { check: { [stage]: async () => { throw new Error('intentional failure'); } } });
     assert.equal(await runProgram(['check'], target.services), 2);
     assert.equal(target.stdout.join(''), '');
     assert.equal(target.stderr.at(-2), '\r\u001b[2K');
@@ -205,9 +226,8 @@ test('machine modes, diagnostic modes and noninteractive services never animate'
 
 test('empty machine runs retain total duration only in JSON and emit no JSONL records or progress', async () => {
   for (const option of ['--json', '--jsonl']) {
-    const target = fixture({
-      terminal: { color: true, interactive: true, columns: 80 },
-      runRules: async () => [],
+    const target = fixture({ terminal: { color: true, interactive: true, columns: 80 } }, {
+      check: { runRules: async () => [] },
     });
     assert.equal(await runProgram(['check', option], target.services), 0);
     assert.equal(target.stderr.join(''), '');
@@ -239,45 +259,48 @@ test('interactive tests animate while pending and clear each result before resum
   const second = { ...TEST_RESULT, name: 'second case' };
   const third = { ...TEST_RESULT, ruleName: 'another-rule', name: 'third case' };
   const target = fixture();
-  const services: CliServices = {
+  const services = withLoadOverrides({
     ...target.services,
-    loadRules: async () => {
-      assert.ok(target.stderr.length > 0);
-      assert.equal(target.stdout.length, 0);
-      context.mock.timers.tick(160);
-      assert.ok(target.stderr.length > 1);
-      return [];
-    },
-    testRules: async (_rules, onResult) => {
-      assert.notEqual(target.stderr.at(-1), '\r\u001b[2K');
-      onResult(TEST_RESULT, false);
-      const firstOutput = target.stdout.join('');
-      assert.equal(firstOutput.split('\n')[0], TEST_RESULT.ruleName);
-      assert.match(firstOutput, /^├─ PASS /m);
-      assert.ok(firstOutput.includes(TEST_RESULT.name));
-      assert.equal(firstOutput.includes(second.name), false);
-      assert.equal(firstOutput.includes(third.ruleName), false);
-      assert.notEqual(target.stderr.at(-1), '\r\u001b[2K');
-      entered.resolve();
-      await pending.promise;
-      onResult(second, true);
-      const secondOutput = target.stdout.join('');
-      assert.match(secondOutput, /^└─ PASS /m);
-      assert.ok(secondOutput.includes(second.name));
-      assert.equal(secondOutput.split('\n').filter(line => line === TEST_RESULT.ruleName).length, 1);
-      assert.notEqual(target.stderr.at(-1), '\r\u001b[2K');
-      onResult(third, true);
-      const thirdOutput = target.stdout.join('');
-      assert.ok(thirdOutput.includes(`\n\n${third.ruleName}\n`));
-      assert.ok(thirdOutput.includes(`└─ PASS ${third.name}`));
-      assert.notEqual(target.stderr.at(-1), '\r\u001b[2K');
-      return [TEST_RESULT, second, third];
-    },
     write: text => {
       assert.equal(target.stderr.at(-1), '\r\u001b[2K');
       target.stdout.push(text);
     },
-  };
+  }, {
+    test: {
+      loadRules: async () => {
+        assert.ok(target.stderr.length > 0);
+        assert.equal(target.stdout.length, 0);
+        context.mock.timers.tick(160);
+        assert.ok(target.stderr.length > 1);
+        return [];
+      },
+      testRules: async (_rules, onResult) => {
+        assert.notEqual(target.stderr.at(-1), '\r\u001b[2K');
+        onResult(TEST_RESULT, false);
+        const firstOutput = target.stdout.join('');
+        assert.equal(firstOutput.split('\n')[0], TEST_RESULT.ruleName);
+        assert.match(firstOutput, /^├─ PASS /m);
+        assert.ok(firstOutput.includes(TEST_RESULT.name));
+        assert.equal(firstOutput.includes(second.name), false);
+        assert.equal(firstOutput.includes(third.ruleName), false);
+        assert.notEqual(target.stderr.at(-1), '\r\u001b[2K');
+        entered.resolve();
+        await pending.promise;
+        onResult(second, true);
+        const secondOutput = target.stdout.join('');
+        assert.match(secondOutput, /^└─ PASS /m);
+        assert.ok(secondOutput.includes(second.name));
+        assert.equal(secondOutput.split('\n').filter(line => line === TEST_RESULT.ruleName).length, 1);
+        assert.notEqual(target.stderr.at(-1), '\r\u001b[2K');
+        onResult(third, true);
+        const thirdOutput = target.stdout.join('');
+        assert.ok(thirdOutput.includes(`\n\n${third.ruleName}\n`));
+        assert.ok(thirdOutput.includes(`└─ PASS ${third.name}`));
+        assert.notEqual(target.stderr.at(-1), '\r\u001b[2K');
+        return [TEST_RESULT, second, third];
+      },
+    },
+  });
   const running = runProgram(['test'], services);
   await entered.promise;
   const firstFrame = target.stderr.at(-1);
@@ -302,25 +325,28 @@ test('interactive tests clear and cancel animation on load errors or errors afte
   context.mock.timers.enable({ apis: ['setInterval'] });
   for (const stage of ['loading', 'testing'] as const) {
     const target = fixture();
-    const services: CliServices = {
+    const services = withLoadOverrides({
       ...target.services,
-      loadRules: async () => {
-        context.mock.timers.tick(80);
-        if (stage === 'loading') throw new Error('intentional load failure');
-        return [];
-      },
-      testRules: async (_rules, onResult) => {
-        onResult(TEST_RESULT, false);
-        assert.match(target.stdout.join(''), /^├─ PASS /m);
-        assert.ok(target.stdout.join('').includes(TEST_RESULT.name));
-        context.mock.timers.tick(160);
-        throw new Error('intentional later failure');
-      },
       write: text => {
         assert.equal(target.stderr.at(-1), '\r\u001b[2K');
         target.stdout.push(text);
       },
-    };
+    }, {
+      test: {
+        loadRules: async () => {
+          context.mock.timers.tick(80);
+          if (stage === 'loading') throw new Error('intentional load failure');
+          return [];
+        },
+        testRules: async (_rules, onResult) => {
+          onResult(TEST_RESULT, false);
+          assert.match(target.stdout.join(''), /^├─ PASS /m);
+          assert.ok(target.stdout.join('').includes(TEST_RESULT.name));
+          context.mock.timers.tick(160);
+          throw new Error('intentional later failure');
+        },
+      },
+    });
     assert.equal(await runProgram(['test'], services), 2);
     const output = target.stdout.join('');
     if (stage === 'loading') assert.equal(output, '');
@@ -343,18 +369,21 @@ test('noninteractive tests stream results without starting an animation', async 
   for (const terminal of [undefined, { color: false, interactive: false, columns: 80 }]) {
     const target = fixture();
     const { terminal: _terminal, ...withoutTerminal } = target.services;
-    const services: CliServices = {
+    const services = withLoadOverrides({
       ...withoutTerminal,
       ...(terminal === undefined ? {} : { terminal }),
-      testRules: async (_rules, onResult) => {
-        onResult(TEST_RESULT, true);
-        assert.match(target.stdout.join(''), /^└─ PASS /m);
-        assert.ok(target.stdout.join('').includes(TEST_RESULT.name));
-        context.mock.timers.tick(160);
-        assert.equal(target.stderr.join(''), '');
-        return [TEST_RESULT];
+    }, {
+      test: {
+        testRules: async (_rules, onResult) => {
+          onResult(TEST_RESULT, true);
+          assert.match(target.stdout.join(''), /^└─ PASS /m);
+          assert.ok(target.stdout.join('').includes(TEST_RESULT.name));
+          context.mock.timers.tick(160);
+          assert.equal(target.stderr.join(''), '');
+          return [TEST_RESULT];
+        },
       },
-    };
+    });
     assert.equal(await runProgram(['test'], services), 0);
     context.mock.timers.tick(1000);
     assert.equal(target.stderr.join(''), '');
@@ -371,10 +400,11 @@ test('invalid test timeouts fail before loading or running any case', async () =
   ]) {
     let loaded = false;
     let tested = false;
-    const target = fixture({
-      terminal: { color: false, interactive: false },
-      loadRules: async () => { loaded = true; return []; },
-      testRules: async () => { tested = true; return []; },
+    const target = fixture({ terminal: { color: false, interactive: false } }, {
+      test: {
+        loadRules: async () => { loaded = true; return []; },
+        testRules: async () => { tested = true; return []; },
+      },
     });
     assert.equal(await runProgram(['test', '--timeout', duration], target.services), 2, duration);
     assert.equal(loaded, false, duration);
@@ -390,19 +420,22 @@ test('test summary sums case durations rather than discovery, rendering, or elap
   const timeout: RuleTestResult = { ...TEST_RESULT, actual: 'timeout', durationMs: 125 };
   const second: RuleTestResult = { ...TEST_RESULT, name: 'second case', durationMs: 875 };
   const target = fixture({ terminal: { color: false, interactive: false } });
-  const services: CliServices = {
+  const services = withLoadOverrides({
     ...target.services,
-    loadRules: async () => { clock += 30_000; return []; },
-    testRules: async (_rules, onResult) => {
-      clock += 20_000;
-      onResult(timeout, false);
-      clock += 40_000;
-      onResult(second, true);
-      clock += 50_000;
-      return [timeout, second];
-    },
     write: text => { clock += 10_000; target.stdout.push(text); },
-  };
+  }, {
+    test: {
+      loadRules: async () => { clock += 30_000; return []; },
+      testRules: async (_rules, onResult) => {
+        clock += 20_000;
+        onResult(timeout, false);
+        clock += 40_000;
+        onResult(second, true);
+        clock += 50_000;
+        return [timeout, second];
+      },
+    },
+  });
   assert.equal(await runProgram(['test'], services), 1);
   const output = target.stdout.join('');
   assert.match(output, /├─ FAIL .*actual timeout.*\(125\.00ms\)/);
@@ -422,19 +455,21 @@ test('CLI card rendering receives live widths, preserves concurrency, and closes
   for (const mode of ['inspect', 'verbose'] as const) {
     for (const fails of [false, true]) {
       let columns = 32;
+      const runRules: CheckServices['runRules'] = async (_rules, run) => {
+        assert.equal(run.concurrency, mode === 'inspect' ? 1 : 3);
+        run.emit?.({ type: 'evaluation', evaluationId: 1, name: 'example', subject });
+        run.emit?.({ type: 'result', evaluationId: 1, name: 'example', subject, result: { status: 'pass' } });
+        columns = 44;
+        run.emit?.({ type: 'evaluation', evaluationId: 2, name: 'example', subject });
+        run.emit?.({ type: 'trace', evaluationId: 2, name: 'example', message: 'before failure' });
+        if (fails) throw new Error('failure without terminal event');
+        return [REPORT];
+      };
       const target = fixture({
         terminal: { color: false, interactive: false, get columns() { return columns; } },
-        resolveRuleSelector: async () => ({ name: 'example' }),
-        runRules: async (_rules, run) => {
-          assert.equal(run.concurrency, mode === 'inspect' ? 1 : 3);
-          run.emit?.({ type: 'evaluation', evaluationId: 1, name: 'example', subject });
-          run.emit?.({ type: 'result', evaluationId: 1, name: 'example', subject, result: { status: 'pass' } });
-          columns = 44;
-          run.emit?.({ type: 'evaluation', evaluationId: 2, name: 'example', subject });
-          run.emit?.({ type: 'trace', evaluationId: 2, name: 'example', message: 'before failure' });
-          if (fails) throw new Error('failure without terminal event');
-          return [REPORT];
-        },
+      }, {
+        check: { runRules },
+        inspect: { resolveRuleSelector: async () => ({ name: 'example' }), runRules },
       });
       const args = mode === 'inspect' ? ['inspect', 'example'] : ['check', '--verbose', '--concurrency', '3'];
       assert.equal(await runProgram(args, target.services), fails ? 2 : 0);
@@ -479,15 +514,15 @@ test('inspect uses stdout width while verbose keeps stderr width and injected co
     [synthetic, 44, 44],
   ] as const) {
     for (const mode of ['inspect', 'verbose'] as const) {
-      const target = fixture({
-        terminal,
-        resolveRuleSelector: async () => ({ name: 'example' }),
-        runRules: async (_rules, run) => {
-          const subject = { kind: 'scope' as const, filepath: 'src/example.txt', id: '$', source: 'example' };
-          run.emit?.({ type: 'evaluation', evaluationId: 1, name: 'example', subject });
-          run.emit?.({ type: 'result', evaluationId: 1, name: 'example', subject, result: { status: 'pass' } });
-          return [REPORT];
-        },
+      const runRules: CheckServices['runRules'] = async (_rules, run) => {
+        const subject = { kind: 'scope' as const, filepath: 'src/example.txt', id: '$', source: 'example' };
+        run.emit?.({ type: 'evaluation', evaluationId: 1, name: 'example', subject });
+        run.emit?.({ type: 'result', evaluationId: 1, name: 'example', subject, result: { status: 'pass' } });
+        return [REPORT];
+      };
+      const target = fixture({ terminal }, {
+        check: { runRules },
+        inspect: { resolveRuleSelector: async () => ({ name: 'example' }), runRules },
       });
       assert.equal(await runProgram(mode === 'inspect' ? ['inspect', 'example'] : ['check', '--verbose'], target.services), 0);
       const output = (mode === 'inspect' ? target.stdout : target.stderr).join('');

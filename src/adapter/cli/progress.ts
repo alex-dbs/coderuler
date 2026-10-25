@@ -1,5 +1,5 @@
 import type { RunEvent } from '../../app/ports.js';
-import type { TextWriter } from './reports.js';
+import type { TextWriter } from './text.js';
 
 const FRAMES = ['-', '\\', '|', '/'];
 const FRAME_INTERVAL = 80;

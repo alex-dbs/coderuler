@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { constants as fsConstants, readFileSync } from 'node:fs';
+import { constants as fsConstants } from 'node:fs';
 import { access, realpath } from 'node:fs/promises';
 import { constants as osConstants } from 'node:os';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
@@ -7,11 +7,6 @@ import { fileURLToPath } from 'node:url';
 
 const PACKAGE_NAME = '@alex-dbs/rulekeeper';
 const PACKAGE_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
-const manifest = JSON.parse(readFileSync(new URL('../../../package.json', import.meta.url), 'utf8')) as {
-  readonly version: string;
-};
-
-export const installedVersion = manifest.version;
 
 const UPDATE_INSTRUCTIONS = 'Self-update requires the active global npm installation. For project-local installs, run npm install --save-dev @alex-dbs/rulekeeper@latest. Otherwise use your package manager or reinstall with npm install --global @alex-dbs/rulekeeper@latest.';
 

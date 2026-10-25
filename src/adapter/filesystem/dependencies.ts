@@ -6,11 +6,8 @@ import type { ClientRequest, RequestOptions } from 'node:http';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import Arborist from '@npmcli/arborist';
-import PackageJson from '@npmcli/package-json';
 import { currentEnv } from 'npm-install-checks';
 import npa from 'npm-package-arg';
-import pacote from 'pacote';
 import { parse as parseIntegrity } from 'ssri';
 import { prepareRuleDependencySdk, publishRuleDependencyInstallation, withRuleDependencyDirectoryLock } from './dependency-installation.js';
 
@@ -302,6 +299,8 @@ async function validateExtracted(directory: string, location: string, locked: Ma
   }
   if (hasBundledDependencies(raw.bundleDependencies) || hasBundledDependencies(raw.bundledDependencies)) throw new Error(`${name}: bundled dependencies are unsupported`);
   await inspectArtifacts(directory, name);
+  // A static import would load package validation tooling for every CLI invocation.
+  const { default: PackageJson } = await import('@npmcli/package-json');
   const normalized = await new PackageJson().fromContent(structuredClone(raw)).normalize({ steps: PackageJson.normalizeSteps.filter(step => step !== '_attributes') });
   const manifest = normalized.content;
   for (const field of dependencyFields) dependencyMap(manifest, field, name);
@@ -376,6 +375,8 @@ async function install(directory: string, cacheRoot: string, previous: Snapshot,
     // An explicitly empty lock needs only an SDK installation, not npm graph work.
     if (request || previous.key !== 'empty') {
       await stageLock(stage, previous);
+      // A static import would load npm's graph stack during ordinary rule loading.
+      const { default: Arborist } = await import('@npmcli/arborist');
       const arborist = new Arborist({ ...policy, engineStrict: true, savePrefix: '', path: stage, cache: join(cacheRoot, 'tarballs') });
       const tree = await arborist.buildIdealTree(request);
       const exact: Record<string, string> = Object.create(null);
@@ -403,6 +404,8 @@ async function install(directory: string, cacheRoot: string, previous: Snapshot,
         const audit = await mkdtemp(join(stage, '.audit-'));
         try {
           // Inspect each raw artifact in isolation, including npm's omitted optional branches.
+          // A static import would load registry extraction tooling during ordinary checks.
+          const { default: pacote } = await import('pacote');
           await pacote.extract(entry.resolved as string, audit, { ...policy, allowRemote: 'all', integrity: entry.integrity, cache: join(cacheRoot, 'tarballs') });
           await validateExtracted(audit, node.location, entry);
         } finally { await rm(audit, { recursive: true, force: true }); }

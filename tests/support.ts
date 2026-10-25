@@ -5,7 +5,43 @@ import { createServer, type IncomingHttpHeaders, type ServerResponse } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type {
+  CheckServices,
+  CliContext,
+  CliServices,
+  DependencyServices,
+  InspectServices,
+  SkillServices,
+  TestServices,
+  UpdateServices,
+  ValidateServices,
+} from '../dist/adapter/cli/services.js';
 import type { AiUsage } from '../dist/index.js';
+
+export type CliLoadOverrides = {
+  readonly check?: Partial<CheckServices>;
+  readonly inspect?: Partial<InspectServices>;
+  readonly test?: Partial<TestServices>;
+  readonly validate?: Partial<ValidateServices>;
+  readonly update?: Partial<UpdateServices>;
+  readonly skill?: Partial<SkillServices>;
+  readonly deps?: Partial<DependencyServices>;
+};
+
+export function withLoadOverrides(services: CliServices, overrides: CliLoadOverrides): CliServices {
+  return {
+    ...services,
+    load: {
+      check: async (context: CliContext) => ({ ...await services.load.check(context), ...overrides.check }),
+      inspect: async (context: CliContext) => ({ ...await services.load.inspect(context), ...overrides.inspect }),
+      test: async (context: CliContext) => ({ ...await services.load.test(context), ...overrides.test }),
+      validate: async (context: CliContext) => ({ ...await services.load.validate(context), ...overrides.validate }),
+      update: async (context: CliContext) => ({ ...await services.load.update(context), ...overrides.update }),
+      skill: async (context: CliContext) => ({ ...await services.load.skill(context), ...overrides.skill }),
+      deps: async (context: CliContext) => ({ ...await services.load.deps(context), ...overrides.deps }),
+    },
+  };
+}
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -156,12 +192,6 @@ export function listTree(root: string): readonly string[] {
   };
   walk(root);
   return entries;
-}
-
-export function delay(ms: number): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  setTimeout(resolve, ms);
-  return promise;
 }
 
 export function asMapping(value: unknown, where: string): Record<string, unknown> {
@@ -472,16 +502,14 @@ export interface DecisionFixture {
   readonly requests: DecisionRequestRecord[];
   probability: number;
   model: string;
-  limit: number | undefined;
   answer: (request: DecisionRequestRecord, index: number) => DecisionReply;
   readonly active: number;
   readonly peak: number;
-  readonly violations: number;
   heldKeys(): readonly string[];
   waitForRequests(count: number): Promise<void>;
-  waitForSilence(): Promise<void>;
   release(key: string): void;
   releaseAll(): void;
+  resume(): void;
   reset(): void;
   close(): Promise<void>;
 }
@@ -489,8 +517,6 @@ export interface DecisionFixture {
 const FIXTURE_PROBABILITY = 0.9;
 const FIXTURE_MODEL = 'testmodel';
 const FIXTURE_API_KEY = 'fixture-key';
-const QUIET_MS = 250;
-const POLL_MS = 10;
 const WAIT_TIMEOUT_MS = 20_000;
 const DRAIN_TIMEOUT_MS = 20_000;
 
@@ -539,18 +565,15 @@ export function requestQuestion(record: DecisionRequestRecord): Record<string, u
 }
 
 export function startDecisionFixture(options: DecisionFixtureOptions = {}): Promise<DecisionFixture> {
-  const hold = options.hold ?? false;
+  let hold = options.hold ?? false;
   const apiKey = options.apiKey ?? FIXTURE_API_KEY;
   const requests: DecisionRequestRecord[] = [];
   const held: { readonly request: DecisionRequestRecord; readonly response: ServerResponse }[] = [];
-  const watchers = new Set<() => void>();
+  const watchers = new Set<(error?: Error) => void>();
   let probability = options.probability ?? FIXTURE_PROBABILITY;
   let model = options.model ?? FIXTURE_MODEL;
   let active = 0;
   let peak = 0;
-  let limit: number | undefined;
-  let violations = 0;
-  let lastArrival = 0;
   let origin = '';
   let answerFn: DecisionFixture['answer'] = () => ({});
 
@@ -577,6 +600,9 @@ export function startDecisionFixture(options: DecisionFixtureOptions = {}): Prom
     active -= 1;
     deliver(entry.request, entry.response);
   };
+  const releaseAll = (): void => {
+    for (const entry of held.splice(0, held.length)) respond(entry);
+  };
 
   const { promise, resolve: settle, reject } = Promise.withResolvers<DecisionFixture>();
 
@@ -602,12 +628,10 @@ export function startDecisionFixture(options: DecisionFixtureOptions = {}): Prom
         raw,
       };
       requests.push(record);
-      lastArrival = Date.now();
       if (hold) {
         held.push({ request: record, response });
         active += 1;
         peak = Math.max(peak, active);
-        if (limit !== undefined && active > limit) violations += 1;
       } else {
         deliver(record, response);
       }
@@ -616,36 +640,33 @@ export function startDecisionFixture(options: DecisionFixtureOptions = {}): Prom
   });
 
   const waitForRequests = (count: number): Promise<void> => {
+    if (requests.length >= count) return Promise.resolve();
     const { promise, resolve: settle, reject: fail } = Promise.withResolvers<void>();
-    const deadline = Date.now() + WAIT_TIMEOUT_MS;
-    const finish = (): void => {
-      clearInterval(interval);
+    let timeout: NodeJS.Timeout | undefined;
+    const finish = (error?: Error): void => {
+      clearTimeout(timeout);
       watchers.delete(onArrival);
+      if (error === undefined) settle();
+      else fail(error);
     };
-    const onArrival = (): void => {
-      if (requests.length < count || Date.now() - lastArrival < QUIET_MS) return;
-      finish();
-      settle();
-    };
-    const onTick = (): void => {
-      if (requests.length >= count && Date.now() - lastArrival >= QUIET_MS) {
-        finish();
-        settle();
+    const onArrival = (error?: Error): void => {
+      if (error !== undefined) {
+        finish(error);
         return;
       }
-      if (Date.now() >= deadline) {
-        finish();
-        fail(new Error(`expected ${count} decisions, saw ${requests.length}`));
-      }
+      if (requests.length >= count) finish();
     };
-    const interval = setInterval(onTick, POLL_MS);
+    timeout = setTimeout(
+      () => finish(new Error(`expected ${count} decisions, saw ${requests.length}`)),
+      WAIT_TIMEOUT_MS,
+    );
     watchers.add(onArrival);
-    onTick();
+    onArrival();
     return promise;
   };
 
   server.on('error', (error: Error) => {
-    for (const watcher of [...watchers]) watcher();
+    for (const watcher of [...watchers]) watcher(error);
     reject(error);
   });
 
@@ -677,12 +698,6 @@ export function startDecisionFixture(options: DecisionFixtureOptions = {}): Prom
       set model(value: string) {
         model = value;
       },
-      get limit(): number | undefined {
-        return limit;
-      },
-      set limit(value: number | undefined) {
-        limit = value;
-      },
       get answer(): DecisionFixture['answer'] {
         return answerFn;
       },
@@ -695,12 +710,8 @@ export function startDecisionFixture(options: DecisionFixtureOptions = {}): Prom
       get peak(): number {
         return peak;
       },
-      get violations(): number {
-        return violations;
-      },
       heldKeys: () => held.map(entry => decisionKey(entry.request.body)),
       waitForRequests,
-      waitForSilence: () => waitForRequests(requests.length),
       release: (key: string) => {
         const index = held.findIndex(entry => decisionKey(entry.request.body) === key);
         if (index < 0) {
@@ -709,23 +720,25 @@ export function startDecisionFixture(options: DecisionFixtureOptions = {}): Prom
         }
         respond(held.splice(index, 1)[0]!);
       },
-      releaseAll: () => {
-        for (const entry of held.splice(0, held.length)) respond(entry);
+      releaseAll,
+      resume(): void {
+        hold = false;
+        releaseAll();
       },
       reset(): void {
         requests.length = 0;
         active = 0;
         peak = 0;
-        violations = 0;
-        limit = undefined;
         probability = FIXTURE_PROBABILITY;
         answerFn = () => ({});
       },
       close(): Promise<void> {
+        const error = new Error('decision fixture closed before requested decisions arrived');
+        for (const watcher of [...watchers]) watcher(error);
         const stopped = Promise.withResolvers<void>();
-        server.close(error => {
-          if (error === undefined) stopped.resolve();
-          else stopped.reject(error);
+        server.close(closeError => {
+          if (closeError === undefined) stopped.resolve();
+          else stopped.reject(closeError);
         });
         server.closeAllConnections();
         return stopped.promise;
@@ -739,25 +752,26 @@ export async function releaseUntilDone(
   fixture: DecisionFixture,
   run: CliRun,
 ): Promise<CliResult> {
-  let settled = false;
-  const tracked = run.finally(() => {
-    settled = true;
-  });
-  tracked.catch(() => {});
-  const deadline = Date.now() + DRAIN_TIMEOUT_MS;
-  while (!settled) {
-    if (Date.now() >= deadline) {
-      run.terminate();
-      try {
-        await tracked;
-      } catch {
-      }
-      throw new Error(
-        `the check did not finish within ${DRAIN_TIMEOUT_MS}ms after ${fixture.requests.length} decisions; the child was terminated`,
-      );
+  fixture.resume();
+  let timeout: NodeJS.Timeout | undefined;
+  let requestCountAtTimeout = 0;
+  const { promise: timedOut, resolve: expire } = Promise.withResolvers<void>();
+  timeout = setTimeout(() => {
+    requestCountAtTimeout = fixture.requests.length;
+    expire();
+  }, DRAIN_TIMEOUT_MS);
+  try {
+    const result = await Promise.race([run, timedOut]);
+    if (result !== undefined) return result;
+    run.terminate();
+    try {
+      await run;
+    } catch {
     }
-    await delay(20);
-    fixture.releaseAll();
+    throw new Error(
+      `the check did not finish within ${DRAIN_TIMEOUT_MS}ms after ${requestCountAtTimeout} decisions; the child was terminated`,
+    );
+  } finally {
+    clearTimeout(timeout);
   }
-  return tracked;
 }

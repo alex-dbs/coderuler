@@ -3,7 +3,8 @@ import { test } from 'node:test';
 import { stripVTControlCharacters } from 'node:util';
 
 import { createInspectJsonRenderer } from '../dist/adapter/cli/inspect-json.js';
-import { createInspectRenderer, createRedactor, createWalkthroughRenderer } from '../dist/adapter/cli/reports.js';
+import { createInspectRenderer, createWalkthroughRenderer } from '../dist/adapter/cli/reports.js';
+import { createRedactor } from '../dist/adapter/cli/text.js';
 import type { InspectionUsage } from '../src/adapter/cli/inspect-usage.js';
 import type { RuleReport, RunEvent } from '../src/app/ports.js';
 import type { AiUsage, ScopeSubject } from '../src/app/rule.js';

@@ -10,12 +10,11 @@ import type { AiUsage, JsonValue, ScopeSubject, Subject } from '../../app/rule.j
 import { addUsage } from '../../app/usage.js';
 import type { ViolationComment } from '../../app/violation-comments.js';
 import { createUsageTracker } from './inspect-usage.js';
+import { escapeText, type TextRedactor, type TextWriter } from './text.js';
 
 const MAX_VIOLATIONS = 10;
 const MAX_SOURCE_LINES = 5;
 const MAX_GROUP_MEMBERS = 5;
-const REDACTED = '[REDACTED]';
-const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/g;
 const TAB_WIDTH = 4;
 const GRAPHEMES = new Intl.Segmenter();
 const STYLE_CLOSE: Readonly<Record<number, number>> = { 1: 22, 2: 22, 31: 39, 32: 39, 33: 39, 36: 39, 90: 39 };
@@ -45,16 +44,8 @@ function sourceText(line: string): string {
   return rendered + escapeText(line.slice(start));
 }
 
-export type TextWriter = (text: string) => void;
-export type TextRedactor = (text: string) => string;
 export type RuleHeadings = (name: string) => readonly string[];
 
-export function escapeText(text: string): string {
-  return text.replace(
-    CONTROL_CHARACTERS,
-    character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`,
-  );
-}
 
 export function renderRuleTestHeading(ruleName: string, redact: TextRedactor, color: boolean): string {
   return `${paint(escapeText(redact(ruleName)), 'bold', color)}\n`;
@@ -90,29 +81,6 @@ export function renderRuleTestSummary(
   return `${passing}, ${failing}${safe(`  Time: ${formatDuration(durationMs)}`)}\n`;
 }
 
-export function createRedactor(values: readonly (string | undefined)[]): TextRedactor {
-  const needles = new Set<string>();
-  for (const value of values) {
-    if (value === undefined || value.trim() === '') continue;
-    for (const candidate of [value, value.trim()]) {
-      needles.add(candidate);
-      needles.add(escapeText(candidate));
-      needles.add(JSON.stringify(candidate).slice(1, -1));
-    }
-  }
-  const replacements = [...needles]
-    .filter(needle => needle !== '')
-    .sort((left, right) => right.length - left.length)
-    .map(needle => [needle, needle.replace(/[^\r\n]+/g, REDACTED)] as const);
-  if (replacements.length === 0) return text => text;
-  return text => {
-    let redacted = text;
-    for (const [needle, replacement] of replacements) {
-      redacted = redacted.replaceAll(needle, replacement);
-    }
-    return redacted;
-  };
-}
 
 function reasonSuffix(reason: string | undefined): string {
   return reason === undefined ? '' : ` (${escapeText(reason)})`;
