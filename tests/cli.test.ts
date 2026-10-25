@@ -3,7 +3,7 @@ import { lstat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 
-import { runProgram, type CliServices } from '../dist/adapter/cli/program.js';
+import { runProgram } from '../dist/adapter/cli/program.js';
 import { terminalCapabilities } from '../dist/adapter/cli/progress.js';
 import { createRuleDependencyManager } from '../dist/adapter/filesystem/dependencies.js';
 import { createRuleLoader } from '../dist/adapter/filesystem/rules.js';
@@ -27,6 +27,7 @@ import {
   scopeSubjects,
   startDecisionFixture,
   writeFile,
+  withLoadOverrides,
   type DecisionFixture,
   type DecisionFixtureOptions,
   type Sandbox,
@@ -56,13 +57,17 @@ async function runCommand(argv: readonly string[], target: Sandbox, overrides: N
     home: target.home,
     dependencies: createRuleDependencyManager({ cacheRoot: join(target.home, '.cache', 'rulekeeper', 'dependencies') }),
   });
-  const services: CliServices = {
+  const services = withLoadOverrides({
     ...createServices(target.cwd, env),
-    loadRules: selection => loader.load(selection),
     write: text => { stdout.push(text); },
     writeError: text => { stderr.push(text); },
     terminal: terminalCapabilities({ stdoutIsTTY: false, stderrIsTTY: false }, env),
-  };
+  }, {
+    check: { loadRules: selection => loader.load(selection) },
+    inspect: { loadRules: selection => loader.load(selection) },
+    test: { loadRules: selection => loader.load(selection) },
+    validate: { loadRules: selection => loader.load(selection) },
+  });
   const status = await runProgram(argv, services);
   return { status, stdout: stdout.join(''), stderr: stderr.join('') } satisfies CliResult;
 }

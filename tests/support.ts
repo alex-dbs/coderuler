@@ -5,7 +5,43 @@ import { createServer, type IncomingHttpHeaders, type ServerResponse } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type {
+  CheckServices,
+  CliContext,
+  CliServices,
+  DependencyServices,
+  InspectServices,
+  SkillServices,
+  TestServices,
+  UpdateServices,
+  ValidateServices,
+} from '../dist/adapter/cli/services.js';
 import type { AiUsage } from '../dist/index.js';
+
+export type CliLoadOverrides = {
+  readonly check?: Partial<CheckServices>;
+  readonly inspect?: Partial<InspectServices>;
+  readonly test?: Partial<TestServices>;
+  readonly validate?: Partial<ValidateServices>;
+  readonly update?: Partial<UpdateServices>;
+  readonly skill?: Partial<SkillServices>;
+  readonly deps?: Partial<DependencyServices>;
+};
+
+export function withLoadOverrides(services: CliServices, overrides: CliLoadOverrides): CliServices {
+  return {
+    ...services,
+    load: {
+      check: async (context: CliContext) => ({ ...await services.load.check(context), ...overrides.check }),
+      inspect: async (context: CliContext) => ({ ...await services.load.inspect(context), ...overrides.inspect }),
+      test: async (context: CliContext) => ({ ...await services.load.test(context), ...overrides.test }),
+      validate: async (context: CliContext) => ({ ...await services.load.validate(context), ...overrides.validate }),
+      update: async (context: CliContext) => ({ ...await services.load.update(context), ...overrides.update }),
+      skill: async (context: CliContext) => ({ ...await services.load.skill(context), ...overrides.skill }),
+      deps: async (context: CliContext) => ({ ...await services.load.deps(context), ...overrides.deps }),
+    },
+  };
+}
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 

@@ -4,13 +4,14 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 
-import { runProgram, type CliServices } from '../dist/adapter/cli/program.js';
+import { runProgram } from '../dist/adapter/cli/program.js';
+import type { CliContext, CliServices } from '../dist/adapter/cli/services.js';
 import { terminalCapabilities } from '../dist/adapter/cli/progress.js';
 import { createRuleDependencyManager } from '../dist/adapter/filesystem/dependencies.js';
 import { createRuleLoader } from '../dist/adapter/filesystem/rules.js';
 import type { RuleReport, RunEvent } from '../dist/app/ports.js';
-import { createServices } from '../dist/infra/runtime.js';
 import type { InspectionUsage } from '../src/adapter/cli/inspect-usage.js';
+import { createServices } from '../dist/infra/runtime.js';
 import {
   CLI,
   asMapping,
@@ -19,6 +20,8 @@ import {
   runCli,
   startDecisionFixture,
   writeFile,
+  withLoadOverrides,
+  type CliLoadOverrides,
   type CliResult,
   type DecisionFixture,
   type DecisionFixtureOptions,
@@ -49,7 +52,8 @@ async function runProgramCaptured(
   argv: readonly string[],
   target: Sandbox,
   overrides: NodeJS.ProcessEnv = {},
-  serviceOverrides: Partial<CliServices> = {},
+  contextOverrides: Partial<CliContext> = {},
+  loadOverrides: CliLoadOverrides = {},
 ): Promise<CliResult> {
   const stdout: string[] = [];
   const stderr: string[] = [];
@@ -58,14 +62,20 @@ async function runProgramCaptured(
     home: target.home,
     dependencies: createRuleDependencyManager({ cacheRoot: join(target.home, '.cache', 'rulekeeper', 'dependencies') }),
   });
-  const services: CliServices = {
+  const context: CliServices = {
     ...createServices(target.cwd, env),
-    loadRules: selection => loader.load(selection),
-    ...serviceOverrides,
+    ...contextOverrides,
     write: text => { stdout.push(text); },
     writeError: text => { stderr.push(text); },
     terminal: terminalCapabilities({ stdoutIsTTY: false, stderrIsTTY: false }, env),
   };
+  const services = withLoadOverrides(context, {
+    ...loadOverrides,
+    check: { loadRules: selection => loader.load(selection), ...loadOverrides.check },
+    inspect: { loadRules: selection => loader.load(selection), ...loadOverrides.inspect },
+    test: { loadRules: selection => loader.load(selection), ...loadOverrides.test },
+    validate: { loadRules: selection => loader.load(selection), ...loadOverrides.validate },
+  });
   const status = await runProgram(argv, services);
   return { status, stdout: stdout.join(''), stderr: stderr.join('') };
 }
@@ -343,7 +353,8 @@ export default class Example extends Rule {
     ['inspect', 'example', '--json', '--raw'],
     target,
     backend.env,
-    { resolveRuleSelector: async () => { resolved = true; throw new Error('selector ran'); } },
+    {},
+    { inspect: { resolveRuleSelector: async () => { resolved = true; throw new Error('selector ran'); } } },
   );
   assert.equal(selectorResult.status, 2);
   assert.equal(resolved, false);
@@ -472,15 +483,18 @@ test('inspect rejects invalid prices before loading and does not expose price fl
     const stdout: string[] = [];
     const stderr: string[] = [];
     let loadCalls = 0;
-    const services = {
+    const services = withLoadOverrides({
       ...createServices(target.cwd, target.env),
-      loadRules: async () => {
-        loadCalls++;
-        throw new Error('loadRules must not be reached for invalid price options');
-      },
       write: (text: string) => { stdout.push(text); },
       writeError: (text: string) => { stderr.push(text); },
-    };
+    }, {
+      inspect: {
+        loadRules: async () => {
+          loadCalls++;
+          throw new Error('loadRules must not be reached for invalid price options');
+        },
+      },
+    });
     const status = await runProgram(args, services);
     return { status, stdout: stdout.join(''), stderr: stderr.join(''), loadCalls };
   }

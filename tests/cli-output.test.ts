@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 
-import { runProgram, type CliServices } from '../dist/adapter/cli/program.js';
+import { runProgram } from '../dist/adapter/cli/program.js';
+import type { CliContext, CliServices } from '../dist/adapter/cli/services.js';
 import { terminalCapabilities } from '../dist/adapter/cli/progress.js';
 import { createRuleDependencyManager } from '../dist/adapter/filesystem/dependencies.js';
 import { createRuleLoader } from '../dist/adapter/filesystem/rules.js';
@@ -17,7 +18,9 @@ import {
   writeFile,
   type CheckReportShape,
   type CliResult,
+  type CliLoadOverrides,
   type Sandbox,
+  withLoadOverrides,
 } from './support.ts';
 
 const sandbox = createSandbox('rulekeeper-cli-output-');
@@ -80,13 +83,17 @@ async function runCommand(argv: readonly string[], target: Sandbox, overrides: N
     home: target.home,
     dependencies: createRuleDependencyManager({ cacheRoot: join(target.home, '.cache', 'rulekeeper', 'dependencies') }),
   });
-  const services: CliServices = {
+  const services = withLoadOverrides({
     ...createServices(target.cwd, env),
-    loadRules: selection => loader.load(selection),
     write: text => { stdout.push(text); },
     writeError: text => { stderr.push(text); },
     terminal: terminalCapabilities({ stdoutIsTTY: false, stderrIsTTY: false }, env),
-  };
+  }, {
+    check: { loadRules: selection => loader.load(selection) },
+    inspect: { loadRules: selection => loader.load(selection) },
+    test: { loadRules: selection => loader.load(selection) },
+    validate: { loadRules: selection => loader.load(selection) },
+  });
   const status = await runProgram(argv, services);
   return { status, stdout: stdout.join(''), stderr: stderr.join('') };
 }
@@ -327,19 +334,29 @@ test('real console uses bold red violation names and green checkmarks and passin
   assert.equal(terminalCapabilities({ stdoutIsTTY: true, stderrIsTTY: true }, { NO_COLOR: '' }).color, false);
 });
 
-function injected(reports: readonly RuleReport[], overrides: Partial<CliServices> = {}) {
+function injected(
+  reports: readonly RuleReport[],
+  contextOverrides: Partial<CliContext> = {},
+  loadOverrides: CliLoadOverrides = {},
+) {
   const stdout: string[] = [];
   const stderr: string[] = [];
-  const services: CliServices = {
+  const context: CliServices = {
     ...createServices('/project', {}),
     terminal: { color: true, interactive: true, columns: 80 },
-    resolveTarget: async () => ({ root: '/project', path: '.', kind: 'directory', contains: () => true }),
-    loadRules: async () => [],
-    runRules: async () => reports,
     write: text => { stdout.push(text); },
     writeError: text => { stderr.push(text); },
-    ...overrides,
+    ...contextOverrides,
   };
+  const services = withLoadOverrides(context, {
+    ...loadOverrides,
+    check: {
+      resolveTarget: async () => ({ root: '/project', path: '.', kind: 'directory', contains: () => true }),
+      loadRules: async () => [],
+      runRules: async () => reports,
+      ...loadOverrides.check,
+    },
+  });
   return { services, stdout, stderr };
 }
 
@@ -350,23 +367,27 @@ test('duration measures only the monotonic awaited runRules boundary in every ou
     for (const outputAll of [false, true]) {
       let runCompleted = false;
       const base = createServices('/project', {});
+      const baseCheck = await base.load.check(base);
       const target = injected([], {
         terminal: { color: false, interactive: false },
-        resolveTarget: async () => {
-          clock = 100;
-          return { root: '/project', path: '.', kind: 'directory', contains: () => true };
-        },
-        loadRules: async () => { clock = 200; return []; },
-        createProject: (...args) => { clock = 500; return base.createProject(...args); },
-        decisionResolver: threshold => { clock = 1000; return base.decisionResolver(threshold); },
-        runRules: async () => {
-          clock = 1005;
-          await Promise.resolve();
-          clock = 1037.5;
-          runCompleted = true;
-          return [];
-        },
         redact: text => { clock = 9000; return text; },
+      }, {
+        check: {
+          resolveTarget: async () => {
+            clock = 100;
+            return { root: '/project', path: '.', kind: 'directory', contains: () => true };
+          },
+          loadRules: async () => { clock = 200; return []; },
+          createProject: (...args) => { clock = 500; return baseCheck.createProject(...args); },
+          decisionResolver: threshold => { clock = 1000; return baseCheck.decisionResolver(threshold); },
+          runRules: async () => {
+            clock = 1005;
+            await Promise.resolve();
+            clock = 1037.5;
+            runCompleted = true;
+            return [];
+          },
+        },
       });
       assert.equal(await runProgram(['check', ...mode, ...(outputAll ? ['--output-all'] : [])], target.services), 0);
       assert.equal(runCompleted, true);
@@ -422,7 +443,7 @@ test('clean, all-skipped and no-subject real runs retain rule durations with out
 test('machine failures leave stdout empty with output-all and mutually exclusive formats still fail', async () => {
   for (const mode of ['--json', '--jsonl']) {
     for (const stage of ['resolveTarget', 'loadRules', 'runRules'] as const) {
-      const target = injected([], { [stage]: async () => { throw new Error('evaluation failed'); } });
+      const target = injected([], {}, { check: { [stage]: async () => { throw new Error('evaluation failed'); } } });
       assert.equal(await runProgram(['check', mode, '--output-all'], target.services), 2);
       assert.equal(target.stdout.join(''), '');
       assert.match(target.stderr.join(''), /evaluation failed/);

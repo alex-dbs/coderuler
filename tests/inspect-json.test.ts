@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { createInspectJsonRenderer } from '../dist/adapter/cli/inspect-json.js';
-import { createRedactor } from '../dist/adapter/cli/reports.js';
+import { createRedactor } from '../dist/adapter/cli/text.js';
 import type { RuleReport, RunEvent } from '../src/app/ports.js';
 import type { GroupSubject, JsonValue, ScopeSubject } from '../src/app/rule.js';
 
