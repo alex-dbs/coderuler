@@ -23,5 +23,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+        env:
+          NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
       - run: node dist/cli.js deps sync
       - run: npm run typecheck

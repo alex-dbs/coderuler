@@ -48,6 +48,25 @@ async function decisionFixture(options: DecisionFixtureOptions = {}): Promise<De
   return fixture;
 }
 
+async function runCommand(argv: readonly string[], target: Sandbox, overrides: NodeJS.ProcessEnv = {}): Promise<CliResult> {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const env = { ...target.env, ...overrides };
+  const loader = createRuleLoader({
+    home: target.home,
+    dependencies: createRuleDependencyManager({ cacheRoot: join(target.home, '.cache', 'rulekeeper', 'dependencies') }),
+  });
+  const services: CliServices = {
+    ...createServices(target.cwd, env),
+    loadRules: selection => loader.load(selection),
+    write: text => { stdout.push(text); },
+    writeError: text => { stderr.push(text); },
+    terminal: terminalCapabilities({ stdoutIsTTY: false, stderrIsTTY: false }, env),
+  };
+  const status = await runProgram(argv, services);
+  return { status, stdout: stdout.join(''), stderr: stderr.join('') } satisfies CliResult;
+}
+
 function writeFiles(target: Sandbox, files: Readonly<Record<string, string>>): void {
   for (const [path, contents] of Object.entries(files)) writeFile(join(target.cwd, path), contents);
 }
@@ -586,7 +605,7 @@ export default class extends Rule {
     },
   ] as const;
   for (const { name, args, names, status } of cases) {
-    const result = await runCli(['check', '--json', '--output-all', ...args], target);
+    const result = await runCommand(['check', '--json', '--output-all', ...args], target);
     assert.equal(result.status, status, `${name}: ${result.stderr}`);
     const reports = parseCheckOutput(result, name);
     assert.deepEqual(reports.map(report => report.name).sort(), names, name);
@@ -1293,32 +1312,14 @@ test('check and inspect report the effective flag, rule, environment and default
     { label: 'above default', rule: 'basic', env: undefined, flag: undefined, probability: 0.41, threshold: 0.4, status: 'pass' },
   ] as const;
 
-  async function runThresholdCommand(argv: readonly string[], overrides: NodeJS.ProcessEnv) {
-    const stdout: string[] = [];
-    const stderr: string[] = [];
-    const env = { ...target.env, ...overrides };
-    const loader = createRuleLoader({
-      home: target.home,
-      dependencies: createRuleDependencyManager({ cacheRoot: join(target.home, '.cache', 'rulekeeper', 'dependencies') }),
-    });
-    const services: CliServices = {
-      ...createServices(target.cwd, env),
-      loadRules: selection => loader.load(selection),
-      write: text => { stdout.push(text); },
-      writeError: text => { stderr.push(text); },
-      terminal: terminalCapabilities({ stdoutIsTTY: false, stderrIsTTY: false }, env),
-    };
-    const status = await runProgram(argv, services);
-    return { status, stdout: stdout.join(''), stderr: stderr.join('') } satisfies CliResult;
-  }
-
   for (const entry of cases) {
     fixture.probability = entry.probability;
     const env = { ...fixture.env, RK_THRESHOLD: entry.env };
     const flags = entry.flag === undefined ? [] : ['--threshold', entry.flag];
     for (const mode of ['--json', '--jsonl'] as const) {
-      const result = await runThresholdCommand(
+      const result = await runCommand(
         ['check', mode, '--output-all', '--rules', `.rulekeeper/${entry.rule}.rule.ts`, ...flags],
+        target,
         env,
       );
       assert.equal(result.status, entry.status === 'pass' ? 0 : 1, `${entry.label}: ${result.stderr}`);
@@ -1330,10 +1331,11 @@ test('check and inspect report the effective flag, rule, environment and default
       assert.equal(evaluation.probability, entry.probability, entry.label);
       assert.equal(evaluation.threshold, entry.threshold, entry.label);
     }
-    const inspected = await runThresholdCommand(
+    const inspected = await runCommand(
       entry.flag === undefined
         ? ['inspect', entry.rule]
         : ['check', '--verbose', '--output-all', '--rules', `.rulekeeper/${entry.rule}.rule.ts`, ...flags],
+      target,
       env,
     );
     assert.equal(inspected.status, entry.status === 'pass' ? 0 : 1, `${entry.label}: ${inspected.stderr}`);
@@ -1828,15 +1830,15 @@ test('implicit help commands exit 0 while invalid help targets and usage errors 
     ['validate', '--help'],
     ['inspect', '--help'],
   ]) {
-    const result = await runCli(args, target);
+    const result = await runCommand(args, target);
     assert.equal(result.status, 0, `${args.join(' ')}: ${result.stderr}`);
     assert.notEqual(result.stdout, '', `${args.join(' ')} must print help on stdout`);
     assert.equal(result.stderr, '', `${args.join(' ')} must not write diagnostics: ${result.stderr}`);
   }
   for (const args of [['help', 'nope'], ['help', 'stats'], ['check', '--bogus']]) {
-    expectFailure(await runCli(args, target), `usage ${args.join(' ')}`);
+    expectFailure(await runCommand(args, target), `usage ${args.join(' ')}`);
   }
-  expectFailure(await runCli(['check', 'missing-dir'], target), 'runtime target failure');
+  expectFailure(await runCommand(['check', 'missing-dir'], target), 'runtime target failure');
 });
 
 async function caseInsensitiveFilesystem(root: string): Promise<boolean> {
