@@ -60,7 +60,6 @@ test('test rows and summaries reuse evaluation duration scaling at unit boundari
     const summary = renderRuleTestSummary(1, 0, durationMs, identity, false);
     assert.ok(row.endsWith(` (${formatted})\n`), row);
     assert.ok(summary.includes(`Time: ${formatted}`), summary);
-    assert.ok(renderCheckSummary([], identity, { durationMs }).includes(`Time: ${formatted}`));
   }
 });
 

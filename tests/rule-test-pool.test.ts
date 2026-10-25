@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { createServer, type ServerResponse } from 'node:http';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
@@ -9,14 +10,73 @@ import { CLI, createSandbox, runCli, writeFile } from './support.ts';
 const sandbox = createSandbox('rulekeeper-test-pool-');
 after(() => sandbox.cleanup());
 
-const WAIT_FOR = `const waitFor = async path => {
-  // Real polling observes cross-worker markers without relying on lossy filesystem notifications.
-  while (!existsSync(path)) {
-    const { promise, resolve } = Promise.withResolvers();
-    setTimeout(resolve, 5);
-    await promise;
-  }
+async function startGate(): Promise<{ url: string; signal(key: string): void; close(): Promise<void> }> {
+  const signaled = new Set<string>();
+  const pending = new Map<string, ServerResponse[]>();
+  const signal = (key: string): void => {
+    signaled.add(key);
+    for (const response of pending.get(key) ?? []) {
+      response.statusCode = 204;
+      response.end();
+    }
+    pending.delete(key);
+  };
+  const server = createServer((request, response) => {
+    const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+    const key = url.searchParams.get('key')!;
+    if (request.method === 'GET' && url.pathname === '/wait') {
+      if (signaled.has(key)) {
+        response.statusCode = 204;
+        response.end();
+      } else {
+        const waiters = pending.get(key);
+        if (waiters) waiters.push(response);
+        else pending.set(key, [response]);
+      }
+      return;
+    }
+    if (request.method === 'POST' && url.pathname === '/signal') {
+      signal(key);
+      response.statusCode = 204;
+      response.end();
+      return;
+    }
+    response.statusCode = 404;
+    response.end();
+  });
+  const listening = Promise.withResolvers<void>();
+  server.once('error', listening.reject);
+  server.listen(0, '127.0.0.1', () => {
+    server.off('error', listening.reject);
+    listening.resolve();
+  });
+  await listening.promise;
+  const address = server.address();
+  assert.ok(address !== null && typeof address === 'object');
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    signal,
+    close: async () => {
+      pending.clear();
+      server.closeAllConnections();
+      const closed = Promise.withResolvers<void>();
+      server.close(error => error ? closed.reject(error) : closed.resolve());
+      await closed.promise;
+    },
+  };
+}
+
+function gateHelpers(url: string): string {
+  return `const gateUrl = ${JSON.stringify(url)};
+const waitFor = async key => {
+  const response = await fetch(gateUrl + '/wait?key=' + encodeURIComponent(key));
+  if (!response.ok) throw new Error('test gate request failed');
+};
+const signal = async key => {
+  const response = await fetch(gateUrl + '/signal?key=' + encodeURIComponent(key), { method: 'POST' });
+  if (!response.ok) throw new Error('test gate request failed');
 };`;
+}
 
 function cases(names: readonly string[]): string {
   return names.map(name => `test(${JSON.stringify(name)}).withFiles({ 'inputs/one.txt': ${JSON.stringify(name)} }).passes()`).join(',\n');
@@ -26,15 +86,19 @@ test('test runs eight cases concurrently with explicit concurrency', { timeout: 
   const target = sandbox.isolated('explicit-eight');
   const names = Array.from({ length: 8 }, (_, index) => `case-${index}`);
   const markers = names.map(name => join(target.root, name));
-  writeFile(join(target.cwd, '.rulekeeper/barrier.rule.ts'), `import { existsSync, writeFileSync } from 'node:fs';
+  const gate = await startGate();
+  context.after(() => gate.close());
+  writeFile(join(target.cwd, '.rulekeeper/barrier.rule.ts'), `import { writeFileSync } from 'node:fs';
 import { threadId } from 'node:worker_threads';
 import { Rule, pass, test } from '@alex-dbs/rulekeeper';
-${WAIT_FOR}
+${gateHelpers(gate.url)}
 const markers = ${JSON.stringify(markers)};
 export default class Barrier extends Rule {
   files = ['inputs/*.txt'];
   check = async subject => {
-    writeFileSync(${JSON.stringify(target.root)} + '/' + subject.source, String(threadId));
+    const marker = ${JSON.stringify(target.root)} + '/' + subject.source;
+    writeFileSync(marker, String(threadId));
+    await signal(marker);
     await Promise.all(markers.map(waitFor));
     return pass();
   };
@@ -76,6 +140,8 @@ export const tests = [${cases(names.filter(name => name.startsWith(suite)))}];`)
 
 test('test bounds worker count and reuses workers and shared helpers across rule suites', { timeout: 30_000 }, async context => {
   const target = sandbox.isolated('reuse');
+  const gate = await startGate();
+  context.after(() => gate.close());
   const imports = join(target.root, 'helper-imports.jsonl');
   writeFile(join(target.cwd, '.rulekeeper/shared.js'), `import { appendFileSync } from 'node:fs';
 import { threadId } from 'node:worker_threads';
@@ -84,15 +150,17 @@ export const worker = threadId;`);
   const suites = ['first', 'second'];
   for (const suite of suites) {
     const names = Array.from({ length: 4 }, (_, index) => `${suite}-${index}`);
-    writeFile(join(target.cwd, '.rulekeeper', `${suite}.rule.ts`), `import { existsSync, writeFileSync } from 'node:fs';
+    writeFile(join(target.cwd, '.rulekeeper', `${suite}.rule.ts`), `import { writeFileSync } from 'node:fs';
 import { Rule, pass, test } from '@alex-dbs/rulekeeper';
 import { worker } from './shared.js';
-${WAIT_FOR}
+${gateHelpers(gate.url)}
 export default class Reuse extends Rule {
   files = ['inputs/*.txt'];
   check = async subject => {
     const name = subject.source;
-    writeFileSync(${JSON.stringify(target.root)} + '/' + name, String(worker));
+    const marker = ${JSON.stringify(target.root)} + '/' + name;
+    writeFileSync(marker, String(worker));
+    await signal(marker);
     const index = Number(name.at(-1));
     await waitFor(${JSON.stringify(target.root)} + '/' + name.slice(0, -1) + (index ^ 1));
     return pass();
@@ -116,15 +184,18 @@ test('test streams completed cases in declaration order before the suite finishe
   const target = sandbox.isolated('ordered-output');
   const laterFinished = join(target.root, 'later-finished');
   const streamed = join(target.root, 'first-result-streamed');
-  writeFile(join(target.cwd, '.rulekeeper/order.rule.ts'), `import { existsSync, writeFileSync } from 'node:fs';
+  const gate = await startGate();
+  context.after(() => gate.close());
+  writeFile(join(target.cwd, '.rulekeeper/order.rule.ts'), `import { writeFileSync } from 'node:fs';
 import { Rule, pass, test } from '@alex-dbs/rulekeeper';
-${WAIT_FOR}
+${gateHelpers(gate.url)}
 export default class Ordered extends Rule {
   files = ['inputs/*.txt'];
   check = async subject => {
     if (subject.source === 'first') await waitFor(${JSON.stringify(laterFinished)});
     if (subject.source === 'third') {
       writeFileSync(${JSON.stringify(laterFinished)}, 'second completed and third started');
+      await signal(${JSON.stringify(laterFinished)});
       await waitFor(${JSON.stringify(streamed)});
     }
     return pass();
@@ -143,7 +214,10 @@ export const tests = [${cases(['first', 'second', 'third'])}];`);
   child.stderr.setEncoding('utf8');
   child.stdout.on('data', (chunk: string) => {
     stdout += chunk;
-    if (stdout.includes('PASS first (') && !existsSync(streamed)) writeFile(streamed, 'released');
+    if (stdout.includes('PASS first (') && !existsSync(streamed)) {
+      writeFile(streamed, 'released');
+      gate.signal(streamed);
+    }
   });
   child.stderr.on('data', (chunk: string) => { stderr += chunk; });
   const { promise, resolve, reject } = Promise.withResolvers<number | null>();
@@ -160,9 +234,11 @@ test('test cancels a hanging sibling on operational error and cleans every activ
   const hanging = join(target.root, 'hanging-root');
   const throwing = join(target.root, 'throwing-root');
   const unscheduled = join(target.root, 'must-not-start');
-  writeFile(join(target.cwd, '.rulekeeper/cancel.rule.ts'), `import { existsSync, writeFileSync } from 'node:fs';
+  const gate = await startGate();
+  context.after(() => gate.close());
+  writeFile(join(target.cwd, '.rulekeeper/cancel.rule.ts'), `import { writeFileSync } from 'node:fs';
 import { Rule, pass, test } from '@alex-dbs/rulekeeper';
-${WAIT_FOR}
+${gateHelpers(gate.url)}
 export default class Cancel extends Rule {
   files = ['inputs/*.txt'];
   root;
@@ -170,6 +246,7 @@ export default class Cancel extends Rule {
   check = async subject => {
     if (subject.source === 'hanging') {
       writeFileSync(${JSON.stringify(hanging)}, this.root);
+      await signal(${JSON.stringify(hanging)});
       while (true) {}
     }
     if (subject.source === 'throwing') {
@@ -199,9 +276,11 @@ test('test cancels active cases when an idle worker crashes after emitting its r
   const firstRoot = join(target.root, 'first-root');
   const hangingRoot = join(target.root, 'hanging-root');
   const release = join(target.root, 'release-background-error');
-  writeFile(join(target.cwd, '.rulekeeper/background.rule.ts'), `import { existsSync, writeFileSync } from 'node:fs';
+  const gate = await startGate();
+  context.after(() => gate.close());
+  writeFile(join(target.cwd, '.rulekeeper/background.rule.ts'), `import { writeFileSync } from 'node:fs';
 import { Rule, pass, test } from '@alex-dbs/rulekeeper';
-${WAIT_FOR}
+${gateHelpers(gate.url)}
 export default class Background extends Rule {
   files = ['inputs/*.txt'];
   root;
@@ -209,6 +288,7 @@ export default class Background extends Rule {
   check = async subject => {
     if (subject.source === 'hanging') {
       writeFileSync(${JSON.stringify(hangingRoot)}, this.root);
+      await signal(${JSON.stringify(hangingRoot)});
       while (true) {}
     }
     writeFileSync(${JSON.stringify(firstRoot)}, this.root);
@@ -236,6 +316,7 @@ export const tests = [${cases(['first', 'hanging'])}];`);
     if (stdout.includes('PASS first (') && !existsSync(release)) {
       firstCleanAtRelease = !existsSync(readFileSync(firstRoot, 'utf8'));
       writeFile(release, 'crash idle worker');
+      gate.signal(release);
     }
   });
   child.stderr.on('data', (chunk: string) => { stderr += chunk; });
@@ -255,16 +336,20 @@ test('test replaces only a timed-out worker and reuses its healthy peer in the n
   const target = sandbox.isolated('replace-timeout');
   const root = JSON.stringify(target.root);
   const names = ['hanging', 'healthy', 'next-first', 'next-second'];
-  writeFile(join(target.cwd, '.rulekeeper/first.rule.ts'), `import { existsSync, writeFileSync } from 'node:fs';
+  const gate = await startGate();
+  context.after(() => gate.close());
+  writeFile(join(target.cwd, '.rulekeeper/first.rule.ts'), `import { writeFileSync } from 'node:fs';
 import { threadId } from 'node:worker_threads';
 import { Rule, pass, test } from '@alex-dbs/rulekeeper';
-${WAIT_FOR}
+${gateHelpers(gate.url)}
 export default class Deadline extends Rule {
   files = ['inputs/*.txt'];
   root;
   when({ project }) { this.root = project.root; return true; }
   check = async subject => {
-    writeFileSync(${root} + '/' + subject.source, JSON.stringify({ threadId, root: this.root }));
+    const marker = ${root} + '/' + subject.source;
+    writeFileSync(marker, JSON.stringify({ threadId, root: this.root }));
+    await signal(marker);
     if (subject.source === 'hanging') {
       await waitFor(${root} + '/healthy');
       while (true) {}
@@ -273,16 +358,18 @@ export default class Deadline extends Rule {
   };
 }
 export const tests = [${cases(names.slice(0, 2))}];`);
-  writeFile(join(target.cwd, '.rulekeeper/second.rule.ts'), `import { existsSync, writeFileSync } from 'node:fs';
+  writeFile(join(target.cwd, '.rulekeeper/second.rule.ts'), `import { writeFileSync } from 'node:fs';
 import { threadId } from 'node:worker_threads';
 import { Rule, pass, test } from '@alex-dbs/rulekeeper';
-${WAIT_FOR}
+${gateHelpers(gate.url)}
 export default class Recovery extends Rule {
   files = ['inputs/*.txt'];
   root;
   when({ project }) { this.root = project.root; return true; }
   check = async subject => {
-    writeFileSync(${root} + '/' + subject.source, JSON.stringify({ threadId, root: this.root }));
+    const marker = ${root} + '/' + subject.source;
+    writeFileSync(marker, JSON.stringify({ threadId, root: this.root }));
+    await signal(marker);
     await waitFor(${root} + '/' + (subject.source === 'next-first' ? 'next-second' : 'next-first'));
     return pass();
   };

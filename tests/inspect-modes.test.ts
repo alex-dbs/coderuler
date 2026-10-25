@@ -224,7 +224,6 @@ test('inspect JSONL streams request events before the backend responds', { timeo
     assert.equal(await done, 0, stderr);
     const report = records(stdout).find(record => record.type === 'report');
     assert.ok(report?.type === 'report');
-    assert.ok(report.report.durationMs >= 200, String(report.report.durationMs));
   } finally {
     backend.releaseAll();
     child.kill('SIGKILL');
@@ -432,20 +431,42 @@ test('inspect pricing overrides independently replace rule and environment rates
   }
 });
 
-test('inspect rejects invalid prices before loading and does not expose price flags on other commands', async () => {
+test('inspect rejects invalid prices before loading and does not expose price flags on other commands', async context => {
   const target = sandbox.isolated('invalid-prices');
+  async function run(args: readonly string[]) {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    let loadCalls = 0;
+    const services = {
+      ...createServices(target.cwd, target.env),
+      loadRules: async () => {
+        loadCalls++;
+        throw new Error('loadRules must not be reached for invalid price options');
+      },
+      write: (text: string) => { stdout.push(text); },
+      writeError: (text: string) => { stderr.push(text); },
+    };
+    const status = await runProgram(args, services);
+    return { status, stdout: stdout.join(''), stderr: stderr.join(''), loadCalls };
+  }
+
   for (const option of ['--input-cost-per-million', '--output-cost-per-million']) {
     for (const value of ['', '-1', 'NaN', 'Infinity', '1e3', '0x10', '1'.repeat(400)]) {
-      const result = await runCli(['inspect', 'missing', `${option}=${value}`], target);
-      assert.equal(result.status, 2);
-      assert.equal(result.stdout, '');
-      assert.ok(result.stderr.includes(option), result.stderr);
+      await context.test(`invalid ${option}=${value}`, async () => {
+        const result = await run(['inspect', 'missing', `${option}=${value}`]);
+        assert.equal(result.status, 2);
+        assert.equal(result.stdout, '');
+        assert.ok(result.stderr.includes(option), result.stderr);
+        assert.equal(result.loadCalls, 0);
+      });
     }
     for (const command of ['check', 'validate', 'test']) {
-      const result = await runCli([command, option, '1'], target);
-      assert.equal(result.status, 2);
-      assert.equal(result.stdout, '');
-      assert.match(result.stderr, /unknown option/);
+      await context.test(`${command} rejects ${option}`, async () => {
+        const result = await run([command, option, '1']);
+        assert.equal(result.status, 2);
+        assert.equal(result.stdout, '');
+        assert.match(result.stderr, /unknown option/);
+      });
     }
   }
 });

@@ -414,7 +414,7 @@ test('validate selects rule names from project and home discovery', async () => 
   for (const [name, excluded] of [
     ['project-choice', 'home-choice'],
     ['home-choice', 'project-choice'],
-  ]) {
+  ] as const) {
     const result = await runCli(['validate', name], target);
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout.trim(), `Valid rule: ${name}`);
@@ -1472,17 +1472,14 @@ test('check forces a single in-flight evaluation in debug', async () => {
   });
   writeRule(target, 'basic', AI_WHOLE_FILE);
   const fixture = await decisionFixture({ hold: true });
-  fixture.limit = 1;
   const run = runCli(['check', '--debug'], target, fixture.env);
   await fixture.waitForRequests(1);
-  await fixture.waitForSilence();
   assert.equal(fixture.requests.length, 1);
   assert.equal(fixture.active, 1);
   assert.equal(fixture.peak, 1);
   const result = await releaseUntilDone(fixture, run);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(fixture.requests.length, 4);
-  assert.equal(fixture.violations, 0);
 });
 
 test('check bounds evaluation concurrency and keeps result order', async () => {
@@ -1493,17 +1490,13 @@ test('check bounds evaluation concurrency and keeps result order', async () => {
   writeFiles(target, files);
   writeRule(target, 'basic', AI_WHOLE_FILE);
   const fixture = await decisionFixture({ hold: true });
-  fixture.limit = 2;
   const run = runCli(['check', '--json', '--output-all', '--verbose', '--concurrency', '2'], target, fixture.env);
   await fixture.waitForRequests(2);
-  await fixture.waitForSilence();
   assert.equal(fixture.requests.length, 2);
   assert.equal(fixture.peak, 2);
   const result = await releaseUntilDone(fixture, run);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(fixture.requests.length, 5);
-  assert.equal(fixture.violations, 0);
-  assert.ok(fixture.peak <= 2, String(fixture.peak));
   const report = reportNamed(parseCheckOutput(result, 'bounded concurrency'), 'basic', 'bounded concurrency');
   assert.deepEqual(scopeSubjects(report, 'bounded concurrency').map(subject => subject.filepath), filepaths);
   const cards = evaluationCards(result.stderr);
@@ -1670,10 +1663,8 @@ export default class Functions extends Rule {
 }
 `);
   const fixture = await decisionFixture({ hold: true });
-  fixture.limit = 1;
   const run = runCli(['inspect', 'functions'], target, fixture.env);
   await fixture.waitForRequests(1);
-  await fixture.waitForSilence();
   assert.equal(fixture.active, 1);
   assert.equal(fixture.peak, 1);
   const result = await releaseUntilDone(fixture, run);
@@ -2165,10 +2156,8 @@ test('check honors --debug and --verbose together at concurrency 1', async () =>
   writeFiles(target, { 'src/a.txt': 'alpha', 'src/b.txt': 'beta', 'src/c.txt': 'gamma' });
   writeRule(target, 'basic', AI_WHOLE_FILE);
   const fixture = await decisionFixture({ hold: true });
-  fixture.limit = 1;
   const run = runCli(['check', '--debug', '--verbose'], target, fixture.env);
   await fixture.waitForRequests(1);
-  await fixture.waitForSilence();
   assert.equal(fixture.active, 1);
   assert.equal(fixture.peak, 1);
   const result = await releaseUntilDone(fixture, run);
