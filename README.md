@@ -1,10 +1,10 @@
 <p align="center">
+
   <img src="rulekeeper-icon.webp" alt="Rulekeeper shield logo" width="144">
+
 </p>
 
-Do your AI  agents keep missing rules from your prompts / AGENTS.md? If repeated agent reviews are eating time and tokens, move those policies into executable code. Rulekeeper runs the same rules against your working tree whenever you need them. It will never miss one! You can see it as linter on steroid.
-
-Write deterministic rules in TypeScript (or JavaScript). When a policy needs judgment, send it to an AI decision API. AI rules use the selected scope as context by default, rather than sending the whole repository. You choose what each rule selects, so each AI request can stay focused.
+**Tired of asking your AI agent to follow your conventions, only to watch it ignore them?** Define your conventions as simple rules and let **Rulekeeper** check your code against them, without forgetting one.
 
 ## Install
 
@@ -41,35 +41,21 @@ rulekeeper deps remove bignumber.js
 rulekeeper deps sync
 ```
 
-`deps add` accepts names, versions, ranges, and tags. It saves exact direct versions and the complete resolved graph in `.rulekeeper/rulekeeper.lock`. To update a package, run `deps add` with a version or tag.
-
-Add confirmations report that command's committed versions, even if another command changes the lock before the confirmation is printed.
-
-`deps sync` applies the committed graph, including removing owned packages when the lock is empty. SDK aliases in `package.json` imports use the same local-version preference as direct SDK imports.
-
-```text
-.rulekeeper/
-  .gitignore         # Keeps the local node_modules directory out of Git
-  rules/             # Your rule files (or put them directly in .rulekeeper)
-  rulekeeper.lock    # Exact direct dependencies and resolved graph
-  node_modules/      # Actual installed packages, not links to a shared tree
-```
-
-*It is basically a wrapper of npm, but configured to work with Rulekeeper*
+`deps add` accepts names, versions, ranges, and tags. 
 
 ## Write a rule
 
 Save rules in `.rulekeeper` (or any subfolders) with a name that ends in `.rule.ts`, `.rule.mts`, `.rule.js`, or `.rule.mjs`. A rule is a class that extends `Rule` and is the module's default export. Save the example below as `.rulekeeper/no-any.rule.ts`.
 
-This rule reports explicit `any` types in TypeScript files. It also tests a violating case and a passing case:
+This rule reports explicit `any` types in TypeScript files.
 
 ```ts
 import { Rule, scopes, test, violation } from '@alex-dbs/rulekeeper';
 
 export default class NoAny extends Rule {
-  files = ['src/**/*.{ts,tsx}'];
+  files = ['src/**/*.{ts,tsx}']; // Which files?
 
-  scope = scopes.astGrep({
+  scope = scopes.astGrep({ // Which part of the file to check; here ast Grep
     language: 'typescript',
     rule: {
       kind: 'predefined_type',
@@ -77,9 +63,11 @@ export default class NoAny extends Rule {
     },
   });
 
+  // The check is simple: if something matches the scope, then it is a violation.
   check = () => violation('Replace explicit any with a specific type or unknown and narrow it.');
 }
 
+// You can also write tests here for better developer experience!
 export const tests = [
   test('explicit any violates').withFiles({
     'src/example.ts': 'let value: any;',
@@ -92,22 +80,22 @@ export const tests = [
 
 ### Regular-expression rule
 
-Use a regular expression for a pattern with a clear pass or fail condition. This rule selects `google.api.http` URLs from protobuf files and requires versioned lowercase plural paths, such as `/v1/invoices`.
+Use a regular expression for a pattern with a clear pass or fail condition. This rule selects `google.api.http` URLs from protobuf files and requires versioned, such as `/v1/invoices`.
 
 ```ts
 import { Rule, regex, scopes } from '@alex-dbs/rulekeeper';
 
 export default class PublicApiPaths extends Rule {
   files = ['api/**/*.proto'];
+
   scope = scopes.protobuf({ path: "$.rpcs[*].options['google.api.http']..['get','put','post','delete','patch','path']" });
+
   check = regex({
     pattern: /^\/v\d+\/[a-z][a-z0-9_]*s(?:\/.*)?$/,
     violationMessage: 'Use a versioned lowercase plural path.',
   });
 }
 ```
-
-Add inline tests for paths that match and do not match the pattern.
 
 ### AI rule
 
@@ -119,10 +107,12 @@ import type { ScopeSubject } from '@alex-dbs/rulekeeper';
 
 export default class SafeResponseHeaders extends Rule {
   files = ['src/**/*.js'];
+
   scope = scopes.astGrep({
     language: 'javascript',
     rule: { kind: 'function_declaration' },
   });
+
   check = ai({
     rule: 'Report a violation only when this function writes request data into an HTTP response header without rejecting CR and LF first. Judge only this function. Do not assume unseen callers or helpers validate the data.',
     input: subject => (subject as ScopeSubject).source,
@@ -131,7 +121,7 @@ export default class SafeResponseHeaders extends Rule {
 }
 ```
 
-This example shows an AI check for CWE-113. The call cost depends on the configured model, input size, and token prices.
+This example shows an AI check for CWE-113. 
 
 AI rules require a configured service and can incur charges.
 
@@ -169,7 +159,6 @@ The `settings` field sets AI options for one rule, such as its model, decision t
 
 ## Commands
 
-- `--version` prints the installed package version.
 - `update` upgrades the active global npm installation to the latest release. Update local dependencies with their package manager instead.
 - `validate [rule-path]` loads rules and validates their structure without running them.
 - `test [rule-path]` runs the inline tests declared by selected rules.
@@ -179,10 +168,6 @@ The `settings` field sets AI options for one rule, such as its model, decision t
 - `deps add`, `deps remove`, and `deps sync` manage locked rule packages and editor declarations.
 
 Without an explicit rule path, Rulekeeper discovers rules under `.rulekeeper` in the project and `~/.rulekeeper` in the user home directory. Use `--help` after a command for its options.
-
-Rule discovery skips Rulekeeper's temporary installation directories, not ordinary hidden rule folders.
-
-With `check --pr --auto-comment`, comments refer to the analyzed revision. If the PR head changes during analysis or comment planning, Rulekeeper refuses to post stale findings.
 
 ## AI decisions
 
@@ -206,7 +191,7 @@ A subagent can review code, but each review uses time and tokens. Rulekeeper let
 
 ### Why TypeScript or JavaScript?
 
-Neither language is chosen for raw execution speed. Many developers already know one of them, and a rule can live in a single module. Rulekeeper keeps work focused with file and scope selection, and it bounds concurrency. We replace LONG and COSTLY AI Agent verification checks by predictable code, running at the speed of less than 1ms per verification; way faster than any LLM.
+Neither language is chosen for raw execution speed. Many developers already know one of them, and a rule can live in a single module. Rulekeeper keeps work focused with file and scope selection, and it bounds concurrency. We replace LONG and COSTLY AI Agent verification checks by predictable code, running at the speed of less than 1ms per verification; way faster than any LLM. Having a faster tool is better of course, but the developer experience is more important than 0.3ms gain per rule 😉. Perhaps one day, the core will be re-written in rust... who knows!
 
 ### Does Rulekeeper support every language?
 
@@ -214,7 +199,7 @@ Rules are TypeScript or JavaScript modules, but they can inspect text files in a
 
 ### Can I do anything with a rule?
 
-Rule modules are trusted Node.js code. You can write custom selectors, filters, and evaluators, and choose how Rulekeeper groups scopes. Rulekeeper does not sandbox rules, so run only code you trust. Managed resolution prevents accidental use of undeclared packages, not deliberate access through Node APIs, absolute paths, or custom loaders.
+Rule modules are trusted Node.js code. You can write custom selectors, filters, and evaluators. When a simple code is not enough, you can rely on AI decision api. So yes, you can do whatever you like with Rulekeeper. Keep in mind that a good rule MUST be auditable, easy to read,  maintain and review. 
 
 ## Contributing
 
@@ -228,7 +213,6 @@ npm run typecheck
 ```
 
 Add or update tests for changes to rule behavior. The [rule-writing skill](skills/rulekeeper-new-rule/SKILL.md) explains how to create rules, add inline tests, and inspect rule behavior.
-
 
 ## License
 
