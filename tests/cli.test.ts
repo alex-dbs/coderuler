@@ -3,6 +3,11 @@ import { lstat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 
+import { runProgram, type CliServices } from '../dist/adapter/cli/program.js';
+import { terminalCapabilities } from '../dist/adapter/cli/progress.js';
+import { createRuleDependencyManager } from '../dist/adapter/filesystem/dependencies.js';
+import { createRuleLoader } from '../dist/adapter/filesystem/rules.js';
+import { createServices } from '../dist/infra/runtime.js';
 import {
   asMapping,
   createSandbox,
@@ -25,6 +30,7 @@ import {
   type DecisionFixture,
   type DecisionFixtureOptions,
   type Sandbox,
+  type CliResult,
 } from './support.ts';
 
 const sandbox = createSandbox('rulekeeper-cli-');
@@ -1287,14 +1293,32 @@ test('check and inspect report the effective flag, rule, environment and default
     { label: 'above default', rule: 'basic', env: undefined, flag: undefined, probability: 0.41, threshold: 0.4, status: 'pass' },
   ] as const;
 
+  async function runThresholdCommand(argv: readonly string[], overrides: NodeJS.ProcessEnv) {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const env = { ...target.env, ...overrides };
+    const loader = createRuleLoader({
+      home: target.home,
+      dependencies: createRuleDependencyManager({ cacheRoot: join(target.home, '.cache', 'rulekeeper', 'dependencies') }),
+    });
+    const services: CliServices = {
+      ...createServices(target.cwd, env),
+      loadRules: selection => loader.load(selection),
+      write: text => { stdout.push(text); },
+      writeError: text => { stderr.push(text); },
+      terminal: terminalCapabilities({ stdoutIsTTY: false, stderrIsTTY: false }, env),
+    };
+    const status = await runProgram(argv, services);
+    return { status, stdout: stdout.join(''), stderr: stderr.join('') } satisfies CliResult;
+  }
+
   for (const entry of cases) {
     fixture.probability = entry.probability;
     const env = { ...fixture.env, RK_THRESHOLD: entry.env };
     const flags = entry.flag === undefined ? [] : ['--threshold', entry.flag];
     for (const mode of ['--json', '--jsonl'] as const) {
-      const result = await runCli(
+      const result = await runThresholdCommand(
         ['check', mode, '--output-all', '--rules', `.rulekeeper/${entry.rule}.rule.ts`, ...flags],
-        target,
         env,
       );
       assert.equal(result.status, entry.status === 'pass' ? 0 : 1, `${entry.label}: ${result.stderr}`);
@@ -1306,11 +1330,10 @@ test('check and inspect report the effective flag, rule, environment and default
       assert.equal(evaluation.probability, entry.probability, entry.label);
       assert.equal(evaluation.threshold, entry.threshold, entry.label);
     }
-    const inspected = await runCli(
+    const inspected = await runThresholdCommand(
       entry.flag === undefined
         ? ['inspect', entry.rule]
         : ['check', '--verbose', '--output-all', '--rules', `.rulekeeper/${entry.rule}.rule.ts`, ...flags],
-      target,
       env,
     );
     assert.equal(inspected.status, entry.status === 'pass' ? 0 : 1, `${entry.label}: ${inspected.stderr}`);

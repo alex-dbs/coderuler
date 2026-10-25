@@ -417,8 +417,8 @@ test('invalid and missing dependency commands fail with exit 2 and preserve a us
     const failed = await cli(consumer, args);
     assert.equal(failed.status, 2, `${args.join(' ')}\n${failed.stdout}\n${failed.stderr}`);
     assert.equal(lock(consumer), committed, args.join(' '));
-    assertPolicy(await cli(consumer, ['check', '--json'], 'offline'), POLICY_MESSAGE_V1);
   }
+  assertPolicy(await cli(consumer, ['check', '--json'], 'offline'), POLICY_MESSAGE_V1);
 });
 
 test('remove and sync require an existing directory and a malformed lock is never rewritten', async () => {
