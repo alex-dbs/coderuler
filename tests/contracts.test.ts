@@ -383,6 +383,27 @@ test('validateRule rejects malformed rules even when they are disabled', () => {
   }
 });
 
+test('validateRule rejects malformed tags for enabled and disabled rules', () => {
+  const malformedTags: readonly (readonly [string, unknown])[] = [
+    ['scalar string', 'security'],
+    ['null', null],
+    ['empty string entry', ['']],
+    ['non-string entry', [7]],
+    ['sparse array', new Array<string>(1)],
+  ];
+
+  for (const enabled of [true, false]) {
+    for (const [label, tags] of malformedTags) {
+      assert.throws(
+        () => validateRule(brandedRule({ enabled, tags }), RULE_FILE),
+        new RegExp('tags'),
+        `${label} should be rejected`,
+      );
+    }
+  }
+});
+
+
 test('validateRule rejects missing pattern entries before hooks for enabled and disabled rules', () => {
   for (const field of ['files', 'exclude'] as const) {
     for (const enabled of [true, false]) {

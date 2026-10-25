@@ -131,6 +131,7 @@ export abstract class Rule<T = JsonValue> {
   enabled: boolean = true;
   files: readonly string[] = ['**/*'];
   exclude: readonly string[] = [];
+  tags?: readonly string[];
   scope?: ScopeSelector<T>;
   settings: RuleSettings = {};
   group: Grouping = 'scope';

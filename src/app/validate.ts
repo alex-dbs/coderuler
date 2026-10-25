@@ -23,7 +23,7 @@ function isLineNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
 }
 
-function isPatternList(value: unknown, allowEmpty: boolean): boolean {
+function isStringList(value: unknown, allowEmpty: boolean): boolean {
   if (!Array.isArray(value)) return false;
   if (!allowEmpty && value.length === 0) return false;
   for (let index = 0; index < value.length; index += 1) {
@@ -77,11 +77,15 @@ export function validateRule(value: unknown, ruleFile: string): Rule<unknown> {
   if (!isRecord(value)) invalid(at, 'expected a rule object');
 
   if (typeof value['enabled'] !== 'boolean') invalid(at, 'enabled must be a boolean');
-  if (!isPatternList(value['files'], false)) {
+  if (!isStringList(value['files'], false)) {
     invalid(at, 'files must be a non-empty array of non-empty glob strings');
   }
-  if (!isPatternList(value['exclude'], true)) {
+  if (!isStringList(value['exclude'], true)) {
     invalid(at, 'exclude must be an array of non-empty glob strings');
+  }
+  const tags = value['tags'];
+  if (tags !== undefined && !isStringList(tags, true)) {
+    invalid(at, 'tags must be an array of non-empty strings');
   }
 
   const scope = value['scope'];
