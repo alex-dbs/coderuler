@@ -93,6 +93,7 @@ export interface CliServices {
   readonly resolveRuleSelector: (
     selector: string,
     invocationCwd: string,
+    allowDirectory?: boolean,
   ) => Promise<RuleSelectorResolution>;
   readonly manageSkill: (operation: 'install' | 'update', options: SkillOptions) => Promise<number>;
   readonly manageDependencies: (
@@ -142,10 +143,6 @@ interface TestOptions {
   readonly failuresOnly?: boolean;
 }
 
-interface RuleChoice {
-  readonly rulesPath?: string;
-  readonly name?: string;
-}
 
 interface ExecutionPlan {
   readonly rules: readonly LoadedRule[];
@@ -208,12 +205,12 @@ function parseTimeout(value: string): number {
 
 function ruleSelection(
   services: CliServices,
-  choice: RuleChoice,
+  choice: RuleSelectorResolution,
   root: string,
 ): RuleSelection {
   const invocationCwd = services.cwd;
-  if (choice.rulesPath !== undefined) {
-    return { root, explicit: choice.rulesPath, invocationCwd };
+  if (choice.explicit !== undefined) {
+    return { root, explicit: choice.explicit, invocationCwd };
   }
   if (choice.name !== undefined) {
     return { root, name: choice.name, invocationCwd };
@@ -225,7 +222,7 @@ async function planWalk(
   services: CliServices,
   root: string,
   isTarget: (filepath: string) => boolean,
-  choice: RuleChoice,
+  choice: RuleSelectorResolution,
   rulesRoot: string = root,
 ): Promise<ExecutionPlan> {
   const rules = await services.loadRules(ruleSelection(services, choice, rulesRoot));
@@ -307,15 +304,12 @@ export function createProgram(services: CliServices): Command {
   program
     .command('validate')
     .description('Load and structurally validate the selected rules without running them')
-    .argument('[rule-path]', 'explicit rule module or directory instead of discovery')
+    .argument('[rule]', 'rule name, module path, or directory')
     .action(async (rulePath: string | undefined) => {
-      const rules = await services.loadRules(
-        ruleSelection(
-          services,
-          rulePath === undefined ? {} : { rulesPath: rulePath },
-          services.cwd,
-        ),
-      );
+      const choice = rulePath === undefined
+        ? {}
+        : await services.resolveRuleSelector(rulePath, services.cwd, true);
+      const rules = await services.loadRules(ruleSelection(services, choice, services.cwd));
       for (const entry of rules) {
         services.write(services.redact(`Valid rule: ${escapeText(entry.name)}\n`));
       }
@@ -324,7 +318,7 @@ export function createProgram(services: CliServices): Command {
   program
     .command('test')
     .description('Run the declared test cases for the selected rules')
-    .argument('[rule-path]', 'explicit rule module or directory instead of discovery')
+    .argument('[rule]', 'rule name, module path, or directory')
     .option('--ai', 'include aiTests that use the configured decision backend')
     .option('--failures-only', 'show only failed test cases')
     .addOption(
@@ -366,13 +360,10 @@ export function createProgram(services: CliServices): Command {
         failures.length = 0;
       };
       try {
-        const rules = await services.loadRules(
-          ruleSelection(
-            services,
-            rulePath === undefined ? {} : { rulesPath: rulePath },
-            services.cwd,
-          ),
-        );
+        const choice = rulePath === undefined
+          ? {}
+          : await services.resolveRuleSelector(rulePath, services.cwd, true);
+        const rules = await services.loadRules(ruleSelection(services, choice, services.cwd));
         progress?.message('Running tests');
         testsStarted = true;
         await services.testRules(rules, (result, lastInRule) => {
@@ -412,7 +403,7 @@ export function createProgram(services: CliServices): Command {
     .command('check')
     .description('Evaluate every selected rule against the working tree')
     .argument('[path]', 'target file or folder that narrows selection', '.')
-    .option('--rules <path>', 'explicit rule module or directory instead of discovery')
+    .option('--rules <rule>', 'rule name, module path, or directory')
     .option('--tags <tags...>', 'run rules matching any listed tag', [])
     .option('--exclude-tags <tags...>', 'exclude rules matching any listed tag', [])
     .option('--json', 'print violations as {durationMs, reports} JSON on stdout')
@@ -464,11 +455,14 @@ export function createProgram(services: CliServices): Command {
           let changedFiles = checkout?.changedFiles ?? (diffOnly
             ? await services.changedFiles(area.root, options.base ?? 'HEAD')
             : undefined);
+          const choice = options.rules === undefined
+            ? {}
+            : await services.resolveRuleSelector(options.rules, services.cwd, true);
           const prepared = await planWalk(
             services,
             area.root,
             filepath => area.contains(filepath),
-            options.rules === undefined ? {} : { rulesPath: options.rules },
+            choice,
             checkout?.rulesRoot ?? area.root,
           );
           rules = options.tags.length === 0 && options.excludeTags.length === 0
@@ -582,9 +576,7 @@ export function createProgram(services: CliServices): Command {
           services,
           join(area.root, area.path),
           () => true,
-          resolved.explicit === undefined
-            ? { name: resolved.name ?? rule }
-            : { rulesPath: resolved.explicit },
+          resolved,
         );
         inspect ??= createInspectRenderer({
           write: services.write,

@@ -92,13 +92,18 @@ export const tests = [test('home case').withFiles({ 'inputs/a.txt': 'GOOD' }).pa
   assert.ok(discovered.stdout.includes('home case'), discovered.stdout);
 
   writeRule(target, 'other', `test('excluded failure').withFiles({ 'inputs/a.txt': 'BAD' }).passes()`);
-  for (const path of [local, '.rulekeeper/local.rule.ts']) {
+  for (const path of [local, '.rulekeeper/local.rule.ts', 'local']) {
     const explicit = await runCli(['test', path], target);
     assert.equal(explicit.status, 0, explicit.stderr || explicit.stdout);
     assert.ok(explicit.stdout.includes('local case'), explicit.stdout);
     assert.equal(explicit.stdout.includes('home case'), false);
     assert.equal(explicit.stdout.includes('excluded failure'), false);
   }
+  const home = await runCli(['test', 'home'], target);
+  assert.equal(home.status, 0, home.stderr || home.stdout);
+  assert.ok(home.stdout.includes('home case'), home.stdout);
+  assert.equal(home.stdout.includes('local case'), false);
+  assert.equal(home.stdout.includes('excluded failure'), false);
   const directory = await runCli(['test', '.rulekeeper'], target);
   assert.equal(directory.status, 1, directory.stderr || directory.stdout);
   assert.ok(directory.stdout.includes('excluded failure'), directory.stdout);

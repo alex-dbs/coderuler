@@ -13,11 +13,11 @@ Configure each rule through its class members. Select rule files through the CLI
 
 Discovery searches the project's `.rulekeeper/` first, then `~/.rulekeeper/`. Rules can live directly in either directory or in subfolders. Supported suffixes are `.rule.ts`, `.rule.mts`, `.rule.js`, and `.rule.mjs`.
 
-The filename supplies the name. For example, `policies/internal-url.rule.ts` is named `internal-url`. Names must be unique across selected files and discovery roots.
+The filename without its rule suffix is the exact rule name. For example, `policies/internal-url.rule.ts` is named `internal-url`. A selected name must match exactly one discovered rule file across both discovery roots.
 
 Discovery does not follow symlinks. It skips `old`, `node_modules`, and RuleKeeper's temporary installation directories. Ordinary hidden rule folders are not excluded merely because their names start with a dot.
 
-Use `validate <rule-path>`, `test <rule-path>`, or `check --rules <path>` to replace discovery with an explicit module or directory. `inspect` takes one module path or exact discovered name, not a rule directory.
+Use `validate [rule]`, `test [rule]`, or `check --rules <rule>` to select a rule name, module path, or directory. A name filters discovered rules; an explicit path or directory replaces discovery. `inspect` takes one module path or exact discovered name, not a rule directory.
 
 ## Rule members
 

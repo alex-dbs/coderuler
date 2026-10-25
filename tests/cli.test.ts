@@ -405,6 +405,53 @@ test('validate accepts explicit rule files and directories', async () => {
   assert.ok(!directory.stdout.includes('Valid rule: three'), directory.stdout);
 });
 
+test('validate selects rule names from project and home discovery', async () => {
+  const target = sandbox.isolated('validate-name');
+  writeFile(join(target.cwd, '.rulekeeper', 'nested', 'project-choice.rule.ts'), PASS_RULE);
+  writeHomeRule(target, 'home-choice', PASS_RULE);
+  writeRule(target, 'unrelated', 'throw new Error("unrelated rule imported");');
+
+  for (const [name, excluded] of [
+    ['project-choice', 'home-choice'],
+    ['home-choice', 'project-choice'],
+  ]) {
+    const result = await runCli(['validate', name], target);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), `Valid rule: ${name}`);
+    assert.ok(!result.stdout.includes(excluded), result.stdout);
+  }
+});
+
+test('rule names reject missing and ambiguous selections', async () => {
+  const target = sandbox.isolated('rule-name-errors');
+  const projectRule = writeRule(target, 'shared-choice', PASS_RULE);
+  const homeRule = writeHomeRule(target, 'shared-choice', PASS_RULE);
+  writeRule(target, 'available', PASS_RULE);
+  writeHomeRule(target, 'home-available', PASS_RULE);
+
+  for (const args of [
+    ['check', '--rules', 'missing-choice'],
+    ['validate', 'missing-choice'],
+    ['test', 'missing-choice'],
+  ]) {
+    const result = await runCli(args, target);
+    assert.equal(result.status, 2, result.stderr);
+    assert.ok(result.stderr.includes('missing-choice'), result.stderr);
+  }
+
+  for (const args of [
+    ['check', '--rules', 'shared-choice'],
+    ['validate', 'shared-choice'],
+    ['test', 'shared-choice'],
+  ]) {
+    const result = await runCli(args, target);
+    assert.equal(result.status, 2, result.stderr);
+    assert.ok(result.stderr.includes('shared-choice'), result.stderr);
+    assert.ok(result.stderr.includes(projectRule), result.stderr);
+    assert.ok(result.stderr.includes(homeRule), result.stderr);
+  }
+});
+
 test('validate reports malformed modules and invalid disabled rules', async () => {
   const malformedTarget = sandbox.isolated('validate-malformed');
   writeRule(
@@ -459,6 +506,37 @@ test('check reports a passing rule in the complete JSON envelope with --output-a
   assert.ok(report.ruleFile.endsWith(join('.rulekeeper', 'ok.rule.ts')), report.ruleFile);
   assert.deepEqual(scopeSubjects(report, 'check pass').map(subject => subject.filepath), ['src/a.txt']);
   assert.deepEqual(report.evaluations.map(evaluation => evaluation.result.status), ['pass']);
+});
+
+test('check selects rule names across supported suffixes', async () => {
+  for (const suffix of ['ts', 'mts', 'js', 'mjs']) {
+    const target = sandbox.isolated(`check-name-${suffix}`);
+    writeFiles(target, {
+      'src/a.txt': 'no marker here',
+      [`.rulekeeper/nested/go-append-slice.rule.${suffix}`]: markerRule('Missing marker'),
+      '.rulekeeper/go-append-slice-extra.rule.ts': 'throw new Error("unrelated rule imported");',
+    });
+    const result = await runCli(['check', '--rules', 'go-append-slice', '--json', '--output-all'], target);
+    assert.equal(result.status, 1, result.stderr);
+    const reports = parseCheckOutput(result, `named check ${suffix}`);
+    assert.deepEqual(reports.map(report => {
+      const subjects = scopeSubjects(report, `named check ${suffix}`);
+      return {
+        name: report.name,
+        status: report.status,
+        scopes: subjects.map(subject => subject.filepath),
+        evaluations: report.evaluations.map(evaluation => ({
+          status: evaluation.result.status,
+          message: evaluation.result.message,
+        })),
+      };
+    }), [{
+      name: 'go-append-slice',
+      status: 'violation',
+      scopes: ['src/a.txt'],
+      evaluations: [{ status: 'violation', message: 'Missing marker' }],
+    }]);
+  }
 });
 
 test('check filters rules by tags', async () => {
@@ -901,6 +979,7 @@ test('check honors --rules with a file and a directory', async () => {
     'rules/scan2.rule.ts': SCAN_RULE,
     'notes.txt': 'notes',
   });
+  writeRule(target, 'rules', 'throw new Error("discovered rule named rules imported");');
   const single = await runCli(['check', '--json', '--rules', 'rules/explicit.rule.ts'], target);
   assert.equal(single.status, 1, single.stderr);
   assert.deepEqual(parseCheckOutput(single, 'explicit file').map(report => report.name), ['explicit']);
