@@ -23,9 +23,9 @@ With reduced motion enabled, select a step to inspect its source and result with
 
 ## Find the rules
 
-Without an explicit rule path, RuleKeeper searches `.rulekeeper/` in the project and `~/.rulekeeper/` in your home directory. It searches subfolders for `.rule.ts`, `.rule.mts`, `.rule.js`, and `.rule.mjs` files.
+Without an explicit selector, RuleKeeper searches `.rulekeeper/` in the project and `~/.rulekeeper/` in your home directory. It searches subfolders for `.rule.ts`, `.rule.mts`, `.rule.js`, and `.rule.mjs` files.
 
-The filename without its rule suffix becomes the rule name. Two rules cannot share a name, even in different folders. Explicit rule paths replace discovery rather than adding to it.
+The filename without its rule suffix is the exact rule name. A selected name must match exactly one discovered rule file, including across both discovery roots. An explicit module path or directory replaces discovery.
 
 For `check` and `validate`, the project root is the current working directory. `check src/` narrows eligible target files without changing root-relative rule globs. Inspection uses its selected folder as the project root.
 

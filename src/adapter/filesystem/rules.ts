@@ -226,6 +226,7 @@ async function loadEntries(
 export async function resolveRuleSelector(
   selector: string,
   invocationCwd: string,
+  allowDirectory = false,
 ): Promise<ResolvedRuleSelector> {
   const absolute = resolve(invocationCwd, selector);
   let stats;
@@ -235,7 +236,7 @@ export async function resolveRuleSelector(
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
   }
-  if (stats?.isDirectory() === true) {
+  if (stats?.isDirectory() === true && !allowDirectory) {
     throw new Error(
       `Rule selector ${selector} is a directory; inspecting requires one rule module or an exact rule name`,
     );

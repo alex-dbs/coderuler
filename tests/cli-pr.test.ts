@@ -194,6 +194,19 @@ test('a base without repository policy runs global policy, while two empty polic
   assert.deepEqual(posts(requests), []);
 });
 
+test('check --pr selects rule names from committed base policy', async context => {
+  const target = fixture(context, 'named-base-policy');
+  await interceptGithub(context, target);
+
+  const result = await check(target, ['--pr', '42', '--rules', 'base']);
+  assert.equal(result.status, 1, result.stderr);
+  const reports = parseCheckOutput(result, 'named PR base policy');
+  assert.deepEqual(evaluations(reports), [
+    { rule: 'base', filepath: 'src/changed.txt', status: 'violation', message: BASE_MESSAGE },
+  ]);
+  assert.match(reports[0]!.ruleFile, /[/\\]rulekeeper-pr-[^/\\]+[/\\]base[/\\]\.rulekeeper[/\\]base\.rule\.ts$/);
+});
+
 test('caller-relative --rules intentionally overrides discovery but still requires a fetched base', async context => {
   const target = fixture(context, 'explicit-rules');
   writeFile(join(target.cwd, 'custom/explicit.rule.ts'), policy(`() => pass()`));

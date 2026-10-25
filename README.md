@@ -131,9 +131,9 @@ AI rules require a configured service and can incur charges.
 Run validation, tests, and the rule against your project (use `npx rulekeeper` for a project-local installation):
 
 ```sh
-rulekeeper validate .rulekeeper/no-any.rule.ts
-rulekeeper test .rulekeeper/no-any.rule.ts
-rulekeeper check . --rules .rulekeeper/no-any.rule.ts
+rulekeeper validate no-any
+rulekeeper test no-any
+rulekeeper check . --rules no-any
 ```
 
 ## Rule pipeline
@@ -160,14 +160,14 @@ The `settings` field sets AI options for one rule, such as its model, decision t
 ## Commands
 
 - `update` upgrades the active global npm installation to the latest release. Update local dependencies with their package manager instead.
-- `validate [rule-path]` loads rules and validates their structure without running them.
-- `test [rule-path]` runs the inline tests declared by selected rules.
-- `check [path]` runs selected rules against a file or folder. It exits with status 1 when a rule reports a violation.
+- `validate [rule]` loads rules and validates their structure without running them.
+- `test [rule]` runs the inline tests declared by selected rules.
+- `check [path]` runs selected rules against a file or folder. Use `--rules <rule>` to select a rule name, module path, or directory. It exits with status 1 when a rule reports a violation.
 - `inspect <rule> [folder]` shows how one rule selects and evaluates subjects.
 - `skill install` and `skill update` install or refresh Rulekeeper's rule-writing skill for coding agents.
 - `deps add`, `deps remove`, and `deps sync` manage locked rule packages and editor declarations.
 
-Without an explicit rule path, Rulekeeper discovers rules under `.rulekeeper` in the project and `~/.rulekeeper` in the user home directory. Use `--help` after a command for its options.
+For `validate`, `test`, and `check --rules`, a rule name is the exact filename stem of a discovered rule. Discovery searches `.rulekeeper` in the project and `~/.rulekeeper` in your home directory, including subfolders. A name filters discovered rules; an explicit module path or directory replaces discovery. Use `--help` after a command for its options.
 
 ## AI decisions
 

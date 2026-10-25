@@ -36,17 +36,19 @@ For other installation methods, use the package manager that installed RuleKeepe
 ## Validate
 
 ```sh
-rulekeeper validate [rule-path]
+rulekeeper validate [rule]
 ```
 
-Load and structurally validate rules without evaluating them. An optional module or directory replaces discovery. There are no command-specific flags.
+Load and structurally validate rules without evaluating them. The optional rule can be a rule name, module path, or directory. There are no command-specific flags.
+
+For all three selectors, a rule name is the exact filename stem of a discovered rule. Discovery searches project `.rulekeeper/` and home `~/.rulekeeper/`, including subfolders. A name filters discovered rules; an explicit path or directory replaces discovery.
 
 Validation does not execute inline tests or type-check TypeScript. Rule modules still execute as trusted Node.js code when loaded.
 
 ## Test
 
 ```sh
-rulekeeper test [rule-path] [options]
+rulekeeper test [rule] [options]
 ```
 
 | Flag | Default | Meaning |
@@ -56,7 +58,7 @@ rulekeeper test [rule-path] [options]
 | `--timeout <duration>` | `10s` | Per-case limit, using `ms`, `s`, or `m` |
 | `--concurrency <number>` | `1` | Maximum in-flight test cases |
 
-An optional module or directory replaces discovery. Ordinary `tests` remain offline, including when `--ai` also selects live cases. See [testing](/docs/testing/) for fixtures and timeout behavior.
+The optional rule is a rule name, module path, or directory. Ordinary `tests` remain offline, including when `--ai` also selects live cases. See [testing](/docs/testing/) for fixtures and timeout behavior.
 
 ## Check
 
@@ -68,7 +70,7 @@ The default target is `.`. A file or folder target narrows selection inside the 
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--rules <path>` | Discovery | Select an explicit rule module or directory |
+| `--rules <rule>` | Discovery | Rule name, module path, or directory |
 | `--tags <tags...>` | `[]` | Run rules that match any listed tag |
 | `--exclude-tags <tags...>` | `[]` | Exclude rules that match any listed tag |
 | `--json` | Off | Print one JSON document |
@@ -83,6 +85,7 @@ The default target is `.`. A file or folder target narrows selection inside the 
 | `--concurrency <number>` | `8` | Maximum in-flight selection and evaluation tasks |
 | `--threshold <number>` | Rule/environment | Override the AI decision threshold |
 
+For rule-name and discovery behavior, see the description under [Validate](#validate).
 Tags are space-separated, exact, and case-sensitive. Exclusion takes precedence over inclusion. With no tag flags, `check` uses every rule. If the filters match no rules, `check` succeeds with zero rules.
 
 ```sh
