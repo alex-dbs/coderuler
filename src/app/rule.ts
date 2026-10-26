@@ -125,7 +125,7 @@ export interface CheckContext<T = JsonValue> extends SelectionContext {
   ai(options: AiOptions<T>): Promise<CheckResult>;
 }
 
-export const RULE_BRAND: symbol = Symbol.for('rulekeeper.Rule');
+export const RULE_BRAND: symbol = Symbol.for('coderuler.Rule');
 
 export abstract class Rule<T = JsonValue> {
   enabled: boolean = true;

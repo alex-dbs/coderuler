@@ -12,7 +12,7 @@ const TOKEN = 'github-test-secret-pat';
 const API_KEY = 'typesafe-test-secret-key';
 const MESSAGE = `Reject **bold** <script> @someone ${TOKEN} ${API_KEY}\u001b[31m`;
 const inheritedGithub = Object.fromEntries(Object.keys(process.env).filter(key => key.startsWith('GITHUB_')).map(key => [key, undefined]));
-const sandbox = createSandbox('rulekeeper-cli-auto-comment-', inheritedGithub);
+const sandbox = createSandbox('coderuler-cli-auto-comment-', inheritedGithub);
 after(() => sandbox.cleanup());
 
 function git(target: Sandbox, ...args: string[]): string {
@@ -29,7 +29,7 @@ interface Fixture extends Sandbox {
   readonly head: string;
 }
 
-const scoped = (check: string, options = '') => `import { Rule, pass, violation, regex } from '@alex-dbs/rulekeeper';
+const scoped = (check: string, options = '') => `import { Rule, pass, violation, regex } from '@alex-dbs/coderuler';
 export default class FixtureRule extends Rule {
   files = ['src/*.txt'];
   scope = file => [{ id: '$', source: file.source, data: { private: 'DATA-SECRET' }, captures: { private: 'CAPTURE-SECRET' }, lines: { start: 2, end: 3 } }];
@@ -43,10 +43,10 @@ const unlocatedGroup = scoped(`() => violation('unlocated group rejection')`, `g
 function repository(label: string, rules: Readonly<Record<string, string>> = { scoped: implicit }, changed = true): Fixture {
   const target = sandbox.isolated(label);
   writeFile(join(target.cwd, '.gitignore'), 'node_modules/\n');
-  for (const [name, source] of Object.entries(rules)) writeFile(join(target.cwd, `.rulekeeper/${name}.rule.ts`), source);
+  for (const [name, source] of Object.entries(rules)) writeFile(join(target.cwd, `.coderuler/${name}.rule.ts`), source);
   for (const name of ['one', 'two', 'good']) writeFile(join(target.cwd, `src/${name}.txt`), 'HEADER\nGOOD SOURCE-SECRET\nGOOD SOURCE-SECRET\nFOOTER\n');
   git(target, 'init', '--initial-branch=feature/comments');
-  git(target, 'config', 'user.name', 'Rulekeeper tests');
+  git(target, 'config', 'user.name', 'CodeRuler tests');
   git(target, 'config', 'user.email', 'tests@example.invalid');
   git(target, 'config', 'commit.gpgsign', 'false');
   git(target, 'remote', 'add', 'origin', 'git@github.com:owner/project.git');
@@ -154,7 +154,7 @@ function fallback(requests: readonly RequestRecord[]): string {
   assert.equal(matching.length, 1);
   const payload = JSON.parse(matching[0]!.body) as { body: string };
   assert.deepEqual(Object.keys(payload), ['body']);
-  assert.ok(payload.body.startsWith('## Rulekeeper violations\n'));
+  assert.ok(payload.body.startsWith('## CodeRuler violations\n'));
   return payload.body;
 }
 
@@ -244,7 +244,7 @@ test('a commented group rule uses the comment as the whole fallback finding', as
   const result = await check(target, ['--diff', '--base', target.base, '--auto-comment']);
   assert.equal(result.status, 1, result.stderr);
   assert.equal(posts(requests).length, 1);
-  assert.equal(fallback(requests), `## Rulekeeper violations\n\n${CUSTOM}\n`);
+  assert.equal(fallback(requests), `## CodeRuler violations\n\n${CUSTOM}\n`);
 });
 
 test('commented findings strip terminal controls before redaction and keep Markdown unescaped', async context => {

@@ -12,17 +12,17 @@ import { createRuleDependencyManager, type RuleDependencyManager } from '../dist
 import { prepareRuleDependencySdk, publishRuleDependencyInstallation, withRuleDependencyDirectoryLock } from '../dist/adapter/filesystem/dependency-installation.js';
 import { createDependencyFixture, dependencyFixtureEnvironment, installDependencyRegistry, POLICY_MESSAGE_V1, POLICY_MESSAGE_V2 } from './dependency-support.ts';
 
-const root = realpathSync(mkdtempSync(join(tmpdir(), 'rulekeeper-installation-')));
+const root = realpathSync(mkdtempSync(join(tmpdir(), 'coderuler-installation-')));
 const fixture = createDependencyFixture(join(root, 'registry'));
-const markerName = '.rulekeeper-install.json';
-const sdk = '@alex-dbs/rulekeeper';
+const markerName = '.coderuler-install.json';
+const sdk = '@alex-dbs/coderuler';
 const firstKey = 'a'.repeat(64);
 const secondKey = 'b'.repeat(64);
 let sequence = 0;
 after(() => rmSync(root, { recursive: true, force: true }));
 
 function owner(): string {
-  const path = join(root, `owner-${sequence++}`, '.rulekeeper');
+  const path = join(root, `owner-${sequence++}`, '.coderuler');
   mkdirSync(path, { recursive: true });
   return path;
 }
@@ -32,7 +32,7 @@ function tree(nodeModules: string, key: string, value: string): void {
   writeFileSync(join(nodeModules, markerName), JSON.stringify({ version: 1, key, installedLocations: ['node_modules/fixture-policy'] }));
 }
 function stage(directory: string, key = secondKey): string {
-  const path = mkdtempSync(join(directory, '.rulekeeper-stage-'));
+  const path = mkdtempSync(join(directory, '.coderuler-stage-'));
   tree(join(path, 'node_modules'), key, 'next');
   writeFileSync(join(path, 'package.json'), '{"name":"internal-stage-only"}');
   writeFileSync(join(path, 'package-lock.json'), '{"lockfileVersion":3}');
@@ -40,7 +40,7 @@ function stage(directory: string, key = secondKey): string {
 }
 function previous(directory: string): void {
   tree(join(directory, 'node_modules'), firstKey, 'previous');
-  writeFileSync(join(directory, 'rulekeeper.lock'), 'previous lock\n');
+  writeFileSync(join(directory, 'coderuler.lock'), 'previous lock\n');
 }
 function marker(directory: string): { version: number; key: string; sdkTarget?: string } {
   return JSON.parse(readFileSync(join(directory, 'node_modules', markerName), 'utf8'));
@@ -75,16 +75,16 @@ test('publishes real package directories and commits lock last without exposing 
   writeFileSync(join(directory, 'package-lock.json'), 'user lock\n');
   const staged = stage(directory);
   intercept(context, 'rename', async (args, original) => {
-    if (String(args[1]) === join(directory, 'rulekeeper.lock')) {
+    if (String(args[1]) === join(directory, 'coderuler.lock')) {
       assert.equal(marker(directory).key, secondKey);
-      assert.equal(readFileSync(join(directory, 'rulekeeper.lock'), 'utf8'), 'previous lock\n');
+      assert.equal(readFileSync(join(directory, 'coderuler.lock'), 'utf8'), 'previous lock\n');
     }
     return original(...args);
   });
   await withRuleDependencyDirectoryLock(directory, () => publishRuleDependencyInstallation({ directory, stage: staged, previousLock: 'previous lock\n', nextLock: 'next lock\n' }));
   assert.equal(lstatSync(join(directory, 'node_modules', 'fixture-policy')).isSymbolicLink(), false);
   assert.equal(marker(directory).key, secondKey);
-  assert.equal(readFileSync(join(directory, 'rulekeeper.lock'), 'utf8'), 'next lock\n');
+  assert.equal(readFileSync(join(directory, 'coderuler.lock'), 'utf8'), 'next lock\n');
   assert.equal(readFileSync(join(directory, 'package.json'), 'utf8'), '{"name":"user-application"}\n');
   assert.equal(readFileSync(join(directory, 'package-lock.json'), 'utf8'), 'user lock\n');
   assert.equal(existsSync(staged), false);
@@ -96,7 +96,7 @@ for (const failure of ['directory', 'lock'] as const) {
     previous(directory);
     const staged = stage(directory);
     let injected = false;
-    const destination = join(directory, failure === 'directory' ? 'node_modules' : 'rulekeeper.lock');
+    const destination = join(directory, failure === 'directory' ? 'node_modules' : 'coderuler.lock');
     intercept(context, 'rename', async (args, original) => {
       if (!injected && String(args[1]) === destination) { injected = true; throw new Error('injected publication failure'); }
       return original(...args);
@@ -104,7 +104,7 @@ for (const failure of ['directory', 'lock'] as const) {
     await assert.rejects(withRuleDependencyDirectoryLock(directory, () => publishRuleDependencyInstallation({ directory, stage: staged, previousLock: 'previous lock\n', nextLock: 'next lock\n' })), /injected publication failure/);
     assert.equal(marker(directory).key, firstKey);
     assert.equal(readFileSync(join(directory, 'node_modules', 'fixture-policy', 'index.js'), 'utf8'), 'export const message = "previous";\n');
-    assert.equal(readFileSync(join(directory, 'rulekeeper.lock'), 'utf8'), 'previous lock\n');
+    assert.equal(readFileSync(join(directory, 'coderuler.lock'), 'utf8'), 'previous lock\n');
     assert.equal(existsSync(staged), false);
   });
 }
@@ -115,13 +115,13 @@ test('postcommit cleanup and mutex release failures warn without reporting the i
   const staged = stage(directory);
   const warnings: string[] = [];
   intercept(context, 'rm', async (args, original) => {
-    if ([staged, join(directory, '.rulekeeper-deps-write')].includes(String(args[0]))) throw new Error('injected cleanup failure');
+    if ([staged, join(directory, '.coderuler-deps-write')].includes(String(args[0]))) throw new Error('injected cleanup failure');
     return original(...args);
   });
   const onWarning = (message: string): void => { warnings.push(message); };
   await withRuleDependencyDirectoryLock(directory, () => publishRuleDependencyInstallation({ directory, stage: staged, previousLock: 'previous lock\n', nextLock: 'next lock\n', onWarning }), onWarning);
   assert.equal(marker(directory).key, secondKey);
-  assert.equal(readFileSync(join(directory, 'rulekeeper.lock'), 'utf8'), 'next lock\n');
+  assert.equal(readFileSync(join(directory, 'coderuler.lock'), 'utf8'), 'next lock\n');
   assert.equal(warnings.length, 2);
   assert.ok(warnings.every(message => message.includes('committed')));
 });
@@ -132,12 +132,12 @@ test('external lock edits survive publication rejection and the previous tree is
   const staged = stage(directory);
   intercept(context, 'rename', async (args, original) => {
     const result = await original(...args);
-    if (String(args[0]) === join(staged, 'node_modules')) writeFileSync(join(directory, 'rulekeeper.lock'), 'external lock edit\n');
+    if (String(args[0]) === join(staged, 'node_modules')) writeFileSync(join(directory, 'coderuler.lock'), 'external lock edit\n');
     return result;
   });
   await assert.rejects(publishRuleDependencyInstallation({ directory, stage: staged, previousLock: 'previous lock\n', nextLock: 'next lock\n' }), /installation conflict/);
   assert.equal(marker(directory).key, firstKey);
-  assert.equal(readFileSync(join(directory, 'rulekeeper.lock'), 'utf8'), 'external lock edit\n');
+  assert.equal(readFileSync(join(directory, 'coderuler.lock'), 'utf8'), 'external lock edit\n');
 });
 
 test('rollback preserves a concurrently replaced installed directory and its old recovery backup', async context => {
@@ -146,7 +146,7 @@ test('rollback preserves a concurrently replaced installed directory and its old
   const staged = stage(directory);
   const displaced = join(directory, 'externally-displaced');
   intercept(context, 'rename', async (args, original) => {
-    if (String(args[1]) === join(directory, 'rulekeeper.lock')) {
+    if (String(args[1]) === join(directory, 'coderuler.lock')) {
       await original(join(directory, 'node_modules'), displaced);
       mkdirSync(join(directory, 'node_modules'));
       writeFileSync(join(directory, 'node_modules', 'user.txt'), 'preserve me');
@@ -160,7 +160,7 @@ test('rollback preserves a concurrently replaced installed directory and its old
   });
   assert.equal(readFileSync(join(directory, 'node_modules', 'user.txt'), 'utf8'), 'preserve me');
   assert.equal(existsSync(join(staged, 'previous-node_modules', markerName)), true);
-  assert.equal(readFileSync(join(directory, 'rulekeeper.lock'), 'utf8'), 'previous lock\n');
+  assert.equal(readFileSync(join(directory, 'coderuler.lock'), 'utf8'), 'previous lock\n');
 });
 
 test('rollback refuses a changed marker even when the directory inode is unchanged', async context => {
@@ -168,7 +168,7 @@ test('rollback refuses a changed marker even when the directory inode is unchang
   previous(directory);
   const staged = stage(directory);
   intercept(context, 'rename', async (args, original) => {
-    if (String(args[1]) === join(directory, 'rulekeeper.lock')) {
+    if (String(args[1]) === join(directory, 'coderuler.lock')) {
       writeFileSync(join(directory, 'node_modules', markerName), JSON.stringify({ version: 1, key: 'c'.repeat(64), installedLocations: [] }));
       writeFileSync(join(directory, 'node_modules', 'user.txt'), 'new owner');
       throw new Error('marker changed');
@@ -187,7 +187,7 @@ test('unmarked user node_modules is never adopted or deleted', async () => {
   const staged = stage(directory);
   await assert.rejects(publishRuleDependencyInstallation({ directory, stage: staged, previousLock: null, nextLock: 'next lock' }), /node_modules.*installation conflict/);
   assert.equal(readFileSync(join(directory, 'node_modules', 'user.txt'), 'utf8'), 'user data');
-  assert.equal(existsSync(join(directory, 'rulekeeper.lock')), false);
+  assert.equal(existsSync(join(directory, 'coderuler.lock')), false);
   assert.equal(existsSync(staged), false);
 });
 
@@ -201,7 +201,7 @@ for (const unsafe of ['node_modules', 'scope'] as const) {
     symlinkSync(outside, unsafe === 'scope' ? join(directory, 'node_modules', '@alex-dbs') : join(directory, 'node_modules'), 'dir');
     await assert.rejects(prepareRuleDependencySdk(directory, join(directory, 'node_modules')), /installation conflict/);
     assert.equal(readFileSync(join(outside, 'user.txt'), 'utf8'), 'outside');
-    assert.equal(existsSync(join(outside, 'rulekeeper')), false);
+    assert.equal(existsSync(join(outside, 'coderuler')), false);
   });
 }
 
@@ -214,7 +214,7 @@ test('SDK-only sync preserves an unowned local SDK with public-only exports and 
   assert.equal(lstatSync(local).isSymbolicLink(), false);
   assert.equal(readFileSync(join(directory, 'node_modules', 'user.txt'), 'utf8'), 'user files');
   assert.equal(existsSync(join(directory, 'node_modules', markerName)), false);
-  assert.equal(existsSync(join(directory, 'rulekeeper.lock')), false);
+  assert.equal(existsSync(join(directory, 'coderuler.lock')), false);
 });
 
 test('SDK resolution prefers an ancestor SDK using its public import-only entry, without package.json exports', async () => {
@@ -226,7 +226,7 @@ test('SDK resolution prefers an ancestor SDK using its public import-only entry,
   assert.equal(resolve(dirname(join(directory, 'node_modules', sdk)), readlinkSync(join(directory, 'node_modules', sdk))), target);
   assert.equal(marker(directory).sdkTarget, target);
   assert.equal(marker(directory).key, 'empty');
-  assert.equal(existsSync(join(directory, 'rulekeeper.lock')), false);
+  assert.equal(existsSync(join(directory, 'coderuler.lock')), false);
 });
 
 test('SDK-only sync refreshes a broken generated link to the running SDK', async () => {
@@ -284,8 +284,8 @@ for (const failure of ['writeFile', 'rename'] as const) {
     await assert.rejects(managed.sync(directory), /injected SDK bootstrap failure/);
     assert.equal(injected, true);
     assert.equal(existsSync(modules), false);
-    assert.equal(existsSync(join(directory, 'rulekeeper.lock')), false);
-    assert.equal(existsSync(join(directory, '.rulekeeper-deps-write')), false);
+    assert.equal(existsSync(join(directory, 'coderuler.lock')), false);
+    assert.equal(existsSync(join(directory, '.coderuler-deps-write')), false);
     assert.equal(readFileSync(join(directory, 'user.txt'), 'utf8'), 'preserve user files');
     assert.equal((await managed.sync(directory)).key, 'empty');
     assert.equal(marker(directory).key, 'empty');
@@ -318,7 +318,7 @@ test('failed fresh SDK bootstrap preserves a concurrently created user node_modu
   assert.equal(existsSync(join(modules, markerName)), false);
   await assert.rejects(managed.change(directory, 'add', ['fixture-policy@1.0.0']), /installation conflict/);
   assert.equal(readFileSync(join(modules, 'user.txt'), 'utf8'), 'preserve user modules');
-  assert.equal(existsSync(join(directory, 'rulekeeper.lock')), false);
+  assert.equal(existsSync(join(directory, 'coderuler.lock')), false);
 });
 
 test('SDK-only sync does not claim unrelated user files when adding editor access', async () => {
@@ -361,14 +361,14 @@ test('concurrent first preparations install one coherent local graph and healthy
   const managed = manager(context, source);
   await managed.change(source, 'add', ['fixture-policy@1.0.0']);
   const directory = owner();
-  writeFileSync(join(directory, 'rulekeeper.lock'), readFileSync(join(source, 'rulekeeper.lock')));
+  writeFileSync(join(directory, 'coderuler.lock'), readFileSync(join(source, 'coderuler.lock')));
   const [first, second] = await Promise.all([managed.prepare(directory), managed.prepare(directory)]);
   assert.equal(first.key, second.key);
   assert.equal(first.directory, directory);
   assert.equal(lstatSync(join(directory, 'node_modules', 'fixture-policy')).isSymbolicLink(), false);
   assert.equal(await installedMessage(directory), POLICY_MESSAGE_V1);
   intercept(context, 'mkdir', async (args, original) => {
-    if (String(args[0]) === join(directory, '.rulekeeper-deps-write')) throw new Error('healthy prepare must not write');
+    if (String(args[0]) === join(directory, '.coderuler-deps-write')) throw new Error('healthy prepare must not write');
     return original(...args);
   });
   const offline = createRuleDependencyManager({ cacheRoot: join(root, `unusable-cache-${sequence++}`) });
@@ -383,7 +383,7 @@ test('prepare waits for an active add and re-evaluates the installed key after t
   const resume = Promise.withResolvers<void>();
   let paused = false;
   intercept(context, 'rename', async (args, original) => {
-    if (!paused && String(args[1]) === join(directory, 'rulekeeper.lock')) {
+    if (!paused && String(args[1]) === join(directory, 'coderuler.lock')) {
       paused = true;
       reached.resolve();
       await resume.promise;
@@ -407,15 +407,15 @@ test('mutex never removes another owner token and warns honestly after a success
   const directory = owner();
   const warnings: string[] = [];
   await withRuleDependencyDirectoryLock(directory, async () => {
-    writeFileSync(join(directory, '.rulekeeper-deps-write', 'owner.json'), JSON.stringify({ pid: process.pid, token: 'external-owner' }));
+    writeFileSync(join(directory, '.coderuler-deps-write', 'owner.json'), JSON.stringify({ pid: process.pid, token: 'external-owner' }));
   }, message => warnings.push(message));
-  assert.equal(existsSync(join(directory, '.rulekeeper-deps-write')), true);
+  assert.equal(existsSync(join(directory, '.coderuler-deps-write')), true);
   assert.equal(warnings.length, 1);
 });
 
 test('busy or dead mutex requires explicit confirmed-owner cleanup, never automatic reclamation', async context => {
   const directory = owner();
-  const mutex = join(directory, '.rulekeeper-deps-write');
+  const mutex = join(directory, '.coderuler-deps-write');
   mkdirSync(mutex);
   writeFileSync(join(mutex, 'owner.json'), JSON.stringify({ pid: 99999999, token: 'dead-test-owner' }));
   const now = Date.now;
@@ -456,7 +456,7 @@ test('interrupted install exposes no wrong graph and explicit sync repairs after
   const directory = owner();
   const managed = manager(context, directory);
   const before = await managed.change(directory, 'add', ['fixture-policy@1.0.0']);
-  const oldLock = readFileSync(join(directory, 'rulekeeper.lock'), 'utf8');
+  const oldLock = readFileSync(join(directory, 'coderuler.lock'), 'utf8');
   const config = join(root, `interrupted-${sequence++}.json`);
   writeFileSync(config, JSON.stringify({ directory, cacheRoot: join(dirname(directory), 'cache'), managerURL: new URL('../dist/adapter/filesystem/dependencies.js', import.meta.url).href }));
   const child = spawn(process.execPath, [interruptedRunner, config], { env: { ...process.env, ...dependencyFixtureEnvironment(fixture) }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
@@ -470,7 +470,7 @@ test('interrupted install exposes no wrong graph and explicit sync repairs after
   child.once('exit', () => exited.resolve());
   child.kill('SIGKILL');
   await exited.promise;
-  assert.equal(readFileSync(join(directory, 'rulekeeper.lock'), 'utf8'), oldLock);
+  assert.equal(readFileSync(join(directory, 'coderuler.lock'), 'utf8'), oldLock);
   assert.notEqual(marker(directory).key, before.key);
   // Load the resolver only after the interrupted install, exercising its cold-start ownership boundary.
   const { registerRuleDependencies } = await import('../dist/adapter/filesystem/rule-resolution.js');
@@ -480,8 +480,8 @@ test('interrupted install exposes no wrong graph and explicit sync repairs after
     registerRuleDependencies(rule, before);
     await import(pathToFileURL(rule).href);
   }, /in.progress|changed|stale|deps sync|rerun/i);
-  assert.equal(existsSync(join(directory, '.rulekeeper-deps-write')), true);
-  rmSync(join(directory, '.rulekeeper-deps-write'), { recursive: true });
+  assert.equal(existsSync(join(directory, '.coderuler-deps-write')), true);
+  rmSync(join(directory, '.coderuler-deps-write'), { recursive: true });
   await assert.rejects(async () => {
     registerRuleDependencies(rule, before);
     await import(pathToFileURL(rule).href);
@@ -489,5 +489,5 @@ test('interrupted install exposes no wrong graph and explicit sync repairs after
   const ready = await managed.sync(directory);
   assert.equal(ready.key, before.key);
   assert.equal(await installedMessage(directory), POLICY_MESSAGE_V1);
-  assert.equal(readFileSync(join(directory, 'rulekeeper.lock'), 'utf8'), oldLock);
+  assert.equal(readFileSync(join(directory, 'coderuler.lock'), 'utf8'), oldLock);
 });

@@ -5,7 +5,7 @@ import { constants, homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const SKILL_NAME = 'rulekeeper-new-rule';
+export const SKILL_NAME = 'coderuler-new-rule';
 export const SKILL_SOURCE = fileURLToPath(new URL(`../../../skills/${SKILL_NAME}`, import.meta.url));
 
 export interface SkillOptions {
@@ -77,7 +77,7 @@ export function createSkillManager(
       const selectedScope = options.global === true ? 'global' : 'project';
       const matching = installed.filter(skill => skill.name === SKILL_NAME && skill.scope === selectedScope);
       if (matching.length === 0) {
-        throw new Error(`${SKILL_NAME} is not installed in this scope; run rulekeeper skill install first`);
+        throw new Error(`${SKILL_NAME} is not installed in this scope; run coderuler skill install first`);
       }
       // List filters also scan other agents. Universal has no agent label in JSON,
       // so verify its canonical path; ordinary targets must match display labels.
@@ -98,7 +98,7 @@ export function createSkillManager(
           if (!verified) {
             throw new Error(
               `${SKILL_NAME} is not installed for agent "${target}" in this scope, or its installation cannot be verified; `
-              + 'use a supported installed --agent target or universal, or run rulekeeper skill install first',
+              + 'use a supported installed --agent target or universal, or run coderuler skill install first',
             );
           }
         }

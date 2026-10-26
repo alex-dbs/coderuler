@@ -7,7 +7,7 @@ import { after, test } from 'node:test';
 
 import { CLI, createSandbox, runCli, writeFile } from './support.ts';
 
-const sandbox = createSandbox('rulekeeper-test-pool-');
+const sandbox = createSandbox('coderuler-test-pool-');
 after(() => sandbox.cleanup());
 
 async function startGate(): Promise<{ url: string; signal(key: string): void; close(): Promise<void> }> {
@@ -88,9 +88,9 @@ test('test runs eight cases concurrently with explicit concurrency', { timeout: 
   const markers = names.map(name => join(target.root, name));
   const gate = await startGate();
   context.after(() => gate.close());
-  writeFile(join(target.cwd, '.rulekeeper/barrier.rule.ts'), `import { writeFileSync } from 'node:fs';
+  writeFile(join(target.cwd, '.coderuler/barrier.rule.ts'), `import { writeFileSync } from 'node:fs';
 import { threadId } from 'node:worker_threads';
-import { Rule, pass, test } from '@alex-dbs/rulekeeper';
+import { Rule, pass, test } from '@alex-dbs/coderuler';
 ${gateHelpers(gate.url)}
 const markers = ${JSON.stringify(markers)};
 export default class Barrier extends Rule {
@@ -117,9 +117,9 @@ test('test defaults to one reusable worker across cases and rule suites', { time
   const target = sandbox.isolated('default-one');
   const names = ['first-0', 'first-1', 'second-0', 'second-1'];
   for (const suite of ['first', 'second']) {
-    writeFile(join(target.cwd, '.rulekeeper', `${suite}.rule.ts`), `import { writeFileSync } from 'node:fs';
+    writeFile(join(target.cwd, '.coderuler', `${suite}.rule.ts`), `import { writeFileSync } from 'node:fs';
 import { threadId } from 'node:worker_threads';
-import { Rule, pass, test } from '@alex-dbs/rulekeeper';
+import { Rule, pass, test } from '@alex-dbs/coderuler';
 export default class Serial extends Rule {
   files = ['inputs/*.txt'];
   check = subject => {
@@ -143,15 +143,15 @@ test('test bounds worker count and reuses workers and shared helpers across rule
   const gate = await startGate();
   context.after(() => gate.close());
   const imports = join(target.root, 'helper-imports.jsonl');
-  writeFile(join(target.cwd, '.rulekeeper/shared.js'), `import { appendFileSync } from 'node:fs';
+  writeFile(join(target.cwd, '.coderuler/shared.js'), `import { appendFileSync } from 'node:fs';
 import { threadId } from 'node:worker_threads';
 appendFileSync(${JSON.stringify(imports)}, JSON.stringify(threadId) + '\\n');
 export const worker = threadId;`);
   const suites = ['first', 'second'];
   for (const suite of suites) {
     const names = Array.from({ length: 4 }, (_, index) => `${suite}-${index}`);
-    writeFile(join(target.cwd, '.rulekeeper', `${suite}.rule.ts`), `import { writeFileSync } from 'node:fs';
-import { Rule, pass, test } from '@alex-dbs/rulekeeper';
+    writeFile(join(target.cwd, '.coderuler', `${suite}.rule.ts`), `import { writeFileSync } from 'node:fs';
+import { Rule, pass, test } from '@alex-dbs/coderuler';
 import { worker } from './shared.js';
 ${gateHelpers(gate.url)}
 export default class Reuse extends Rule {
@@ -186,8 +186,8 @@ test('test streams completed cases in declaration order before the suite finishe
   const streamed = join(target.root, 'first-result-streamed');
   const gate = await startGate();
   context.after(() => gate.close());
-  writeFile(join(target.cwd, '.rulekeeper/order.rule.ts'), `import { writeFileSync } from 'node:fs';
-import { Rule, pass, test } from '@alex-dbs/rulekeeper';
+  writeFile(join(target.cwd, '.coderuler/order.rule.ts'), `import { writeFileSync } from 'node:fs';
+import { Rule, pass, test } from '@alex-dbs/coderuler';
 ${gateHelpers(gate.url)}
 export default class Ordered extends Rule {
   files = ['inputs/*.txt'];
@@ -236,8 +236,8 @@ test('test cancels a hanging sibling on operational error and cleans every activ
   const unscheduled = join(target.root, 'must-not-start');
   const gate = await startGate();
   context.after(() => gate.close());
-  writeFile(join(target.cwd, '.rulekeeper/cancel.rule.ts'), `import { writeFileSync } from 'node:fs';
-import { Rule, pass, test } from '@alex-dbs/rulekeeper';
+  writeFile(join(target.cwd, '.coderuler/cancel.rule.ts'), `import { writeFileSync } from 'node:fs';
+import { Rule, pass, test } from '@alex-dbs/coderuler';
 ${gateHelpers(gate.url)}
 export default class Cancel extends Rule {
   files = ['inputs/*.txt'];
@@ -278,8 +278,8 @@ test('test cancels active cases when an idle worker crashes after emitting its r
   const release = join(target.root, 'release-background-error');
   const gate = await startGate();
   context.after(() => gate.close());
-  writeFile(join(target.cwd, '.rulekeeper/background.rule.ts'), `import { writeFileSync } from 'node:fs';
-import { Rule, pass, test } from '@alex-dbs/rulekeeper';
+  writeFile(join(target.cwd, '.coderuler/background.rule.ts'), `import { writeFileSync } from 'node:fs';
+import { Rule, pass, test } from '@alex-dbs/coderuler';
 ${gateHelpers(gate.url)}
 export default class Background extends Rule {
   files = ['inputs/*.txt'];
@@ -338,9 +338,9 @@ test('test replaces only a timed-out worker and reuses its healthy peer in the n
   const names = ['hanging', 'healthy', 'next-first', 'next-second'];
   const gate = await startGate();
   context.after(() => gate.close());
-  writeFile(join(target.cwd, '.rulekeeper/first.rule.ts'), `import { writeFileSync } from 'node:fs';
+  writeFile(join(target.cwd, '.coderuler/first.rule.ts'), `import { writeFileSync } from 'node:fs';
 import { threadId } from 'node:worker_threads';
-import { Rule, pass, test } from '@alex-dbs/rulekeeper';
+import { Rule, pass, test } from '@alex-dbs/coderuler';
 ${gateHelpers(gate.url)}
 export default class Deadline extends Rule {
   files = ['inputs/*.txt'];
@@ -358,9 +358,9 @@ export default class Deadline extends Rule {
   };
 }
 export const tests = [${cases(names.slice(0, 2))}];`);
-  writeFile(join(target.cwd, '.rulekeeper/second.rule.ts'), `import { writeFileSync } from 'node:fs';
+  writeFile(join(target.cwd, '.coderuler/second.rule.ts'), `import { writeFileSync } from 'node:fs';
 import { threadId } from 'node:worker_threads';
-import { Rule, pass, test } from '@alex-dbs/rulekeeper';
+import { Rule, pass, test } from '@alex-dbs/coderuler';
 ${gateHelpers(gate.url)}
 export default class Recovery extends Rule {
   files = ['inputs/*.txt'];
@@ -391,7 +391,7 @@ export const tests = [${cases(names.slice(2))}];`);
 
 test('test rejects concurrency values that are not positive safe integers', async context => {
   const target = sandbox.isolated('invalid-concurrency');
-  writeFile(join(target.cwd, '.rulekeeper/text.rule.ts'), `import { Rule, pass, test } from '@alex-dbs/rulekeeper';
+  writeFile(join(target.cwd, '.coderuler/text.rule.ts'), `import { Rule, pass, test } from '@alex-dbs/coderuler';
 export default class Text extends Rule { files = ['inputs/*.txt']; check = () => pass(); }
 export const tests = [${cases(['valid'])}];`);
   for (const value of ['0', '-1', '1.5', 'NaN', 'Infinity', '9007199254740992']) {

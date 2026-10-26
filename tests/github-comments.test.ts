@@ -8,7 +8,7 @@ import { after, test, type TestContext } from 'node:test';
 import { createGithubCommenter } from '../dist/adapter/github/comments.js';
 import { createSandbox, writeFile } from './support.ts';
 
-const sandboxes = createSandbox('rulekeeper-github-comments-', {
+const sandboxes = createSandbox('coderuler-github-comments-', {
   GITHUB_TOKEN: undefined,
   GITHUB_REPOSITORY: undefined,
   GITHUB_REF: undefined,
@@ -21,7 +21,7 @@ const head = 'a'.repeat(40);
 const fallback = [{ body, locations: [] }];
 const detail = { body: { head: { sha: head } } };
 const posted = { status: 201, body: {} };
-const summary = (bodies: readonly string[]) => ({ body: `## Rulekeeper violations\n\n${bodies.join('\n\n')}\n` });
+const summary = (bodies: readonly string[]) => ({ body: `## CodeRuler violations\n\n${bodies.join('\n\n')}\n` });
 
 function repository(origin = 'https://github.com/example/project.git') {
   const sandbox = sandboxes.isolated('repository');
@@ -32,8 +32,8 @@ function repository(origin = 'https://github.com/example/project.git') {
     stdio: ['ignore', 'pipe', 'pipe'],
   }).trim();
   git('init', '--quiet', '--initial-branch=feature/comment');
-  git('config', 'user.name', 'Rulekeeper Tests');
-  git('config', 'user.email', 'rulekeeper@example.test');
+  git('config', 'user.name', 'CodeRuler Tests');
+  git('config', 'user.email', 'coderuler@example.test');
   git('config', 'commit.gpgsign', 'false');
   git('config', 'core.hooksPath', '/dev/null');
   git('add', 'package.json');
@@ -177,7 +177,7 @@ test('explicit PR target supports detached HEAD and overrides unrelated Actions 
     ['POST', '/repos/requested/project/pulls/42/reviews'],
   ]);
   assert.deepEqual(payload(requests[3]!), {
-    commit_id: head, event: 'COMMENT', body: 'Rulekeeper violations', comments: [inline('app.yml', 5, 4)],
+    commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: [inline('app.yml', 5, 4)],
   });
 });
 
@@ -226,7 +226,7 @@ test('explicit target matches inline files despite inherited Git repository loca
     ['POST', '/repos/requested/project/pulls/42/reviews'],
   ]);
   assert.deepEqual(payload(requests[3]!), {
-    commit_id: head, event: 'COMMENT', body: 'Rulekeeper violations', comments: [inline('app.yml', 5, 4)],
+    commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: [inline('app.yml', 5, 4)],
   });
   assert.equal(caller.git('rev-parse', 'HEAD'), callerHead);
   assert.equal(caller.git('write-tree'), callerIndex);
@@ -245,7 +245,7 @@ test('nested invocation roots map rename targets and prefer RIGHT additions desp
     ['GET', '/repos/example/project/pulls/23'], ['GET', '/repos/example/project/pulls/23/files?per_page=100&page=1'],
     ['GET', '/repos/example/project/pulls/23'], ['POST', '/repos/example/project/pulls/23/reviews'],
   ]);
-  assert.deepEqual(payload(requests[3]!), { commit_id: head, event: 'COMMENT', body: 'Rulekeeper violations', comments: [inline('packages/app/new.yml', 5, 4)] });
+  assert.deepEqual(payload(requests[3]!), { commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: [inline('packages/app/new.yml', 5, 4)] });
 });
 
 test('multiple hunks, optional header counts, no-newline markers and context anchors stay in one hunk', async t => {
@@ -258,7 +258,7 @@ test('multiple hunks, optional header counts, no-newline markers and context anc
     { filepath: 'app.yml', lines: { start: 5, end: 7 } },
     { filepath: 'app.yml', lines: { start: 8, end: 8 } },
   ] }]);
-  assert.deepEqual(payload(requests[3]!), { commit_id: head, event: 'COMMENT', body: 'Rulekeeper violations', comments: [inline('app.yml', 2), inline('app.yml', 6, 5), inline('app.yml', 8)] });
+  assert.deepEqual(payload(requests[3]!), { commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: [inline('app.yml', 2), inline('app.yml', 6, 5), inline('app.yml', 8)] });
 });
 
 test('mixed groups use only explicit usable candidates and fallback never duplicates anchored findings', async t => {
@@ -270,7 +270,7 @@ test('mixed groups use only explicit usable candidates and fallback never duplic
     { body: 'project: no attribution', locations: [] },
     { body: 'scope: no usable hunk', locations: [{ filepath: 'app.yml', lines: { start: 99, end: 100 } }] },
   ]);
-  assert.deepEqual(payload(requests[3]!), { commit_id: head, event: 'COMMENT', body: 'Rulekeeper violations', comments: [inline('app.yml', 4, undefined, 'folder: selected member')] });
+  assert.deepEqual(payload(requests[3]!), { commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: [inline('app.yml', 4, undefined, 'folder: selected member')] });
   assert.deepEqual(payload(requests[4]!), summary(['project: no attribution', 'scope: no usable hunk']));
 });
 
@@ -325,7 +325,7 @@ test('blob identity hashes UTF-8 bytes and literal Git paths, not JavaScript str
   const file = { filename, status: 'added', sha: repo.git('hash-object', '--', filename), patch: '@@ -0,0 +1,2 @@\n+λ\n+第二行\n' };
   const requests = await github(t, [detail, { body: [file] }, detail, posted]);
   await actions(repo.env)(repo.cwd, [{ body, locations: [{ filepath: filename, lines: { start: 1, end: 2 } }] }]);
-  assert.deepEqual(payload(requests[3]!), { commit_id: head, event: 'COMMENT', body: 'Rulekeeper violations', comments: [inline(filename, 2, 1)] });
+  assert.deepEqual(payload(requests[3]!), { commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: [inline(filename, 2, 1)] });
 });
 
 test('Actions checkout without usable Git metadata falls back even when a file exists', async t => {

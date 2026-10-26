@@ -35,7 +35,7 @@ function scope(source: string, filepath = 'src/café.ts'): ScopeSubject {
 function violation(subject: RuleReport['evaluations'][number]['subject'], message?: string): RuleReport {
   return {
     name: 'unicode',
-    ruleFile: '.rulekeeper/unicode.rule.ts',
+    ruleFile: '.coderuler/unicode.rule.ts',
     durationMs: 3.125,
     status: 'violation',
     evaluations: [{ subject, result: message === undefined ? { status: 'violation' } : { status: 'violation', message } }],
@@ -527,7 +527,7 @@ test('walkthrough card source expands indentation without exposing multiline cre
 test('walkthrough retains plain setup blocks and nests an evaluation in one rounded card', () => {
   const subject = scope('你\tfirst();\n\tsecond();');
   const events: readonly RunEvent[] = [
-    { type: 'rule', name: 'placement', ruleFile: '.rulekeeper/placement.rule.ts' },
+    { type: 'rule', name: 'placement', ruleFile: '.coderuler/placement.rule.ts' },
     { type: 'gate', name: 'placement', enabled: true, applies: true },
     { type: 'file', name: 'other-rule', filepath: 'src/other.ts', selected: false, reason: 'outside selection' },
     { type: 'scope', name: 'placement', subject, accepted: true },
@@ -539,7 +539,7 @@ test('walkthrough retains plain setup blocks and nests an evaluation in one roun
   const renderer = createWalkthroughRenderer({
     write: text => chunks.push(text),
     headings: () => [
-      '  file: .rulekeeper/placement.rule.ts',
+      '  file: .coderuler/placement.rule.ts',
       '  files: ["src/**/*.ts"]',
       '  settings: {"backend":"local","threshold":0.9}',
     ],
@@ -549,7 +549,7 @@ test('walkthrough retains plain setup blocks and nests an evaluation in one roun
   renderer.finish();
   const raw = chunks.join('');
   const output = walkthroughContent(raw);
-  assert.match(output, /rule placement\n  file: \.rulekeeper\/placement\.rule\.ts\n/);
+  assert.match(output, /rule placement\n  file: \.coderuler\/placement\.rule\.ts\n/);
   assert.match(output, /  settings:\n    \{\n      "backend": "local",\n      "threshold": 0\.9\n    \}/);
   assert.match(output, /  files:\n    \[\n      "src\/\*\*\/\*\.ts"\n    \]/);
   assert.match(output, /file other-rule\n  file: src\/other\.ts\n  status: excluded\n  reason: outside selection/);

@@ -6,8 +6,8 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const sdkName = '@alex-dbs/rulekeeper';
-const markerName = '.rulekeeper-install.json';
+const sdkName = '@alex-dbs/coderuler';
+const markerName = '.coderuler-install.json';
 interface Marker {
   readonly version: 1;
   readonly key: string;
@@ -19,7 +19,7 @@ function code(error: unknown): string | undefined {
   return error !== null && typeof error === 'object' && 'code' in error ? String(error.code) : undefined;
 }
 function conflict(path: string): Error {
-  return new Error(`${path}: rule dependency installation conflict; preserve user files and resolve the conflict before running rulekeeper deps sync`);
+  return new Error(`${path}: rule dependency installation conflict; preserve user files and resolve the conflict before running coderuler deps sync`);
 }
 async function stat(path: string): Promise<Stats | null> {
   try { return await lstat(path); }
@@ -78,7 +78,7 @@ export async function withRuleDependencyDirectoryLock<T>(
   onWarning?: (message: string) => void,
 ): Promise<T> {
   ownerDirectory = await realpath(ownerDirectory);
-  const mutex = join(ownerDirectory, '.rulekeeper-deps-write');
+  const mutex = join(ownerDirectory, '.coderuler-deps-write');
   const token = randomUUID();
   const owner = join(mutex, 'owner.json');
   const deadline = Date.now() + 30_000;
@@ -92,7 +92,7 @@ export async function withRuleDependencyDirectoryLock<T>(
           const value: unknown = JSON.parse(await regularText(owner) ?? '{}');
           if (value && typeof value === 'object' && 'pid' in value) pid = value.pid;
         } catch { /* Owner may be publishing its record. */ }
-        throw new Error(`${mutex}: dependency directory busy or stale${typeof pid === 'number' ? ` (owner PID ${pid})` : ''}; remove the mutex only after confirming its owner exited, then run rulekeeper deps sync`);
+        throw new Error(`${mutex}: dependency directory busy or stale${typeof pid === 'number' ? ` (owner PID ${pid})` : ''}; remove the mutex only after confirming its owner exited, then run coderuler deps sync`);
       }
       await setTimeout(50);
     }
@@ -122,13 +122,13 @@ async function packageRoot(entry: string): Promise<string> {
       if (manifest.name === sdkName) return path;
     } catch (error) { if (code(error) !== 'ENOENT') throw error; }
     const above = dirname(path);
-    if (above === path) throw new Error(`${entry}: cannot locate the Rulekeeper SDK package`);
+    if (above === path) throw new Error(`${entry}: cannot locate the CodeRuler SDK package`);
     path = above;
   }
 }
 function sdkEntry(ownerDirectory: string): string {
-  const probe = `rulekeeper-installation-sdk:${randomUUID()}`;
-  const parentURL = pathToFileURL(join(ownerDirectory, '.rulekeeper-sdk.js')).href;
+  const probe = `coderuler-installation-sdk:${randomUUID()}`;
+  const parentURL = pathToFileURL(join(ownerDirectory, '.coderuler-sdk.js')).href;
   const hook = registerHooks({
     resolve(specifier, context, nextResolve) {
       return specifier === probe ? nextResolve(sdkName, { ...context, parentURL, conditions: ['node', 'import'] }) : nextResolve(specifier, context);
@@ -142,7 +142,7 @@ async function linkTarget(path: string): Promise<string | undefined> {
   return resolve(dirname(path), await readlink(path));
 }
 async function localSdk(ownerDirectory: string): Promise<string> {
-  const search = createRequire(pathToFileURL(join(ownerDirectory, '.rulekeeper-sdk.js'))).resolve.paths(sdkName) ?? [];
+  const search = createRequire(pathToFileURL(join(ownerDirectory, '.coderuler-sdk.js'))).resolve.paths(sdkName) ?? [];
   for (const modules of search) {
     const candidate = join(modules, sdkName);
     if (!await stat(candidate)) continue;
@@ -167,7 +167,7 @@ export async function prepareRuleDependencySdk(ownerDirectory: string, nodeModul
   const generated = !await directory(nodeModules);
   if (generated && nodeModules === join(ownerDirectory, 'node_modules')) {
     // Publish SDK-only ownership with its directory, so failed initialization leaves no unowned files.
-    const temporary = join(ownerDirectory, `.rulekeeper-sdk-${randomUUID()}`);
+    const temporary = join(ownerDirectory, `.coderuler-sdk-${randomUUID()}`);
     await mkdir(temporary);
     try {
       const target = await prepareRuleDependencySdk(ownerDirectory, temporary);
@@ -185,7 +185,7 @@ export async function prepareRuleDependencySdk(ownerDirectory: string, nodeModul
   const owned = text === null ? null : await installation(nodeModules);
   const scope = join(nodeModules, '@alex-dbs');
   await directory(scope, true);
-  const leaf = join(scope, 'rulekeeper');
+  const leaf = join(scope, 'coderuler');
   const existing = await stat(leaf);
   if (existing && (owned?.marker.sdkTarget === undefined || await linkTarget(leaf) !== owned.marker.sdkTarget)) return undefined;
   const target = await localSdk(ownerDirectory);
@@ -193,7 +193,7 @@ export async function prepareRuleDependencySdk(ownerDirectory: string, nodeModul
     throw conflict(join(ownerDirectory, 'node_modules', sdkName));
   }
   if (!existing || await linkTarget(leaf) !== target) {
-    const temporary = join(scope, `.rulekeeper-sdk-${randomUUID()}`);
+    const temporary = join(scope, `.coderuler-sdk-${randomUUID()}`);
     try {
       await symlink(target, temporary, process.platform === 'win32' ? 'junction' : 'dir');
       if (existing && await linkTarget(leaf) !== owned?.marker.sdkTarget) throw conflict(leaf);
@@ -204,7 +204,7 @@ export async function prepareRuleDependencySdk(ownerDirectory: string, nodeModul
   // Direct SDK-only sync may operate on an unowned directory. Do not claim its user files.
   if (nodeModules === join(ownerDirectory, 'node_modules') && owned) {
     const marker: Marker = { ...owned.marker, sdkTarget: target };
-    const temporary = join(nodeModules, `.rulekeeper-marker-${randomUUID()}`);
+    const temporary = join(nodeModules, `.coderuler-marker-${randomUUID()}`);
     try {
       await writeFile(temporary, `${JSON.stringify(marker, null, 2)}\n`, { flag: 'wx' });
       if (!await unchanged(nodeModules, owned)) throw conflict(markerPath);
@@ -213,7 +213,7 @@ export async function prepareRuleDependencySdk(ownerDirectory: string, nodeModul
       const previousTarget = owned.marker.sdkTarget;
       if (previousTarget !== undefined && previousTarget !== target) {
         if (!await unchanged(nodeModules, owned) || await linkTarget(leaf) !== target) throw conflict(leaf);
-        const restore = join(scope, `.rulekeeper-sdk-${randomUUID()}`);
+        const restore = join(scope, `.coderuler-sdk-${randomUUID()}`);
         try {
           await symlink(previousTarget, restore, process.platform === 'win32' ? 'junction' : 'dir');
           if (await linkTarget(leaf) !== target) throw conflict(leaf);
@@ -238,8 +238,8 @@ export async function publishRuleDependencyInstallation(options: {
   const modules = join(ownerDirectory, 'node_modules');
   const stagedModules = join(stage, 'node_modules');
   const backup = join(stage, 'previous-node_modules');
-  const lock = join(ownerDirectory, 'rulekeeper.lock');
-  const temporaryLock = join(stage, 'next-rulekeeper.lock');
+  const lock = join(ownerDirectory, 'coderuler.lock');
+  const temporaryLock = join(stage, 'next-coderuler.lock');
   let old: Installation | null = null;
   let published: Installation | null = null;
   let movedOld = false;
@@ -273,7 +273,7 @@ export async function publishRuleDependencyInstallation(options: {
         await rename(backup, modules);
       }
     } catch (rollbackError) {
-      throw new Error(`${String(error)}; could not restore the previous installation: ${String(rollbackError)}. Preserved recovery files at ${stage}; resolve the conflict and run rulekeeper deps sync`, { cause: error });
+      throw new Error(`${String(error)}; could not restore the previous installation: ${String(rollbackError)}. Preserved recovery files at ${stage}; resolve the conflict and run coderuler deps sync`, { cause: error });
     }
     try { await rm(stage, { recursive: true, force: true }); }
     catch (cleanupError) { warn(onWarning, `Could not clean failed rule dependency stage ${stage}: ${String(cleanupError)}`); }

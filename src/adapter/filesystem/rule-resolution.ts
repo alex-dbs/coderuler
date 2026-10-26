@@ -8,7 +8,7 @@ import npa from 'npm-package-arg';
 import { ruleDependencyLockKey } from './dependencies.js';
 import type { PreparedRuleDependencies } from './dependencies.js';
 
-const SDK = '@alex-dbs/rulekeeper';
+const SDK = '@alex-dbs/coderuler';
 const SDK_ENTRY = new URL(import.meta.url.endsWith('.ts') ? '../../index.ts' : '../../index.js', import.meta.url).href;
 // This prevents accidental ambient dependency borrowing, not deliberate escape:
 // trusted rule code can still use Node APIs, absolute paths, or custom loaders.
@@ -83,7 +83,7 @@ function contextKey(dependencies: PreparedRuleDependencies): string {
 }
 
 function stale(dependencies: PreparedRuleDependencies, detail: string): Error {
-  return new Error(`Rule dependencies changed or installation is in progress in ${dependencies.directory}: ${detail}; rerun the command after rulekeeper deps sync completes. If the write mutex is stale, remove it only after confirming its owner exited`);
+  return new Error(`Rule dependencies changed or installation is in progress in ${dependencies.directory}: ${detail}; rerun the command after coderuler deps sync completes. If the write mutex is stale, remove it only after confirming its owner exited`);
 }
 
 function regularText(path: string): string {
@@ -98,7 +98,7 @@ function regularText(path: string): string {
 }
 
 function assertIdle(dependencies: PreparedRuleDependencies): void {
-  const mutex = join(dependencies.directory, '.rulekeeper-deps-write');
+  const mutex = join(dependencies.directory, '.coderuler-deps-write');
   try { lstatSync(mutex); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
@@ -113,7 +113,7 @@ function snapshot(dependencies: PreparedRuleDependencies): { readonly lock: Mani
   assertIdle(dependencies);
   try {
     let text: string | null = null;
-    try { text = regularText(join(dependencies.directory, 'rulekeeper.lock')); }
+    try { text = regularText(join(dependencies.directory, 'coderuler.lock')); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
@@ -129,7 +129,7 @@ function snapshot(dependencies: PreparedRuleDependencies): { readonly lock: Mani
     if (JSON.stringify(direct) !== JSON.stringify([...dependencies.directDependencies].sort())) throw new Error('direct dependencies no longer match');
     const modules = join(dependencies.directory, 'node_modules');
     if (!lstatSync(modules).isDirectory() || realpathSync(modules) !== modules) throw new Error(`invalid local package directory ${modules}`);
-    const marker = record(JSON.parse(regularText(join(dependencies.directory, 'node_modules', '.rulekeeper-install.json'))), 'rule dependency installation marker');
+    const marker = record(JSON.parse(regularText(join(dependencies.directory, 'node_modules', '.coderuler-install.json'))), 'rule dependency installation marker');
     if (marker['version'] !== 1 || marker['key'] !== dependencies.key || !Array.isArray(marker['installedLocations'])) throw new Error('local installation marker no longer matches');
     if (direct.some(name => !(marker['installedLocations'] as unknown[]).includes(`node_modules/${name}`))) throw new Error('local installation omits a direct dependency');
     const installed = installations.get(contextKey(dependencies));
@@ -179,7 +179,7 @@ function installationFor(dependencies: PreparedRuleDependencies): Installation |
   // Node stops package-scope/self-reference lookup at node_modules. Keep the
   // synthetic parent there so an ancestor application's exports cannot shadow
   // a declared dependency; Node still performs normal package/exports lookup.
-  const parentURL = pathToFileURL(join(root, '.rulekeeper-resolve.cjs')).href;
+  const parentURL = pathToFileURL(join(root, '.coderuler-resolve.cjs')).href;
   const installation = { dependencies, marker: JSON.stringify(current.marker), root, packages: installed, require: createRequire(parentURL), parentURL };
   installations.set(key, installation);
   return installation;
@@ -275,7 +275,7 @@ export function getRuleDependencies(ruleFile: string): PreparedRuleDependencies 
 }
 
 function undeclared(name: string, dependencies: PreparedRuleDependencies): Error {
-  return new Error(`Rule dependency ${name} is not declared in ${join(dependencies.directory, 'rulekeeper.lock')}; run rulekeeper deps add ${name}`);
+  return new Error(`Rule dependency ${name} is not declared in ${join(dependencies.directory, 'coderuler.lock')}; run coderuler deps add ${name}`);
 }
 
 function requireCondition(conditions: readonly string[]): boolean {
@@ -318,7 +318,7 @@ function importScope(parent: string, installation: Installation | undefined, dep
   const existing = importScopes.get(key);
   if (existing !== undefined) return existing;
   // Resolution metadata is process-owned, including for read-only owners.
-  const scope = mkdtempSync(join(realpathSync(tmpdir()), 'rulekeeper-resolution-'));
+  const scope = mkdtempSync(join(realpathSync(tmpdir()), 'coderuler-resolution-'));
   temporaryScopes.add(scope);
   try {
     const denied = new Map<string, string>();
@@ -332,7 +332,7 @@ function importScope(parent: string, installation: Installation | undefined, dep
           // Let Node select this exact public target through its normal
           // conditions/arrays/patterns, then resolve it from the real importer
           // to retain local SDK preference and the source-checkout fallback.
-          targetsDirectory ??= mkdtempSync(join(scope, '.rulekeeper-targets-'));
+          targetsDirectory ??= mkdtempSync(join(scope, '.coderuler-targets-'));
           if (sdkTarget === undefined) {
             sdkTarget = join(targetsDirectory, 'sdk');
             writeFileSync(sdkTarget, '');
@@ -342,14 +342,14 @@ function importScope(parent: string, installation: Installation | undefined, dep
         const name = nameOf(value);
         if (!bare(value) || isBuiltin(value) || name === ownName || dependencies.directDependencies.includes(name)) return value;
         try {
-          const candidate = name.replaceAll('*', 'rulekeeper-pattern');
+          const candidate = name.replaceAll('*', 'coderuler-pattern');
           const parsed = npa(candidate);
           if (parsed.name !== candidate || !parsed.registry || parsed.rawSpec !== '*') return value;
         } catch { return value; }
         // Preserve Node's condition/array/pattern selection, but turn an
         // undeclared external target into an identifiable local resolution.
         // It can never reach application, NODE_PATH, or ancestor packages.
-        targetsDirectory ??= mkdtempSync(join(scope, '.rulekeeper-targets-'));
+        targetsDirectory ??= mkdtempSync(join(scope, '.coderuler-targets-'));
         const marker = join(targetsDirectory, String(denied.size));
         writeFileSync(marker, '');
         denied.set(marker, name);
@@ -375,7 +375,7 @@ function importScope(parent: string, installation: Installation | undefined, dep
       symlinkSync(join(directory, entry.name), join(scope, entry.name), entry.isDirectory() ? 'junction' : 'file');
       sourceRoots.push(filename(pathToFileURL(join(directory, entry.name)).href)!);
     }
-    const parentURL = pathToFileURL(join(scope, '.rulekeeper-imports.cjs')).href;
+    const parentURL = pathToFileURL(join(scope, '.coderuler-imports.cjs')).href;
     const prepared = {
       parentURL, require: createRequire(parentURL),
       metadata: join(scope, 'package.json'), sourceMetadata: join(directory, 'package.json'),

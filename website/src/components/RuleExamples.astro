@@ -1,13 +1,13 @@
 ---
 import RuleCode from './RuleCode.astro';
-import goRuleSource from '../../../.rulekeeper/go-append-slice.rule.ts?raw';
-import serviceRuleSource from '../../../.rulekeeper/service-proto.rule.ts?raw';
+import goRuleSource from '../../../.coderuler/go-append-slice.rule.ts?raw';
+import serviceRuleSource from '../../../.coderuler/service-proto.rule.ts?raw';
 import Violation from './Violation.astro';
 import { sitePath } from '../lib/paths';
 import '../styles/rule-examples.css';
 
-const source = 'https://github.com/alex-dbs/rulekeeper/blob/main/.rulekeeper/';
-const httpRule = `import { Rule, ai, scopes } from '@alex-dbs/rulekeeper';
+const source = 'https://github.com/alex-dbs/coderuler/blob/main/.coderuler/';
+const httpRule = `import { Rule, ai, scopes } from '@alex-dbs/coderuler';
 
 export default class HttpResponseSplitting extends Rule {
   files = ['tests/manual/vulnerable_code.js'];

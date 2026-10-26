@@ -5,9 +5,9 @@ section: Getting started
 order: 1
 ---
 
-# RuleKeeper documentation
+# CodeRuler documentation
 
-RuleKeeper runs project policies against files in your working tree. Write a rule in TypeScript or JavaScript. Add examples that pass and violate it, then run the CLI locally or in CI.
+CodeRuler runs project policies against files in your working tree. Write a rule in TypeScript or JavaScript. Add examples that pass and violate it, then run the CLI locally or in CI.
 
 Store important policies as rules so enforcement does not depend on an AI agent remembering instructions. Run checks before review or make violations fail CI.
 
@@ -35,12 +35,12 @@ If you already have a policy, start with [writing rules](/docs/writing-rules/). 
 
 ## Trust and limits
 
-Rules are trusted Node.js code. RuleKeeper does not sandbox them. Run only rule modules and dependencies that you trust.
+Rules are trusted Node.js code. CodeRuler does not sandbox them. Run only rule modules and dependencies that you trust.
 
-A linter remains useful for established language and style rules. RuleKeeper adds executable policies specific to your project. Instructions in `AGENTS.md` can explain a policy, but the rule supplies its executable test.
+A linter remains useful for established language and style rules. CodeRuler adds executable policies specific to your project. Instructions in `AGENTS.md` can explain a policy, but the rule supplies its executable test.
 
 Examples in these guides are rules you can create. They are not a set of automatically enabled, shipped rules.
 
-These guides follow the source repository. For the flags in your installed release, run `rulekeeper <command> --help`.
+These guides follow the source repository. For the flags in your installed release, run `coderuler <command> --help`.
 
-The CLI requires Node.js `^24.15.0 || >=26.0.0`. Git is required for diff and pull-request checks. The source is on [GitHub](https://github.com/alex-dbs/rulekeeper), under the [Apache License 2.0](https://github.com/alex-dbs/rulekeeper/blob/main/LICENSE).
+The CLI requires Node.js `^24.15.0 || >=26.0.0`. Git is required for diff and pull-request checks. The source is on [GitHub](https://github.com/alex-dbs/coderuler), under the [Apache License 2.0](https://github.com/alex-dbs/coderuler/blob/main/LICENSE).

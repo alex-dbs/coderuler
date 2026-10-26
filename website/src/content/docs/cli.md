@@ -7,12 +7,12 @@ order: 10
 
 # CLI reference
 
-Run commands from the project root. For a project-local installation, replace `rulekeeper` with `npx rulekeeper`. Use `rulekeeper --help` or `rulekeeper <command> --help` for installed-release help.
+Run commands from the project root. For a project-local installation, replace `coderuler` with `npx coderuler`. Use `coderuler --help` or `coderuler <command> --help` for installed-release help.
 
 ## Version
 
 ```sh
-rulekeeper --version
+coderuler --version
 ```
 
 Print the installed package version. `-V` is the short form.
@@ -20,7 +20,7 @@ Print the installed package version. `-V` is the short form.
 ## Update
 
 ```sh
-rulekeeper update
+coderuler update
 ```
 
 Upgrade the active global npm installation to the `latest` release. npm must be on `PATH`. The command uses your npm registry configuration.
@@ -28,27 +28,27 @@ Upgrade the active global npm installation to the `latest` release. npm must be 
 Local installations and temporary `npx` copies cannot self-update. For a project-local npm development dependency, run:
 
 ```sh
-npm install --save-dev @alex-dbs/rulekeeper@latest
+npm install --save-dev @alex-dbs/coderuler@latest
 ```
 
-For other installation methods, use the package manager that installed RuleKeeper. An npm update failure returns npm's exit code.
+For other installation methods, use the package manager that installed CodeRuler. An npm update failure returns npm's exit code.
 
 ## Validate
 
 ```sh
-rulekeeper validate [rule]
+coderuler validate [rule]
 ```
 
 Load and structurally validate rules without evaluating them. The optional rule can be a rule name, module path, or directory. There are no command-specific flags.
 
-For all three selectors, a rule name is the exact filename stem of a discovered rule. Discovery searches project `.rulekeeper/` and home `~/.rulekeeper/`, including subfolders. A name filters discovered rules; an explicit path or directory replaces discovery.
+For all three selectors, a rule name is the exact filename stem of a discovered rule. Discovery searches project `.coderuler/` and home `~/.coderuler/`, including subfolders. A name filters discovered rules; an explicit path or directory replaces discovery.
 
 Validation does not execute inline tests or type-check TypeScript. Rule modules still execute as trusted Node.js code when loaded.
 
 ## Test
 
 ```sh
-rulekeeper test [rule] [options]
+coderuler test [rule] [options]
 ```
 
 | Flag | Default | Meaning |
@@ -63,7 +63,7 @@ The optional rule is a rule name, module path, or directory. Ordinary `tests` re
 ## Check
 
 ```sh
-rulekeeper check [path] [options]
+coderuler check [path] [options]
 ```
 
 The default target is `.`. A file or folder target narrows selection inside the current project root.
@@ -89,7 +89,7 @@ For rule-name and discovery behavior, see the description under [Validate](#vali
 Tags are space-separated, exact, and case-sensitive. Exclusion takes precedence over inclusion. With no tag flags, `check` uses every rule. If the filters match no rules, `check` succeeds with zero rules.
 
 ```sh
-rulekeeper check src --tags go security --exclude-tags experimental
+coderuler check src --tags go security --exclude-tags experimental
 ```
 
 `--json` and `--jsonl` are mutually exclusive. `--base` requires diff mode or `--pr`. `--auto-comment` also requires diff mode or `--pr`.
@@ -99,7 +99,7 @@ Concurrency must be a positive safe integer. Threshold must be a decimal between
 ## Inspect
 
 ```sh
-rulekeeper inspect <rule> [folder] [options]
+coderuler inspect <rule> [folder] [options]
 ```
 
 `<rule>` is a module path or exact discovered name. It selects one rule, not a directory. The folder defaults to `.`, and becomes the inspected project root.
@@ -117,23 +117,23 @@ Choose only one of `--json`, `--jsonl`, or `--raw`. Prices must be finite nonneg
 ## Dependencies
 
 ```sh
-rulekeeper deps add <packages...> [options]
-rulekeeper deps remove <names...> [options]
-rulekeeper deps sync [options]
+coderuler deps add <packages...> [options]
+coderuler deps remove <names...> [options]
+coderuler deps sync [options]
 ```
 
-All three commands accept `--global` or `--directory <path>`. They are mutually exclusive. Without either, commands manage the project's `.rulekeeper/` directory.
+All three commands accept `--global` or `--directory <path>`. They are mutually exclusive. Without either, commands manage the project's `.coderuler/` directory.
 
 Add accepts public npm names, versions, ranges, and tags. Remove accepts unversioned direct names. Sync acquires the committed graph and refreshes editor links. See [rule dependencies](/docs/dependencies/).
 
 ## Coding-agent skill
 
 ```sh
-rulekeeper skill install [options]
-rulekeeper skill update [options]
+coderuler skill install [options]
+coderuler skill update [options]
 ```
 
-These commands install or refresh the bundled `rulekeeper-new-rule` skill for coding agents.
+These commands install or refresh the bundled `coderuler-new-rule` skill for coding agents.
 
 | Install flag | Meaning |
 | --- | --- |
@@ -149,7 +149,7 @@ These commands install or refresh the bundled `rulekeeper-new-rule` skill for co
 | `-a, --agent <agents...>` | Target agents, using `"*"` for all |
 | `--copy` | Copy files instead of symlinking agent directories |
 
-Global and project update flags are mutually exclusive. The default target is the shared universal skills directory. Upgrade RuleKeeper before updating to obtain newer bundled content. Local skill sources refresh through `skills add`, not `skills update`.
+Global and project update flags are mutually exclusive. The default target is the shared universal skills directory. Upgrade CodeRuler before updating to obtain newer bundled content. Local skill sources refresh through `skills add`, not `skills update`.
 
 ## Machine-readable output
 
@@ -182,4 +182,4 @@ Check JSON and JSON Lines serialize raw reports. They do not apply the inspectio
 
 A test timeout is an expectation failure and uses `1`. A skipped rule is not a violation. Runtime failures are not converted into policy passes.
 
-The authoritative command definitions are in [program.ts](https://github.com/alex-dbs/rulekeeper/blob/main/src/adapter/cli/program.ts). Check serializers are in [reports.ts](https://github.com/alex-dbs/rulekeeper/blob/main/src/adapter/cli/reports.ts), and inspection formats are in [inspect-json.ts](https://github.com/alex-dbs/rulekeeper/blob/main/src/adapter/cli/inspect-json.ts).
+The authoritative command definitions are in [program.ts](https://github.com/alex-dbs/coderuler/blob/main/src/adapter/cli/program.ts). Check serializers are in [reports.ts](https://github.com/alex-dbs/coderuler/blob/main/src/adapter/cli/reports.ts), and inspection formats are in [inspect-json.ts](https://github.com/alex-dbs/coderuler/blob/main/src/adapter/cli/inspect-json.ts).

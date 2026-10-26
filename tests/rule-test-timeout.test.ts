@@ -5,14 +5,14 @@ import { after, test } from 'node:test';
 
 import { createSandbox, runCli, writeFile } from './support.ts';
 
-const sandbox = createSandbox('rulekeeper-test-timeout-');
+const sandbox = createSandbox('coderuler-test-timeout-');
 after(() => sandbox.cleanup());
 
 test('test stops synchronous and asynchronous hangs, cleans their projects, and runs later cases', { timeout: 15_000 }, async context => {
   const target = sandbox.isolated('timeouts');
   const roots = join(target.root, 'case-roots.jsonl');
-  writeFile(join(target.cwd, '.rulekeeper/deadline.rule.ts'), `import { appendFileSync } from 'node:fs';
-import { Rule, pass, test } from '@alex-dbs/rulekeeper';
+  writeFile(join(target.cwd, '.coderuler/deadline.rule.ts'), `import { appendFileSync } from 'node:fs';
+import { Rule, pass, test } from '@alex-dbs/coderuler';
 export default class Deadline extends Rule {
   files = ['inputs/*.txt'];
   runs = 0;

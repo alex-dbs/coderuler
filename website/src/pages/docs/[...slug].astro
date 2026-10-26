@@ -21,7 +21,7 @@ const position = entries.findIndex(item => item.id === entry.id);
 const previous = entries[position - 1];
 const next = entries[position + 1];
 ---
-<Base title={`${entry.data.title} · RuleKeeper docs`} description={entry.data.description} page="docs">
+<Base title={`${entry.data.title} · CodeRuler docs`} description={entry.data.description} page="docs">
   <div class="docs-shell page-shell">
     <aside class="docs-sidebar">
       <p class="eyebrow">Documentation</p>
@@ -36,8 +36,8 @@ const next = entries[position + 1];
       <div class="docs-article-head"><p class="eyebrow">{entry.data.section}</p><span class="docs-language">TypeScript & JavaScript</span></div>
       <article class="prose"><Content /></article>
       <div class="docs-article-footer">
-        <a href={`https://github.com/alex-dbs/rulekeeper/edit/main/website/src/content/docs/${entry.id}.md`}>Edit this page <span aria-hidden="true">↗</span></a>
-        <a href="https://github.com/alex-dbs/rulekeeper/issues">Report an issue <span aria-hidden="true">↗</span></a>
+        <a href={`https://github.com/alex-dbs/coderuler/edit/main/website/src/content/docs/${entry.id}.md`}>Edit this page <span aria-hidden="true">↗</span></a>
+        <a href="https://github.com/alex-dbs/coderuler/issues">Report an issue <span aria-hidden="true">↗</span></a>
       </div>
       <nav class="page-pagination" aria-label="Documentation pages">
         {previous ? <a href={docHref(previous.id)}><span>← Previous</span>{previous.data.title}</a> : <div />}
@@ -47,7 +47,7 @@ const next = entries[position + 1];
     <aside class="docs-toc" aria-label="On this page">
       <p class="eyebrow">On this page</p>
       <nav><ul>{contents.map(heading => <li class:list={{ nested: heading.depth === 3 }}><a href={`#${heading.slug}`} data-toc-link>{heading.text}</a></li>)}</ul></nav>
-      <a class="toc-help" href="https://github.com/alex-dbs/rulekeeper/issues">Something unclear? <span aria-hidden="true">↗</span></a>
+      <a class="toc-help" href="https://github.com/alex-dbs/coderuler/issues">Something unclear? <span aria-hidden="true">↗</span></a>
     </aside>
   </div>
 </Base>

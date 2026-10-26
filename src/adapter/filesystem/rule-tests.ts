@@ -143,7 +143,7 @@ async function runCase(
     return failure;
   };
   try {
-    const root = await mkdtemp(join(await realpath(tmpdir()), 'rulekeeper-test-'));
+    const root = await mkdtemp(join(await realpath(tmpdir()), 'coderuler-test-'));
     let actual: TestActual | undefined;
     let active: RuleTestWorkerSession | undefined;
     try {

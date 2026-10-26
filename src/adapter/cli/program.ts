@@ -62,18 +62,18 @@ function parseTimeout(value: string): number {
 export function createProgram(services: CliServices): Command {
   const program = new Command();
   program
-    .name('rulekeeper')
+    .name('coderuler')
     .description('Evaluate trusted TypeScript rules against the current working tree')
     .configureOutput({
       writeOut: text => services.write(text),
-      writeErr: text => services.writeError(`rulekeeper: ${services.redact(escapeDiagnostic(text))}`),
+      writeErr: text => services.writeError(`coderuler: ${services.redact(escapeDiagnostic(text))}`),
     })
     .version(services.version)
     .exitOverride();
 
   program
     .command('update')
-    .description('Upgrade the active global npm installation of Rulekeeper to the latest version')
+    .description('Upgrade the active global npm installation of CodeRuler to the latest version')
     .action(async () => {
       const { runUpdate } = await import('./commands/update.js');
       const commandServices = await services.load.update(services);
@@ -82,8 +82,7 @@ export function createProgram(services: CliServices): Command {
 
   const skill = program
     .command('skill')
-    .description('Install or refresh the bundled rulekeeper-new-rule Agent Skill');
-
+    .description('Install or refresh the bundled coderuler-new-rule Agent Skill');
   skill
     .command('install')
     .description('Install the bundled skill; defaults to the shared universal skills directory')
@@ -104,7 +103,7 @@ export function createProgram(services: CliServices): Command {
     .addOption(new Option('-p, --project', 'refresh a project installation (default)').conflicts('global'))
     .option('-a, --agent <agents...>', 'target agents (use "*" for all agents)')
     .option('--copy', 'copy files instead of symlinking agent directories')
-    .addHelpText('after', '\nUpgrade Rulekeeper first to obtain newer skill content. Local sources are refreshed with skills add, not skills update.')
+    .addHelpText('after', '\nUpgrade CodeRuler first to obtain newer skill content. Local sources are refreshed with skills add, not skills update.')
     .action(async (options: SkillOptions) => {
       const { runSkill } = await import('./commands/skill.js');
       const commandServices = await services.load.skill(services);
@@ -246,7 +245,7 @@ export async function runProgram(argv: readonly string[], services: CliServices)
         : EXIT_FAILURE;
     }
     const message = error instanceof Error ? error.message : String(error);
-    services.writeError(`rulekeeper: ${services.redact(escapeDiagnostic(message))}\n`);
+    services.writeError(`coderuler: ${services.redact(escapeDiagnostic(message))}\n`);
     return EXIT_FAILURE;
   }
 }

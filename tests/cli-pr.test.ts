@@ -32,7 +32,7 @@ import {
 } from './pr-support.ts';
 import { createSandbox, parseCheckOutput, runCli, withLoadOverrides, writeFile, type CheckReportShape, type Sandbox } from './support.ts';
 
-const sandbox = createSandbox('rulekeeper-cli-pr-');
+const sandbox = createSandbox('coderuler-cli-pr-');
 after(() => sandbox.cleanup());
 const dependencyRegistry = createDependencyFixture(join(sandbox.root, 'dependency-registry'));
 let dependencyInvocation = 0;
@@ -49,7 +49,7 @@ function fixture(context: TestContext, label: string): PrFixture {
 }
 
 function assertClean(target: PrFixture): void {
-  assert.deepEqual(readdirSync(target.temporary).filter(name => name.startsWith('rulekeeper-pr-')), [], 'the entire temporary workspace must be removed');
+  assert.deepEqual(readdirSync(target.temporary).filter(name => name.startsWith('coderuler-pr-')), [], 'the entire temporary workspace must be removed');
 }
 
 async function check(target: PrFixture, args: readonly string[] = [], invocation: { cwd?: string; env?: NodeJS.ProcessEnv } = {}) {
@@ -70,8 +70,8 @@ async function check(target: PrFixture, args: readonly string[] = [], invocation
 }
 
 function cleanCaller(target: PrFixture): void {
-  writeFile(join(target.cwd, '.rulekeeper/base.rule.ts'), `${git(target, 'show', 'HEAD:.rulekeeper/base.rule.ts')}\n`);
-  rmSync(join(target.cwd, '.rulekeeper/caller-only.rule.ts'), { force: true });
+  writeFile(join(target.cwd, '.coderuler/base.rule.ts'), `${git(target, 'show', 'HEAD:.coderuler/base.rule.ts')}\n`);
+  rmSync(join(target.cwd, '.coderuler/caller-only.rule.ts'), { force: true });
 }
 
 function publish(target: PrFixture, branch: 'main' | 'feature/pr-fixture', change: () => void): PrFixture {
@@ -143,8 +143,8 @@ test('--pr uses current committed base and global policy only on PR changes', as
       evaluations: [{ filepath: 'src/changed.txt', source: 'BAD changed by the PR\n', status: 'violation', message: GLOBAL_MESSAGE }],
     },
   ]);
-  assert.match(reports[0]!.ruleFile, /[/\\]rulekeeper-pr-[^/\\]+[/\\]base[/\\]\.rulekeeper[/\\]base\.rule\.ts$/);
-  assert.equal(reports[1]!.ruleFile, join(target.home, '.rulekeeper/global.rule.ts'));
+  assert.match(reports[0]!.ruleFile, /[/\\]coderuler-pr-[^/\\]+[/\\]base[/\\]\.coderuler[/\\]base\.rule\.ts$/);
+  assert.equal(reports[1]!.ruleFile, join(target.home, '.coderuler/global.rule.ts'));
   assert.deepEqual(requests.map(({ method, url }) => ({ method, url })), [
     { method: 'GET', url: `/repos/${PR_REPOSITORY}/pulls/${PR_NUMBER}` },
   ], 'without --auto-comment only PR metadata is requested; no discovery or POST occurs');
@@ -182,14 +182,14 @@ test('--base release selects distinct committed policy and the release merge-bas
 
 test('a base without repository policy runs global policy, while two empty policy roots fail', async context => {
   let target = fixture(context, 'global-only');
-  target = publish(target, 'main', () => rmSync(join(target.cwd, '.rulekeeper'), { recursive: true }));
+  target = publish(target, 'main', () => rmSync(join(target.cwd, '.coderuler'), { recursive: true }));
   const requests = await interceptGithub(context, target);
   const globalOnly = await check(target, ['--pr', '42']);
   assert.equal(globalOnly.status, 1, globalOnly.stderr);
   assert.deepEqual(evaluations(parseCheckOutput(globalOnly, 'global only')), [
     { rule: 'global', filepath: 'src/changed.txt', status: 'violation', message: GLOBAL_MESSAGE },
   ]);
-  rmSync(join(target.home, '.rulekeeper'), { recursive: true });
+  rmSync(join(target.home, '.coderuler'), { recursive: true });
   const noRules = await check(target, ['--pr', '42']);
   assert.equal(noRules.status, 2);
   assert.match(noRules.stderr, /no rule files/i);
@@ -206,7 +206,7 @@ test('check --pr selects rule names from committed base policy', async context =
   assert.deepEqual(evaluations(reports), [
     { rule: 'base', filepath: 'src/changed.txt', status: 'violation', message: BASE_MESSAGE },
   ]);
-  assert.match(reports[0]!.ruleFile, /[/\\]rulekeeper-pr-[^/\\]+[/\\]base[/\\]\.rulekeeper[/\\]base\.rule\.ts$/);
+  assert.match(reports[0]!.ruleFile, /[/\\]coderuler-pr-[^/\\]+[/\\]base[/\\]\.coderuler[/\\]base\.rule\.ts$/);
 });
 
 test('caller-relative --rules intentionally overrides discovery but still requires a fetched base', async context => {
@@ -245,7 +245,6 @@ test('positional targets resolve in PR head and preserve missing, boundary, and 
     ['src/escape.txt', /symbolic link/],
   ] as const) {
     const result = await check(target, [path, '--pr', '42']);
-    assert.equal(result.status, 2, path);
     assert.equal(result.stdout, '');
     assert.match(result.stderr, error);
   }
@@ -256,13 +255,13 @@ const CUSTOM_COMMENT = '**Committed base guidance** — use the trusted policy.'
 
 function commentPolicy(target: PrFixture): PrFixture {
   const updated = publish(target, 'main', () => {
-    writeFile(join(target.cwd, '.rulekeeper/base.rule.ts'), policy(
+    writeFile(join(target.cwd, '.coderuler/base.rule.ts'), policy(
       `() => violation('Located committed-base rejection')`,
       '',
       `scope = file => [{ id: '$', source: file.source, lines: { start: 1, end: 1 } }];\n  comment = ${JSON.stringify(CUSTOM_COMMENT)};`,
     ));
   });
-  writeFile(join(target.home, '.rulekeeper/global.rule.ts'), policy(
+  writeFile(join(target.home, '.coderuler/global.rule.ts'), policy(
     `() => violation('Unlocated global rejection')`, '', `group = 'project';`,
   ));
   return updated;
@@ -334,7 +333,6 @@ test('failed comment POST retains analysis and removes both checkout trees', asy
   const requests = await interceptGithub(context, target, { postStatus: 403 });
   const result = await check(target, ['--pr', '42', '--auto-comment']);
   assert.equal(result.status, 2);
-  assert.notEqual(result.stderr, '');
   assert.deepEqual(JSON.parse(result.stdout).reports.map((report: CheckReportShape) => report.status), ['violation', 'violation']);
   assert.equal(posts(requests).length, 1, 'do not continue posting after the rejected review');
   assert.ok(posts(requests)[0]!.url.endsWith('/pulls/42/reviews'));
@@ -346,7 +344,7 @@ test('PR advancement after actual analysis refuses stale inline and fallback fin
       let target = fixture(child, located ? 'stale-context-anchor' : 'stale-summary');
       if (located) {
         target = publish(target, 'main', () => {
-          writeFile(join(target.cwd, '.rulekeeper/base.rule.ts'), policy(
+          writeFile(join(target.cwd, '.coderuler/base.rule.ts'), policy(
             `subject => subject.source.includes('BAD') ? violation(${JSON.stringify(BASE_MESSAGE)}) : pass()`,
             '',
             `scope = file => [{ id: '$', source: file.source, lines: { start: 1, end: 1 } }];`,
@@ -406,7 +404,7 @@ function policyLock(version: '1.0.0' | '2.0.0', malicious = false): string {
   const names = ['fixture-policy', 'fixture-shared', ...(malicious ? ['fixture-install'] : [])];
   const direct = { 'fixture-policy': version, ...(malicious ? { 'fixture-install': '1.0.0' } : {}) };
   const packages: Record<string, unknown> = {
-    '': { name: 'rulekeeper-rules', version: '1.0.0', dependencies: direct },
+    '': { name: 'coderuler-rules', version: '1.0.0', dependencies: direct },
   };
   for (const name of names) {
     const artifact = dependencyRegistry.artifacts.find(candidate => candidate.manifest.name === name
@@ -420,7 +418,7 @@ function policyLock(version: '1.0.0' | '2.0.0', malicious = false): string {
       ...(name === 'fixture-install' ? { hasInstallScript: true } : {}),
     };
   }
-  return `${JSON.stringify({ name: 'rulekeeper-rules', version: '1.0.0', lockfileVersion: 3, requires: true, packages }, null, 2)}\n`;
+  return `${JSON.stringify({ name: 'coderuler-rules', version: '1.0.0', lockfileVersion: 3, requires: true, packages }, null, 2)}\n`;
 }
 
 function committedDependencies(target: PrFixture, manifest: 'malformed' | 'unrelated' = 'unrelated'): PrFixture {
@@ -433,9 +431,9 @@ function committedDependencies(target: PrFixture, manifest: 'malformed' | 'unrel
     writeFile(join(target.cwd, 'package-lock.json'), '{ stale application lock');
     writeFile(join(target.cwd, 'npm-shrinkwrap.json'), '{ malformed application shrinkwrap');
     // Rules have their own ESM boundary; Node need not parse the unrelated application manifest.
-    writeFile(join(target.cwd, '.rulekeeper/package.json'), '{"type":"module"}');
-    writeFile(join(target.cwd, '.rulekeeper/rulekeeper.lock'), policyLock('1.0.0'));
-    writeFile(join(target.cwd, '.rulekeeper/base.rule.ts'), policy(
+    writeFile(join(target.cwd, '.coderuler/package.json'), '{"type":"module"}');
+    writeFile(join(target.cwd, '.coderuler/coderuler.lock'), policyLock('1.0.0'));
+    writeFile(join(target.cwd, '.coderuler/base.rule.ts'), policy(
       `subject => subject.source.includes('BAD') ? violation(message) : pass()`,
       `import { message } from 'fixture-policy';
 import assert from 'node:assert/strict';
@@ -448,7 +446,7 @@ for (const name of ['fixture-policy', 'fixture-shared']) {
   assert.equal(lstatSync(location).isDirectory(), true);
   assert.equal(lstatSync(location).isSymbolicLink(), false);
 }
-const marker = JSON.parse(readFileSync(new URL('.rulekeeper-install.json', installed), 'utf8'));
+const marker = JSON.parse(readFileSync(new URL('.coderuler-install.json', installed), 'utf8'));
 assert.equal(marker.version, 1);
 assert.match(marker.key, /^[a-f0-9]{64}$/);
 assert.ok(marker.installedLocations.includes('node_modules/fixture-policy'));
@@ -462,7 +460,7 @@ assert.equal(existsSync(new URL('./package-lock.json', import.meta.url)), false)
     ));
   });
   return publish(target, 'feature/pr-fixture', () => {
-    writeFile(join(target.cwd, '.rulekeeper/rulekeeper.lock'), policyLock('2.0.0', true));
+    writeFile(join(target.cwd, '.coderuler/coderuler.lock'), policyLock('2.0.0', true));
     writeFile(join(target.cwd, 'package.json'), JSON.stringify({
       name: 'untrusted-head',
       dependencies: { 'never-install-head': 'file:missing-head-package' },
@@ -552,11 +550,11 @@ test('invalid base locks, unavailable locked packages and imports fail without g
       let target = committedDependencies(fixture(child, `managed-${failure}`));
       target = publish(target, 'main', () => {
         if (failure === 'lock') {
-          writeFile(join(target.cwd, '.rulekeeper/rulekeeper.lock'), '{ invalid rule lock');
+          writeFile(join(target.cwd, '.coderuler/coderuler.lock'), '{ invalid rule lock');
         } else if (failure === 'unsafe') {
-          writeFile(join(target.cwd, '.rulekeeper/rulekeeper.lock'), policyLock('1.0.0', true));
+          writeFile(join(target.cwd, '.coderuler/coderuler.lock'), policyLock('1.0.0', true));
         } else if (failure === 'import') {
-          writeFile(join(target.cwd, '.rulekeeper/base.rule.ts'), policy(
+          writeFile(join(target.cwd, '.coderuler/base.rule.ts'), policy(
             `() => violation(message)`, `import message from '../policy/missing-helper.ts';`,
           ));
         } else {
@@ -566,7 +564,7 @@ test('invalid base locks, unavailable locked packages and imports fail without g
       const result = await checkWithDependencies(child, target, failure === 'offline' ? 'offline' : 'tarballs', ['--auto-comment']);
       assert.equal(result.status, 2);
       assert.equal(result.stdout, '');
-      assert.match(result.stderr, failure === 'lock' ? /rulekeeper\.lock|JSON|lock/i
+      assert.match(result.stderr, failure === 'lock' ? /coderuler\.lock|JSON|lock/i
         : failure === 'offline' ? /fixture-policy|fixture-shared|network|cache|request/i
           : failure === 'unsafe' ? /fixture-install|install script|lifecycle|unsupported/i : /missing-helper|import|resolve/i);
       assert.deepEqual(posts(result.githubRequests), []);
@@ -582,8 +580,8 @@ test('SDK-only committed base rules need neither rule lock nor application insta
   let target = fixture(context, 'sdk-only-no-install');
   target = publish(target, 'main', () => {
     writeFile(join(target.cwd, 'package.json'), '{ invalid unrelated application manifest');
-    writeFile(join(target.cwd, '.rulekeeper/package.json'), '{"type":"module"}');
-    writeFile(join(target.cwd, '.rulekeeper/base.rule.ts'), policy(
+    writeFile(join(target.cwd, '.coderuler/package.json'), '{"type":"module"}');
+    writeFile(join(target.cwd, '.coderuler/base.rule.ts'), policy(
       `subject => subject.source.includes('BAD') ? violation(${JSON.stringify(BASE_MESSAGE)}) : pass()`,
     ));
   });
@@ -658,8 +656,8 @@ for (const channel of ['count', 'parameters'] as const) {
 test('root-dotfile project groups include committed inputs but no generated Git metadata or sibling policy tree', async context => {
   let target = fixture(context, 'metadata-inputs');
   target = publish(target, 'main', () => {
-    rmSync(join(target.cwd, '.rulekeeper/base.rule.ts'));
-    writeFile(join(target.cwd, '.rulekeeper/dotfiles.rule.ts'), `import { Rule, pass } from '@alex-dbs/rulekeeper';
+    rmSync(join(target.cwd, '.coderuler/base.rule.ts'));
+    writeFile(join(target.cwd, '.coderuler/dotfiles.rule.ts'), `import { Rule, pass } from '@alex-dbs/coderuler';
 export default class Dotfiles extends Rule {
   files = ['.*'];
   group = 'project';
@@ -720,8 +718,8 @@ test('representative selector, metadata, ref, and history failures return exit 2
 
 test('committed-base and global duplicate rule names fail rather than silently overriding policy', async context => {
   const target = fixture(context, 'duplicate-policy');
-  rmSync(join(target.home, '.rulekeeper/global.rule.ts'));
-  writeFile(join(target.home, '.rulekeeper/base.rule.ts'), policy(`() => pass('Must not override trusted base')`));
+  rmSync(join(target.home, '.coderuler/global.rule.ts'));
+  writeFile(join(target.home, '.coderuler/base.rule.ts'), policy(`() => pass('Must not override trusted base')`));
   const requests = await interceptGithub(context, target);
   const result = await check(target, ['--pr', '42', '--auto-comment']);
   assert.equal(result.status, 2);

@@ -488,8 +488,8 @@ test('CLI card rendering receives live widths, preserves concurrency, and closes
         if (line.startsWith('│') || line.startsWith('╰')) assert.equal(line.length, width, line);
       }
       if (fails) {
-        assert.match(target.stderr.at(-1)!, /^rulekeeper: failure without terminal event\n$/);
-        if (mode === 'verbose') assert.ok(output.lastIndexOf('╰') < output.indexOf('rulekeeper:'), output);
+        assert.match(target.stderr.at(-1)!, /^coderuler: failure without terminal event\n$/);
+        if (mode === 'verbose') assert.ok(output.lastIndexOf('╰') < output.indexOf('coderuler:'), output);
       }
     }
   }

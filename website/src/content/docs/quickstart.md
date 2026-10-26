@@ -1,6 +1,6 @@
 ---
 title: Quickstart
-description: Install RuleKeeper and run a complete deterministic rule with inline tests.
+description: Install CodeRuler and run a complete deterministic rule with inline tests.
 section: Getting started
 order: 2
 ---
@@ -11,38 +11,38 @@ This example requires each text file in `config/` to start with `/internal/`. It
 
 ## Install
 
-Use Node.js `^24.15.0 || >=26.0.0`. The CLI command is `rulekeeper`. The npm package name is `@alex-dbs/rulekeeper`.
+Use Node.js `^24.15.0 || >=26.0.0`. The CLI command is `coderuler`. The npm package name is `@alex-dbs/coderuler`.
 
 For a project-local installation, run these commands from your project root:
 
 ```sh
-npm install --save-dev @alex-dbs/rulekeeper
-npx rulekeeper --help
-npx rulekeeper --version
+npm install --save-dev @alex-dbs/coderuler
+npx coderuler --help
+npx coderuler --version
 ```
 
-This guide uses `npx rulekeeper`. If you prefer a global installation, run `npm install -g @alex-dbs/rulekeeper` and use `rulekeeper` instead. A global CLI can load rules without a project-local SDK dependency.
+This guide uses `npx coderuler`. If you prefer a global installation, run `npm install -g @alex-dbs/coderuler` and use `coderuler` instead. A global CLI can load rules without a project-local SDK dependency.
 
-Use `rulekeeper update` for a global npm installation. See the [update commands](/docs/cli/#update) for project-local installations.
+Use `coderuler update` for a global npm installation. See the [update commands](/docs/cli/#update) for project-local installations.
 
 To use an unreleased source checkout instead of the npm package:
 
 ```sh
-git clone https://github.com/alex-dbs/rulekeeper.git
-cd rulekeeper
+git clone https://github.com/alex-dbs/coderuler.git
+cd coderuler
 npm ci
 npm run build
 npm start -- --help
 ```
 
-From another project's root, invoke the built CLI with `node /absolute/path/to/rulekeeper/dist/cli.js` instead of `npx rulekeeper`.
+From another project's root, invoke the built CLI with `node /absolute/path/to/coderuler/dist/cli.js` instead of `npx coderuler`.
 
 ## Save a rule and its tests
 
-Create `.rulekeeper/internal-url.rule.ts` in your project. Copy this complete module:
+Create `.coderuler/internal-url.rule.ts` in your project. Copy this complete module:
 
 ```ts
-import { Rule, regex, test } from '@alex-dbs/rulekeeper';
+import { Rule, regex, test } from '@alex-dbs/coderuler';
 
 export default class InternalUrl extends Rule {
   files = ['config/*.txt'];
@@ -63,8 +63,8 @@ The filename gives this rule the name `internal-url`. The `files` property selec
 Run these commands from your project root:
 
 ```sh
-npx rulekeeper validate .rulekeeper/internal-url.rule.ts
-npx rulekeeper test .rulekeeper/internal-url.rule.ts
+npx coderuler validate .coderuler/internal-url.rule.ts
+npx coderuler test .coderuler/internal-url.rule.ts
 ```
 
 If the module meets the rule contract, validation prints `Valid rule: internal-url` and exits with status `0`. It does not evaluate the policy or type-check TypeScript.
@@ -76,9 +76,10 @@ The test command runs both cases. Both tests pass: the second case expects a vio
 Inspection runs the rule on real project files and shows its pipeline:
 
 ```sh
-npx rulekeeper inspect .rulekeeper/internal-url.rule.ts .
+npx coderuler inspect .coderuler/internal-url.rule.ts .
 ```
 
 If no files match, the rule does not evaluate a subject. A skip does not prove that the policy works. Keep both passing and violating tests, and inspect representative files.
 
-Next, read [how it works](/docs/how-it-works/) or [writing rules](/docs/writing-rules/). This example also appears in the [rule author reference](https://github.com/alex-dbs/rulekeeper/blob/main/skills/rulekeeper-new-rule/reference.md#regex-matching-means-passing).
+Next, read [how it works](/docs/how-it-works/) or [writing rules](/docs/writing-rules/). This example also appears in the [rule author reference](https://github.com/alex-dbs/coderuler/blob/main/skills/coderuler-new-rule/reference.md#regex-matching-means-passing).
+

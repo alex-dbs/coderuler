@@ -13,7 +13,7 @@ import {
   type Sandbox,
 } from './support.ts';
 
-const sandbox = createSandbox('rulekeeper-cli-diff-');
+const sandbox = createSandbox('coderuler-cli-diff-');
 after(() => sandbox.cleanup());
 
 function git(target: Sandbox, ...args: string[]): string {
@@ -30,7 +30,7 @@ function files(target: Sandbox, entries: Readonly<Record<string, string>>): void
 }
 
 function rule(target: Sandbox, name: string, fields = '', pattern = 'src/**/*.txt'): void {
-  writeFile(join(target.cwd, '.rulekeeper', `${name}.rule.ts`), `import { Rule, pass, violation, scopes } from '@alex-dbs/rulekeeper';
+  writeFile(join(target.cwd, '.coderuler', `${name}.rule.ts`), `import { Rule, pass, violation, scopes } from '@alex-dbs/coderuler';
 export default class Local extends Rule {
   files = [${JSON.stringify(pattern)}];
   ${fields}
@@ -49,7 +49,7 @@ function repository(label: string): Sandbox {
   const target = sandbox.isolated(label);
   files(target, { '.gitignore': 'node_modules/\n' });
   git(target, 'init', '--initial-branch=main');
-  git(target, 'config', 'user.name', 'Rulekeeper tests');
+  git(target, 'config', 'user.name', 'CodeRuler tests');
   git(target, 'config', 'user.email', 'tests@example.invalid');
   git(target, 'config', 'commit.gpgsign', 'false');
   return target;
@@ -488,10 +488,10 @@ test('reserved changes and deletions skip groups until an eligible path is delet
     'dist/generated.txt': 'after\n',
     'coverage/report.txt': 'after\n',
     'node_modules/pkg/tracked.txt': 'after\n',
-    '.rulekeeper/helper.ts': 'export const helper = true;\n',
+    '.coderuler/helper.ts': 'export const helper = true;\n',
   });
   git(target, 'rm', '--', 'old/deleted.txt');
-  skipped(await check(target, '--diff-only'), ['folder', 'project']);
+  assert.deepEqual(groups(await check(target, '--diff-only')), []);
   git(target, 'rm', '--', 'src/metadata.config');
   assert.deepEqual(groups(await check(target, '--diff-only')), [
     {
@@ -577,10 +577,10 @@ test('files named old or dist and nested dist directories remain eligible', asyn
   ]);
 });
 
-test('changing an explicitly loaded rule outside .rulekeeper does not trigger its project group', async () => {
+test('changing an explicitly loaded rule outside .coderuler does not trigger its project group', async () => {
   const target = repository('explicit-rule-change');
   const ruleFile = 'rules/explicit.rule.ts';
-  const source = `import { Rule, pass } from '@alex-dbs/rulekeeper';
+  const source = `import { Rule, pass } from '@alex-dbs/coderuler';
 export default class Explicit extends Rule {
   files = ['src/**/*.txt'];
   group = 'project';

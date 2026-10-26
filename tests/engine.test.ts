@@ -37,10 +37,10 @@ import { wholeFileScope } from '../dist/app/selection.js';
 import { createUsageTracker } from '../dist/adapter/cli/inspect-usage.js';
 import { UNREPORTED_AI_USAGE, createSandbox, expectFailure, parseCheckOutput, runCli, writeFile } from './support.ts';
 
-const cliSandbox = createSandbox('rulekeeper-engine-');
+const cliSandbox = createSandbox('coderuler-engine-');
 after(() => cliSandbox.cleanup());
 
-const RULE_DIR = '/repo/.rulekeeper';
+const RULE_DIR = '/repo/.coderuler';
 
 class MemoryProject implements Project {
   readonly root: string;
@@ -483,8 +483,8 @@ test('scope selectors preserve genuine empty results and ordered dense results',
 test('CLI rejects sparse scope results but keeps a genuine empty scope result skipped', async () => {
   const target = cliSandbox.isolated('scope-array');
   writeFile(`${target.cwd}/visible.txt`, 'visible');
-  const ruleFile = `${target.cwd}/.rulekeeper/scopes.rule.ts`;
-  writeFile(ruleFile, `import { Rule, pass, type ScopeMatch } from '@alex-dbs/rulekeeper';
+  const ruleFile = `${target.cwd}/.coderuler/scopes.rule.ts`;
+  writeFile(ruleFile, `import { Rule, pass, type ScopeMatch } from '@alex-dbs/coderuler';
 export default class Scopes extends Rule {
   files = ['visible.txt'];
   scope = () => new Array<ScopeMatch>(1);
@@ -495,7 +495,7 @@ export default class Scopes extends Rule {
   expectFailure(rejected, 'sparse scope result');
   assert.match(rejected.stderr, /scope.*visible\.txt\[0\]/);
 
-  writeFile(ruleFile, `import { Rule, pass } from '@alex-dbs/rulekeeper';
+  writeFile(ruleFile, `import { Rule, pass } from '@alex-dbs/coderuler';
 export default class Scopes extends Rule {
   files = ['visible.txt'];
   scope = () => [];
@@ -514,7 +514,7 @@ test('CLI validates sparse pattern lists even on disabled rules before executing
   writeFile(`${target.cwd}/visible.txt`, 'visible');
   for (const field of ['files', 'exclude']) {
     for (const enabled of [true, false]) {
-      writeFile(`${target.cwd}/.rulekeeper/patterns.rule.ts`, `import { Rule, pass } from '@alex-dbs/rulekeeper';
+      writeFile(`${target.cwd}/.coderuler/patterns.rule.ts`, `import { Rule, pass } from '@alex-dbs/coderuler';
 export default class Patterns extends Rule {
   enabled = ${enabled};
   ${field} = new Array<string>(1);

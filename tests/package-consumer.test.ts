@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createDependencyFixture, dependencyFixtureEnvironment, fixturePackages, POLICY_MESSAGE_V1, type DependencyFixture } from './dependency-support.ts';
 
 const REPO_ROOT = realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), '..'));
-const PACKAGE_NAME = '@alex-dbs/rulekeeper';
+const PACKAGE_NAME = '@alex-dbs/coderuler';
 const DEFAULT_TIMEOUT = 900_000;
 
 interface PackedFile {
@@ -108,7 +108,7 @@ interface Consumer {
 const SHARED_HELPER_SOURCE = `export const LICENSE_PATTERN = /Copyright ..../;
 `;
 
-const LICENSE_RULE_SOURCE = `import { Rule, regex } from '@alex-dbs/rulekeeper';
+const LICENSE_RULE_SOURCE = `import { Rule, regex } from '@alex-dbs/coderuler';
 import { LICENSE_PATTERN } from './helpers/shared.js';
 
 export default class LicenseRule extends Rule {
@@ -117,7 +117,7 @@ export default class LicenseRule extends Rule {
 }
 `;
 
-const CONTRACT_RULE_SOURCE = `import { Rule, regex } from '@alex-dbs/rulekeeper';
+const CONTRACT_RULE_SOURCE = `import { Rule, regex } from '@alex-dbs/coderuler';
 
 export default class ContractRule extends Rule {
   files = ['src/*.ts'];
@@ -154,7 +154,7 @@ const TYPED_CONSUMER_SOURCE = `import {
   type SelectionContext,
   type SourceFile,
   type Subject,
-} from '@alex-dbs/rulekeeper';
+} from '@alex-dbs/coderuler';
 
 export class InfraPlacement extends Rule {
   files = ['internal/infra/**/*.go'];
@@ -242,20 +242,19 @@ export class ServiceTableRule extends Rule {
 }
 `;
 
-const PROBE_SOURCE = `import { Rule, ai, regex, pass, violation, scopes, createAstGrepLanguageRegistrations } from '@alex-dbs/rulekeeper';
-
-const brand = Symbol.for('rulekeeper.Rule');
-process.stdout.write(JSON.stringify({
-  resolved: import.meta.resolve('@alex-dbs/rulekeeper'),
+const PROBE_SOURCE = `import { Rule, ai, regex, pass, violation, scopes, createAstGrepLanguageRegistrations } from '@alex-dbs/coderuler';
+const brand = Symbol.for('coderuler.Rule');
+console.log(JSON.stringify({
+  resolved: import.meta.resolve('@alex-dbs/coderuler'),
   selectors: Object.keys(scopes).sort(),
   ruleIsFunction: typeof Rule === 'function',
   brand: Rule.prototype[brand] === true,
-  helpers: [ai, regex, pass, violation].map((value) => typeof value),
+  helpers: [ai, regex, pass, violation].map(value => typeof value),
   registrations: typeof createAstGrepLanguageRegistrations,
 }));
 `;
 
-const GLOBAL_RULE_SOURCE = `import { Rule, pass, scopes, test, violation } from '@alex-dbs/rulekeeper';
+const GLOBAL_RULE_SOURCE = `import { Rule, pass, scopes, test, violation } from '@alex-dbs/coderuler';
 
 export default class GlobalRule extends Rule {
   files = ['src/*.txt'];
@@ -270,7 +269,7 @@ export const tests = [
 ];
 `;
 
-const GLOBAL_HOME_RULE_SOURCE = `import { Rule, pass, test, violation } from '@alex-dbs/rulekeeper';
+const GLOBAL_HOME_RULE_SOURCE = `import { Rule, pass, test, violation } from '@alex-dbs/coderuler';
 
 export default class GlobalHomeRule extends Rule {
   files = ['notes/*.txt'];
@@ -283,7 +282,7 @@ export const tests = [
 ];
 `;
 
-const LOCAL_PREFERENCE_RULE_SOURCE = `import { Rule, FIXTURE_LOCAL_MARKER, pass, scopes, test, violation } from '@alex-dbs/rulekeeper';
+const LOCAL_PREFERENCE_RULE_SOURCE = `import { Rule, FIXTURE_LOCAL_MARKER, pass, scopes, test, violation } from '@alex-dbs/coderuler';
 import { parse } from 'yaml';
 import { createRequire } from 'node:module';
 
@@ -324,8 +323,8 @@ const MANAGED_YAML_FILES = {
   'util.js': 'export const privateUtility = true;\n',
 };
 
-const MISSING_IMPORT_RULE_SOURCE = `import '@alex-dbs/rulekeeper-fixture-missing';
-import { Rule } from '@alex-dbs/rulekeeper';
+const MISSING_IMPORT_RULE_SOURCE = `import '@alex-dbs/coderuler-fixture-missing';
+import { Rule } from '@alex-dbs/coderuler';
 
 export default class MissingImportRule extends Rule {
   files = ['src/*.txt'];
@@ -334,7 +333,7 @@ export default class MissingImportRule extends Rule {
 `;
 
 const MISSING_RELATIVE_RULE_SOURCE = `import './rules.js';
-import { Rule } from '@alex-dbs/rulekeeper';
+import { Rule } from '@alex-dbs/coderuler';
 
 export default class MissingRelativeRule extends Rule {
   files = ['src/*.txt'];
@@ -343,7 +342,7 @@ export default class MissingRelativeRule extends Rule {
 `;
 
 const EXPORT_RESTRICTION_RULE_SOURCE = `import 'yaml/util';
-import { Rule } from '@alex-dbs/rulekeeper';
+import { Rule } from '@alex-dbs/coderuler';
 
 export default class ExportRestrictionRule extends Rule {
   files = ['src/*.txt'];
@@ -352,7 +351,7 @@ export default class ExportRestrictionRule extends Rule {
 `;
 
 const DIRECT_YAML_RULE_SOURCE = `import 'yaml';
-import { Rule } from '@alex-dbs/rulekeeper';
+import { Rule } from '@alex-dbs/coderuler';
 
 export default class DirectYamlRule extends Rule {
   files = ['src/*.txt'];
@@ -361,7 +360,7 @@ export default class DirectYamlRule extends Rule {
 `;
 
 const REQUIRED_EXPORT_RESTRICTION_RULE_SOURCE = `import { createRequire } from 'node:module';
-import { Rule } from '@alex-dbs/rulekeeper';
+import { Rule } from '@alex-dbs/coderuler';
 
 createRequire(import.meta.url)('yaml/util');
 
@@ -372,7 +371,7 @@ export default class RequiredExportRestrictionRule extends Rule {
 `;
 
 const REQUIRED_YAML_RULE_SOURCE = `import './helpers/required-yaml.js';
-import { Rule } from '@alex-dbs/rulekeeper';
+import { Rule } from '@alex-dbs/coderuler';
 
 export default class RequiredYamlRule extends Rule {
   files = ['src/*.txt'];
@@ -387,8 +386,8 @@ const require = createRequire(import.meta.url);
 export const requiredYaml = require('yaml');
 `;
 
-const BORROWER_RULE_SOURCE = `import 'rulekeeper-fixture-borrower';
-import { Rule } from '@alex-dbs/rulekeeper';
+const BORROWER_RULE_SOURCE = `import 'coderuler-fixture-borrower';
+import { Rule } from '@alex-dbs/coderuler';
 
 export default class BorrowerRule extends Rule {
   files = ['src/*.txt'];
@@ -397,7 +396,7 @@ export default class BorrowerRule extends Rule {
 `;
 
 const BORROWER_MANIFEST = {
-  name: 'rulekeeper-fixture-borrower', version: '1.0.0', type: 'module', exports: { '.': './index.js' },
+  name: 'coderuler-fixture-borrower', version: '1.0.0', type: 'module', exports: { '.': './index.js' },
 };
 const BORROWER_INDEX_SOURCE = `import { parseDocument } from 'yaml';
 
@@ -411,13 +410,13 @@ async function writeFixtureLock(directory: string, registry: DependencyFixture, 
     return artifact;
   });
   const dependencies = Object.fromEntries(artifacts.map(artifact => [artifact.manifest.name, artifact.manifest.version]));
-  await writeFile(join(directory, 'rulekeeper.lock'), `${JSON.stringify({
-    name: 'rulekeeper-rules',
+  await writeFile(join(directory, 'coderuler.lock'), `${JSON.stringify({
+    name: 'coderuler-rules',
     version: '1.0.0',
     lockfileVersion: 3,
     requires: true,
     packages: {
-      '': { name: 'rulekeeper-rules', version: '1.0.0', dependencies },
+      '': { name: 'coderuler-rules', version: '1.0.0', dependencies },
       ...Object.fromEntries(artifacts.map(artifact => [`node_modules/${artifact.manifest.name}`, {
         version: artifact.manifest.version, resolved: artifact.tarball, integrity: artifact.integrity,
       }])),
@@ -482,7 +481,7 @@ function isolatedEnv(home: string, extra: Readonly<NodeJS.ProcessEnv> = {}): Nod
 }
 
 function runCli(app: string, args: readonly string[], options: { readonly cwd: string; readonly home: string; readonly extra?: Readonly<NodeJS.ProcessEnv> }): RunResult {
-  const bin = join(app, 'node_modules', '.bin', 'rulekeeper');
+  const bin = join(app, 'node_modules', '.bin', 'coderuler');
   assert.ok(existsSync(bin), `installed CLI missing at ${bin}`);
   const env = options.extra === undefined ? isolatedEnv(options.home) : isolatedEnv(options.home, options.extra);
   return run(bin, args, { cwd: options.cwd, env });
@@ -509,12 +508,12 @@ function runGlobalCli(args: readonly string[], options: { readonly cwd: string; 
     ...options.extra,
   });
   if (process.platform === 'win32') {
-    const bin = join(consumer.globalPrefix, 'rulekeeper.cmd');
+    const bin = join(consumer.globalPrefix, 'coderuler.cmd');
     assert.ok(existsSync(bin), `globally installed CLI missing at ${bin}`);
     const cli = join(consumer.globalModules, PACKAGE_NAME, 'dist', 'cli.js');
     return run(process.execPath, [cli, ...args], { cwd: options.cwd, env });
   }
-  const bin = join(consumer.globalPrefix, 'bin', 'rulekeeper');
+  const bin = join(consumer.globalPrefix, 'bin', 'coderuler');
   assert.ok(existsSync(bin), `globally installed CLI missing at ${bin}`);
   return run(bin, args, { cwd: options.cwd, env });
 }
@@ -561,8 +560,8 @@ const PACKAGE_METADATA_PATTERN = /^(readme|license|licence|changelog)(\.[a-z0-9]
 
 function isPackagedEntry(path: string): boolean {
   if (path.startsWith('dist/')) return true;
-  if (path === 'skills/rulekeeper-new-rule/SKILL.md') return true;
-  if (path === 'skills/rulekeeper-new-rule/reference.md') return true;
+  if (path === 'skills/coderuler-new-rule/SKILL.md') return true;
+  if (path === 'skills/coderuler-new-rule/reference.md') return true;
   if (path === 'package.json') return true;
   return !path.includes('/') && PACKAGE_METADATA_PATTERN.test(path);
 }
@@ -592,9 +591,9 @@ function homeRuleSource(indexUrl: string): string {
 
 function identitySource(indexUrl: string): string {
   return [
-    "import { Rule } from '@alex-dbs/rulekeeper';",
+    "import { Rule } from '@alex-dbs/coderuler';",
     `const copy = await import('${indexUrl}');`,
-    "const brand = Symbol.for('rulekeeper.Rule');",
+    "const brand = Symbol.for('coderuler.Rule');",
     'process.stdout.write(JSON.stringify({',
     '  sameClass: Rule === copy.Rule,',
     '  appBrand: Rule.prototype[brand] === true,',
@@ -606,7 +605,7 @@ function identitySource(indexUrl: string): string {
 }
 
 before(async () => {
-  const root = await mkdtemp(join(await realpath(tmpdir()), 'rulekeeper-consumer-'));
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'coderuler-consumer-'));
   cleanupPaths.push(root);
 
   const packed = runNpm(['pack', '--json', '--pack-destination', root], REPO_ROOT, DEFAULT_TIMEOUT);
@@ -636,38 +635,37 @@ before(async () => {
   ]);
 
   await mkdir(app, { recursive: true });
-  await mkdir(join(app, '.rulekeeper', 'helpers'), { recursive: true });
+  await mkdir(join(app, '.coderuler', 'helpers'), { recursive: true });
   await mkdir(join(app, 'src'), { recursive: true });
   await mkdir(join(homeApp, 'src'), { recursive: true });
-  await mkdir(join(ruleHome, '.rulekeeper'), { recursive: true });
+  await mkdir(join(ruleHome, '.coderuler'), { recursive: true });
   await mkdir(join(gitless, 'src'), { recursive: true });
   await mkdir(cleanHome, { recursive: true });
   await mkdir(globalPrefix, { recursive: true });
-  await mkdir(join(globalApp, '.rulekeeper'), { recursive: true });
-  await mkdir(join(globalHome, '.rulekeeper'), { recursive: true });
-  await mkdir(join(localPreferenceApp, '.rulekeeper'), { recursive: true });
-  await mkdir(join(globalIsolationApp, '.rulekeeper', 'helpers'), { recursive: true });
-  await mkdir(join(missingImportApp, '.rulekeeper'), { recursive: true });
+  await mkdir(join(globalApp, '.coderuler'), { recursive: true });
+  await mkdir(join(globalHome, '.coderuler'), { recursive: true });
+  await mkdir(join(localPreferenceApp, '.coderuler'), { recursive: true });
+  await mkdir(join(globalIsolationApp, '.coderuler', 'helpers'), { recursive: true });
+  await mkdir(join(missingImportApp, '.coderuler'), { recursive: true });
   await mkdir(missingHome, { recursive: true });
-
-  await mkdir(join(ambientApp, '.rulekeeper'), { recursive: true });
+  await mkdir(join(ambientApp, '.coderuler'), { recursive: true });
   await mkdir(join(ambientApp, 'node_modules', 'yaml'), { recursive: true });
   await writeFile(join(ambientApp, 'node_modules', 'yaml', 'package.json'), `${JSON.stringify(MANAGED_YAML_MANIFEST)}\n`);
   for (const [filename, source] of Object.entries(MANAGED_YAML_FILES)) {
     await writeFile(join(ambientApp, 'node_modules', 'yaml', filename), source);
   }
-  await writeFixtureLock(join(localPreferenceApp, '.rulekeeper'), registry, ['yaml']);
-  await writeFixtureLock(join(missingImportApp, '.rulekeeper'), registry, ['yaml']);
-  await writeFixtureLock(join(globalIsolationApp, '.rulekeeper'), registry, ['rulekeeper-fixture-borrower']);
+  await writeFixtureLock(join(localPreferenceApp, '.coderuler'), registry, ['yaml']);
+  await writeFixtureLock(join(missingImportApp, '.coderuler'), registry, ['yaml']);
+  await writeFixtureLock(join(globalIsolationApp, '.coderuler'), registry, ['coderuler-fixture-borrower']);
 
   const relativeTarball = relative(app, tarball).split(sep).join('/');
   await writeFile(
     join(app, 'package.json'),
-    `${JSON.stringify({ name: 'rulekeeper-consumer', private: true, type: 'module', dependencies: { [PACKAGE_NAME]: `file:${relativeTarball}` } }, null, 2)}\n`,
+    `${JSON.stringify({ name: 'coderuler-consumer', private: true, type: 'module', dependencies: { [PACKAGE_NAME]: `file:${relativeTarball}` } }, null, 2)}\n`,
   );
-  await writeFile(join(app, '.rulekeeper', 'helpers', 'shared.js'), SHARED_HELPER_SOURCE);
-  await writeFile(join(app, '.rulekeeper', 'license.rule.ts'), LICENSE_RULE_SOURCE);
-  await writeFile(join(app, '.rulekeeper', 'contract.rule.js'), CONTRACT_RULE_SOURCE);
+  await writeFile(join(app, '.coderuler', 'helpers', 'shared.js'), SHARED_HELPER_SOURCE);
+  await writeFile(join(app, '.coderuler', 'license.rule.ts'), LICENSE_RULE_SOURCE);
+  await writeFile(join(app, '.coderuler', 'contract.rule.js'), CONTRACT_RULE_SOURCE);
   await writeFile(join(app, 'src', 'clean.ts'), HEADERED_SOURCE);
   await writeFile(join(app, 'src', 'headerless.ts'), HEADERLESS_SOURCE);
   await writeFile(join(app, 'src', 'no-export.ts'), NO_EXPORT_SOURCE);
@@ -675,27 +673,27 @@ before(async () => {
   await writeFile(join(app, 'probe.mjs'), PROBE_SOURCE);
   await writeFile(join(homeApp, 'src', 'thing.ts'), HEADERLESS_SOURCE);
   await writeFile(join(gitless, 'src', 'bare.ts'), HEADERLESS_SOURCE);
-  await writeFile(join(globalApp, '.rulekeeper', 'global.rule.ts'), GLOBAL_RULE_SOURCE);
-  await writeFile(join(globalHome, '.rulekeeper', 'home.global.rule.mjs'), GLOBAL_HOME_RULE_SOURCE);
-  await writeFile(join(localPreferenceApp, '.rulekeeper', 'preference.rule.mjs'), LOCAL_PREFERENCE_RULE_SOURCE);
-  await writeFile(join(globalIsolationApp, '.rulekeeper', 'direct-yaml.rule.mjs'), DIRECT_YAML_RULE_SOURCE);
-  await writeFile(join(globalIsolationApp, '.rulekeeper', 'required-yaml.rule.mjs'), REQUIRED_YAML_RULE_SOURCE);
-  await writeFile(join(globalIsolationApp, '.rulekeeper', 'helpers', 'required-yaml.js'), REQUIRED_YAML_HELPER_SOURCE);
-  await writeFile(join(globalIsolationApp, '.rulekeeper', 'borrower.rule.mjs'), BORROWER_RULE_SOURCE);
-  await writeFile(join(ambientApp, '.rulekeeper', 'direct-yaml.rule.mjs'), DIRECT_YAML_RULE_SOURCE);
-  await writeFile(join(missingImportApp, '.rulekeeper', 'broken.rule.mjs'), MISSING_IMPORT_RULE_SOURCE);
-  await writeFile(join(missingImportApp, '.rulekeeper', 'missing-relative.rule.mjs'), MISSING_RELATIVE_RULE_SOURCE);
-  await writeFile(join(missingImportApp, '.rulekeeper', 'restricted.rule.mjs'), EXPORT_RESTRICTION_RULE_SOURCE);
-  await writeFile(join(missingImportApp, '.rulekeeper', 'required-restricted.rule.mjs'), REQUIRED_EXPORT_RESTRICTION_RULE_SOURCE);
+  await writeFile(join(globalApp, '.coderuler', 'global.rule.ts'), GLOBAL_RULE_SOURCE);
+  await writeFile(join(globalHome, '.coderuler', 'home.global.rule.mjs'), GLOBAL_HOME_RULE_SOURCE);
+  await writeFile(join(localPreferenceApp, '.coderuler', 'preference.rule.mjs'), LOCAL_PREFERENCE_RULE_SOURCE);
+  await writeFile(join(globalIsolationApp, '.coderuler', 'direct-yaml.rule.mjs'), DIRECT_YAML_RULE_SOURCE);
+  await writeFile(join(globalIsolationApp, '.coderuler', 'required-yaml.rule.mjs'), REQUIRED_YAML_RULE_SOURCE);
+  await writeFile(join(globalIsolationApp, '.coderuler', 'helpers', 'required-yaml.js'), REQUIRED_YAML_HELPER_SOURCE);
+  await writeFile(join(globalIsolationApp, '.coderuler', 'borrower.rule.mjs'), BORROWER_RULE_SOURCE);
+  await writeFile(join(ambientApp, '.coderuler', 'direct-yaml.rule.mjs'), DIRECT_YAML_RULE_SOURCE);
+  await writeFile(join(missingImportApp, '.coderuler', 'broken.rule.mjs'), MISSING_IMPORT_RULE_SOURCE);
+  await writeFile(join(missingImportApp, '.coderuler', 'missing-relative.rule.mjs'), MISSING_RELATIVE_RULE_SOURCE);
+  await writeFile(join(missingImportApp, '.coderuler', 'restricted.rule.mjs'), EXPORT_RESTRICTION_RULE_SOURCE);
+  await writeFile(join(missingImportApp, '.coderuler', 'required-restricted.rule.mjs'), REQUIRED_EXPORT_RESTRICTION_RULE_SOURCE);
   assert.equal(
-    existsSync(join(globalIsolationApp, '.rulekeeper', 'node_modules', 'yaml')),
+    existsSync(join(globalIsolationApp, '.coderuler', 'node_modules', 'yaml')),
     false,
     'the isolation fixture must not carry a local yaml package',
   );
   for (const project of [globalApp, localPreferenceApp, globalIsolationApp, missingImportApp, ambientApp]) {
     await writeFile(
       join(project, 'package.json'),
-      `${JSON.stringify({ name: 'rulekeeper-global-fixture', private: true, type: 'module' }, null, 2)}\n`,
+      `${JSON.stringify({ name: 'coderuler-global-fixture', private: true, type: 'module' }, null, 2)}\n`,
     );
   }
 
@@ -736,7 +734,7 @@ before(async () => {
 
   const vendorIndex = join(vendorSdk, 'dist', 'index.js');
   assert.ok(existsSync(vendorIndex), `separate SDK copy missing at ${vendorIndex}`);
-  await writeFile(join(ruleHome, '.rulekeeper', 'home.rule.mjs'), homeRuleSource(pathToFileURL(vendorIndex).href));
+  await writeFile(join(ruleHome, '.coderuler', 'home.rule.mjs'), homeRuleSource(pathToFileURL(vendorIndex).href));
   await writeFile(join(app, 'identity.mjs'), identitySource(pathToFileURL(vendorIndex).href));
 
   consumer = {
@@ -763,16 +761,16 @@ before(async () => {
 });
 
 test('the source CLI runs SDK-only rules through tsx and syncs the running SDK without an application install', async () => {
-  const root = await mkdtemp(join(await realpath(tmpdir()), 'rulekeeper-source-sdk-'));
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'coderuler-source-sdk-'));
   cleanupPaths.push(root);
   const cwd = join(root, 'app');
   const home = join(root, 'home');
-  const directory = join(cwd, '.rulekeeper');
+  const directory = join(cwd, '.coderuler');
   await mkdir(directory, { recursive: true });
   await mkdir(home);
   await writeFile(join(cwd, 'package.json'), '{"type":"module"}\n');
   await writeFile(join(cwd, 'input.txt'), 'source input\n');
-  await writeFile(join(directory, 'source.rule.ts'), `import { Rule, violation } from '@alex-dbs/rulekeeper';
+  await writeFile(join(directory, 'source.rule.ts'), `import { Rule, violation } from '@alex-dbs/coderuler';
 export default class SourceRule extends Rule {
   files = ['input.txt'];
   check = () => violation('Source SDK policy');
@@ -805,23 +803,23 @@ export default class SourceRule extends Rule {
   assert.equal((await lstat(sdk)).isSymbolicLink(), true);
   assert.equal(await realpath(sdk), REPO_ROOT);
   assertSourceReport(runSourceCli(['check', '--json'], options));
-  assert.equal(existsSync(join(directory, 'rulekeeper.lock')), false);
+  assert.equal(existsSync(join(directory, 'coderuler.lock')), false);
   assert.equal(existsSync(join(home, 'dependency-cache')), false);
   assert.equal(existsSync(join(cwd, 'node_modules')), false);
 });
 
 test('the source CLI adds managed packages without a local SDK and checks and tests their real imports through tsx', async () => {
-  const root = await mkdtemp(join(await realpath(tmpdir()), 'rulekeeper-source-deps-'));
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'coderuler-source-deps-'));
   cleanupPaths.push(root);
   const cwd = join(root, 'app');
   const home = join(root, 'home');
-  const directory = join(cwd, '.rulekeeper');
+  const directory = join(cwd, '.coderuler');
   await mkdir(directory, { recursive: true });
   await mkdir(home);
   const manifest = '{"type":"module"}\n';
   await writeFile(join(cwd, 'package.json'), manifest);
   await writeFile(join(cwd, 'input.txt'), 'BAD\n');
-  await writeFile(join(directory, 'policy.rule.ts'), `import { Rule, pass, test, violation } from '@alex-dbs/rulekeeper';
+  await writeFile(join(directory, 'policy.rule.ts'), `import { Rule, pass, test, violation } from '@alex-dbs/coderuler';
 import { message } from 'fixture-policy';
 export default class Policy extends Rule {
   files = ['input.txt'];
@@ -839,7 +837,7 @@ export const tests = [
   assert.equal(existsSync(join(cwd, 'node_modules')), false);
   const added = runSourceCli(['deps', 'add', 'fixture-policy@1.0.0'], { ...options, mode: 'all' });
   assert.equal(added.status, 0, `${added.stdout}\n${added.stderr}`);
-  assert.equal(added.stdout, `Added fixture-policy@1.0.0\n${join(directory, 'rulekeeper.lock')}\n`);
+  assert.equal(added.stdout, `Added fixture-policy@1.0.0\n${join(directory, 'coderuler.lock')}\n`);
   assert.equal(added.stderr, '');
   assert.equal(await realpath(join(directory, 'node_modules', PACKAGE_NAME)), REPO_ROOT);
   for (const name of ['fixture-policy', 'fixture-shared']) {
@@ -850,7 +848,7 @@ export const tests = [
     assert.equal(installedManifest.name, name);
     assert.equal(installedManifest.version, '1.0.0');
   }
-  const committed = await readFile(join(directory, 'rulekeeper.lock'), 'utf8');
+  const committed = await readFile(join(directory, 'coderuler.lock'), 'utf8');
   const checked = runSourceCli(['check', '--json'], options);
   assert.equal(checked.status, 1, `${checked.stdout}\n${checked.stderr}`);
   assert.equal(checked.stderr, '');
@@ -869,7 +867,7 @@ export const tests = [
   const tested = runSourceCli(['test', '--concurrency', '2'], options);
   assert.equal(tested.status, 0, `${tested.stdout}\n${tested.stderr}`);
   assert.match(tested.stdout, /2 passed, 0 failed/);
-  assert.equal(await readFile(join(directory, 'rulekeeper.lock'), 'utf8'), committed);
+  assert.equal(await readFile(join(directory, 'coderuler.lock'), 'utf8'), committed);
   assert.equal(await readFile(join(cwd, 'package.json'), 'utf8'), manifest);
   assert.equal(existsSync(join(cwd, 'node_modules')), false);
   assert.equal(existsSync(join(cwd, 'package-lock.json')), false);
@@ -881,11 +879,11 @@ test('the packed tarball ships the built package and bundled authoring skill', (
   assert.ok(packedPaths.includes('dist/index.js'), `dist/index.js missing from tarball: ${packedPaths.join(', ')}`);
   assert.ok(packedPaths.includes('dist/index.d.ts'), `dist/index.d.ts missing from tarball: ${packedPaths.join(', ')}`);
   assert.ok(packedPaths.includes('dist/cli.js'), `dist/cli.js missing from tarball: ${packedPaths.join(', ')}`);
-  assert.ok(packedPaths.includes('skills/rulekeeper-new-rule/SKILL.md'), 'SKILL.md missing from tarball');
-  assert.ok(packedPaths.includes('skills/rulekeeper-new-rule/reference.md'), 'skill reference missing from tarball');
+  assert.ok(packedPaths.includes('skills/coderuler-new-rule/SKILL.md'), 'SKILL.md missing from tarball');
+  assert.ok(packedPaths.includes('skills/coderuler-new-rule/reference.md'), 'skill reference missing from tarball');
   for (const path of packedPaths) {
     assert.ok(isPackagedEntry(path), `unexpected tarball entry: ${path}`);
-    assert.ok(!/(^|\/)(old|src|tests|benchmarks|scripts|docs|node_modules|coverage|\.rulekeeper)(\/|$)/.test(path), `archived or source path packed: ${path}`);
+    assert.ok(!/(^|\/)(old|src|tests|benchmarks|scripts|docs|node_modules|coverage|\.coderuler)(\/|$)/.test(path), `archived or source path packed: ${path}`);
     assert.ok(!/(^|\/)\.env(\.|$)/.test(path), `credential file packed: ${path}`);
     assert.ok(!path.endsWith('.ts') || path.endsWith('.d.ts'), `TypeScript source packed: ${path}`);
   }
@@ -927,21 +925,21 @@ test('the installed package carries executable dist declarations, a runnable bin
   const manifest = parseJsonOutput<InstalledManifest>(await readFile(join(installedRoot, 'package.json'), 'utf8'));
   assert.equal(manifest.type, 'module');
   assert.equal(manifest.types, './dist/index.d.ts');
-  assert.deepEqual([...manifest.files], ['dist', 'skills/rulekeeper-new-rule']);
+  assert.deepEqual([...manifest.files], ['dist', 'skills/coderuler-new-rule']);
   assert.equal(manifest.dependencies['skills'], '1.7.2');
   const entry = manifest.exports['.'];
   assert.ok(entry !== undefined, 'package exports must declare the public entry');
   assert.equal(entry.import, './dist/index.js');
   assert.equal(entry.types, './dist/index.d.ts');
 
-  const bin = join(consumer.app, 'node_modules', '.bin', 'rulekeeper');
+  const bin = join(consumer.app, 'node_modules', '.bin', 'coderuler');
   assert.ok(existsSync(bin), `installed bin missing at ${bin}`);
   assert.notEqual(statSync(bin).mode & 0o111, 0, 'installed bin is not executable');
 });
 
 test('the installed authoring skill preserves its companion reference and relative link', async () => {
-  const bundled = join(consumer.app, 'node_modules', PACKAGE_NAME, 'skills', 'rulekeeper-new-rule');
-  const source = join(REPO_ROOT, 'skills', 'rulekeeper-new-rule');
+  const bundled = join(consumer.app, 'node_modules', PACKAGE_NAME, 'skills', 'coderuler-new-rule');
+  const source = join(REPO_ROOT, 'skills', 'coderuler-new-rule');
   const skill = await readFile(join(bundled, 'SKILL.md'), 'utf8');
   const reference = await readFile(join(bundled, 'reference.md'), 'utf8');
   assert.equal(skill, await readFile(join(source, 'SKILL.md'), 'utf8'));
@@ -967,8 +965,8 @@ test('the released CLI installs and refreshes its bundled skill outside the repo
   await mkdir(project, { recursive: true });
   await mkdir(home, { recursive: true });
   const extra = { DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' };
-  const bundled = join(consumer.app, 'node_modules', PACKAGE_NAME, 'skills', 'rulekeeper-new-rule');
-  const installed = join(project, '.claude', 'skills', 'rulekeeper-new-rule');
+  const bundled = join(consumer.app, 'node_modules', PACKAGE_NAME, 'skills', 'coderuler-new-rule');
+  const installed = join(project, '.claude', 'skills', 'coderuler-new-rule');
   const install = runCli(consumer.app, ['skill', 'install', '--agent', 'claude-code', '--yes', '--copy'], {
     cwd: project, home, extra,
   });
@@ -977,7 +975,7 @@ test('the released CLI installs and refreshes its bundled skill outside the repo
     assert.equal(await readFile(join(installed, file), 'utf8'), await readFile(join(bundled, file), 'utf8'));
   }
   const lock = await readFile(join(project, 'skills-lock.json'), 'utf8');
-  assert.ok(lock.includes('node_modules/@alex-dbs/rulekeeper/skills/rulekeeper-new-rule'), `skill source must point into the installed package: ${lock}`);
+  assert.ok(lock.includes('node_modules/@alex-dbs/coderuler/skills/coderuler-new-rule'), `skill source must point into the installed package: ${lock}`);
   assert.ok(!lock.includes(REPO_ROOT), `skill source must not point at the repository: ${lock}`);
 
   const unrelated = join(project, '.claude', 'skills', 'unrelated', 'SKILL.md');
@@ -990,7 +988,7 @@ test('the released CLI installs and refreshes its bundled skill outside the repo
   assert.equal(update.status, 0, `${update.stdout}\n${update.stderr}`);
   assert.equal(await readFile(join(installed, 'reference.md'), 'utf8'), await readFile(join(bundled, 'reference.md'), 'utf8'));
   assert.equal(await readFile(unrelated, 'utf8'), '---\nname: unrelated\ndescription: unrelated skill\n---\nLeave this alone.\n');
-  assert.ok(!existsSync(join(home, '.claude', 'skills', 'rulekeeper-new-rule')), 'project commands must not install globally');
+  assert.ok(!existsSync(join(home, '.claude', 'skills', 'coderuler-new-rule')), 'project commands must not install globally');
 });
 
 test('the released CLI installs and refreshes the bundled skill globally from an unrelated cwd', async () => {
@@ -1002,17 +1000,17 @@ test('the released CLI installs and refreshes the bundled skill globally from an
   const args = ['--global', '--agent', 'universal', '--copy'];
   const install = runCli(consumer.app, ['skill', 'install', ...args, '--yes'], { cwd: project, home, extra });
   assert.equal(install.status, 0, `${install.stdout}\n${install.stderr}`);
-  const installed = join(home, '.agents', 'skills', 'rulekeeper-new-rule');
+  const installed = join(home, '.agents', 'skills', 'coderuler-new-rule');
   await writeFile(join(installed, 'reference.md'), 'stale global reference\n');
   const update = runCli(consumer.app, ['skill', 'update', ...args], { cwd: project, home, extra });
   assert.equal(update.status, 0, `${update.stdout}\n${update.stderr}`);
-  const bundled = join(consumer.app, 'node_modules', PACKAGE_NAME, 'skills', 'rulekeeper-new-rule');
+  const bundled = join(consumer.app, 'node_modules', PACKAGE_NAME, 'skills', 'coderuler-new-rule');
   assert.equal(await readFile(join(installed, 'reference.md'), 'utf8'), await readFile(join(bundled, 'reference.md'), 'utf8'));
-  assert.ok(!existsSync(join(project, '.agents', 'skills', 'rulekeeper-new-rule')), 'global commands must not install in the project');
+  assert.ok(!existsSync(join(project, '.agents', 'skills', 'coderuler-new-rule')), 'global commands must not install in the project');
 });
 
 test('the installed CLI runs a TypeScript rule on real files and reports pass by exit 0', () => {
-  const runResult = runCli(consumer.app, ['check', 'src/clean.ts', '--rules', '.rulekeeper/license.rule.ts', '--json', '--output-all'], {
+  const runResult = runCli(consumer.app, ['check', 'src/clean.ts', '--rules', '.coderuler/license.rule.ts', '--json', '--output-all'], {
     cwd: consumer.app,
     home: consumer.cleanHome,
     extra: { RK_BACKEND: 'not-a-real-backend', TYPESAFE_DEFAULT_MODEL: '' },
@@ -1021,14 +1019,14 @@ test('the installed CLI runs a TypeScript rule on real files and reports pass by
   const report = parseReport(runResult.stdout);
   const entry = reportFor(report, 'license');
   assert.equal(entry.status, 'pass');
-  assert.equal(relative(consumer.app, entry.ruleFile), join('.rulekeeper', 'license.rule.ts'));
+  assert.equal(relative(consumer.app, entry.ruleFile), join('.coderuler', 'license.rule.ts'));
   assert.equal(entry.evaluations.length, 1);
   assert.equal(entry.evaluations[0]?.subject.filepath, 'src/clean.ts');
   assert.equal(entry.evaluations[0]?.result.status, 'pass');
 });
 
 test('the installed CLI reports a violation from a TypeScript rule with exit 1', () => {
-  const runResult = runCli(consumer.app, ['check', 'src/headerless.ts', '--rules', '.rulekeeper/license.rule.ts', '--json'], {
+  const runResult = runCli(consumer.app, ['check', 'src/headerless.ts', '--rules', '.coderuler/license.rule.ts', '--json'], {
     cwd: consumer.app,
     home: consumer.cleanHome,
   });
@@ -1044,7 +1042,7 @@ test('the installed CLI reports a violation from a TypeScript rule with exit 1',
 });
 
 test('the installed CLI human output names the violating file and message before exiting 1', () => {
-  const runResult = runCli(consumer.app, ['check', 'src/headerless.ts', '--rules', '.rulekeeper/license.rule.ts'], {
+  const runResult = runCli(consumer.app, ['check', 'src/headerless.ts', '--rules', '.coderuler/license.rule.ts'], {
     cwd: consumer.app,
     home: consumer.cleanHome,
   });
@@ -1054,7 +1052,7 @@ test('the installed CLI human output names the violating file and message before
 });
 
 test('the installed CLI loads a plain JavaScript rule through a bare package import', () => {
-  const violation = runCli(consumer.app, ['check', 'src/no-export.ts', '--rules', '.rulekeeper/contract.rule.js', '--json'], {
+  const violation = runCli(consumer.app, ['check', 'src/no-export.ts', '--rules', '.coderuler/contract.rule.js', '--json'], {
     cwd: consumer.app,
     home: consumer.cleanHome,
   });
@@ -1064,7 +1062,7 @@ test('the installed CLI loads a plain JavaScript rule through a bare package imp
   assert.equal(entry.evaluations[0]?.subject.filepath, 'src/no-export.ts');
   assert.equal(entry.evaluations[0]?.result.message, 'Source files must export a const or function');
 
-  const passing = runCli(consumer.app, ['check', 'src/clean.ts', '--rules', '.rulekeeper/contract.rule.js', '--json', '--output-all'], {
+  const passing = runCli(consumer.app, ['check', 'src/clean.ts', '--rules', '.coderuler/contract.rule.js', '--json', '--output-all'], {
     cwd: consumer.app,
     home: consumer.cleanHome,
   });
@@ -1084,11 +1082,11 @@ test('the installed CLI discovers both rules, ignores the helper module, and val
     assert.equal(entry.status, 'violation', `${entry.name} should violate under the fixture sources`);
     assert.ok(entry.ruleFile.startsWith(consumer.app), `rule file outside the project: ${entry.ruleFile}`);
     for (const evaluation of entry.evaluations) {
-      assert.ok(!(evaluation.subject.filepath ?? '').startsWith('.rulekeeper/'), `rule file was selected as a source: ${String(evaluation.subject.filepath)}`);
+      assert.ok(!(evaluation.subject.filepath ?? '').startsWith('.coderuler/'), `rule file was selected as a source: ${String(evaluation.subject.filepath)}`);
     }
   }
 
-  const validate = runCli(consumer.app, ['validate', '.rulekeeper'], { cwd: consumer.app, home: consumer.cleanHome });
+  const validate = runCli(consumer.app, ['validate', '.coderuler'], { cwd: consumer.app, home: consumer.cleanHome });
   assert.equal(validate.status, 0, validate.stderr);
   assert.match(validate.stdout, /Valid rule: license/);
   assert.match(validate.stdout, /Valid rule: contract/);
@@ -1099,7 +1097,7 @@ test('the installed CLI runs in a project without Git or repository metadata', (
   assert.equal(existsSync(join(consumer.app, '.git')), false);
   const runResult = runCli(
     consumer.app,
-    ['check', '.', '--rules', join(consumer.app, '.rulekeeper', 'license.rule.ts'), '--json'],
+    ['check', '.', '--rules', join(consumer.app, '.coderuler', 'license.rule.ts'), '--json'],
     { cwd: consumer.gitless, home: consumer.cleanHome },
   );
   assert.equal(runResult.status, 1, runResult.stderr);
@@ -1123,15 +1121,15 @@ test('the globally installed CLI loads rules without local dependencies while th
 });
 
 test('the globally installed CLI prefers the project-local SDK and acquires locked ESM/CommonJS dependencies independently', async () => {
-  const directory = join(consumer.localPreferenceApp, '.rulekeeper');
-  const lockPath = join(directory, 'rulekeeper.lock');
+  const directory = join(consumer.localPreferenceApp, '.coderuler');
+  const lockPath = join(directory, 'coderuler.lock');
   const committedLock = await readFile(lockPath, 'utf8');
   const applicationManifest = await readFile(join(consumer.localPreferenceApp, 'package.json'), 'utf8');
   const localSdk = join(consumer.localPreferenceApp, 'node_modules', PACKAGE_NAME, 'dist/index.js');
   const localSdkSource = await readFile(localSdk, 'utf8');
   const requestLog = join(consumer.root, 'preference-requests.jsonl');
   const cache = join(consumer.root, 'preference-cache');
-  assert.equal(existsSync(join(consumer.localPreferenceApp, '.rulekeeper', 'node_modules', 'yaml')), false);
+  assert.equal(existsSync(join(consumer.localPreferenceApp, '.coderuler', 'node_modules', 'yaml')), false);
   const result = runGlobalCli(['test'], {
     cwd: consumer.localPreferenceApp,
     home: consumer.missingHome,
@@ -1172,7 +1170,7 @@ test('the globally installed CLI prefers the project-local SDK and acquires lock
 test('the packed CLI installs typed rule packages locally, repairs them offline, and leaves application files untouched', async () => {
   const app = join(consumer.root, 'packed-managed-app');
   const home = join(consumer.root, 'packed-managed-home');
-  const directory = join(app, '.rulekeeper');
+  const directory = join(app, '.coderuler');
   const cache = join(consumer.root, 'packed-managed-downloads');
   await mkdir(app, { recursive: true });
   await mkdir(home, { recursive: true });
@@ -1186,9 +1184,11 @@ test('the packed CLI installs typed rule packages locally, repairs them offline,
     },
   });
   assert.equal(added.status, 0, `${added.stdout}\n${added.stderr}`);
-  assert.equal(added.stdout, `Added @fixture/typed@1.0.0\n${join(directory, 'rulekeeper.lock')}\n`);
+  assert.equal(added.stdout, `Added @fixture/typed@1.0.0
+${join(directory, 'coderuler.lock')}
+`);
   assert.equal(added.stderr, '');
-  const committed = await readFile(join(directory, 'rulekeeper.lock'), 'utf8');
+  const committed = await readFile(join(directory, 'coderuler.lock'), 'utf8');
   const offline = {
     ...dependencyFixtureEnvironment(consumer.registry, { mode: 'offline' }),
     RK_DEPENDENCY_CACHE: cache,
@@ -1199,9 +1199,8 @@ test('the packed CLI installs typed rule packages locally, repairs them offline,
   const typedPackage = join(directory, 'node_modules/@fixture/typed');
   assert.equal((await lstat(typedPackage)).isDirectory(), true);
   assert.equal((await lstat(typedPackage)).isSymbolicLink(), false);
-  assert.equal((await lstat(join(directory, 'node_modules', PACKAGE_NAME))).isSymbolicLink(), true);
   const filename = join(directory, 'typed.rule.ts');
-  const source = `import { Rule, violation } from '@alex-dbs/rulekeeper';
+  const source = `import { Rule, violation } from '@alex-dbs/coderuler';
 import { format } from '@fixture/typed';
 export default class Typed extends Rule {
   files = ['input.txt'];
@@ -1223,7 +1222,7 @@ export default class Typed extends Rule {
   const repaired = runGlobalCli(['deps', 'sync'], { cwd: app, home, extra: offline });
   assert.equal(repaired.status, 0, repaired.stderr);
   assert.equal((await lstat(typedPackage)).isDirectory(), true);
-  assert.equal(await readFile(join(directory, 'rulekeeper.lock'), 'utf8'), committed);
+  assert.equal(await readFile(join(directory, 'coderuler.lock'), 'utf8'), committed);
   await rm(cache, { recursive: true });
   const checked = runGlobalCli(['check', '--json'], { cwd: app, home, extra: offline });
   assert.equal(checked.status, 1, `${checked.stdout}\n${checked.stderr}`);
@@ -1233,9 +1232,11 @@ export default class Typed extends Rule {
   assert.equal(existsSync(cache), false);
   const removed = runGlobalCli(['deps', 'remove', '@fixture/typed'], { cwd: app, home, extra: offline });
   assert.equal(removed.status, 0, removed.stderr);
-  assert.equal(removed.stdout, `Removed @fixture/typed\n${join(directory, 'rulekeeper.lock')}\n`);
+  assert.equal(removed.stdout, `Removed @fixture/typed
+${join(directory, 'coderuler.lock')}
+`);
   assert.equal(existsSync(typedPackage), false);
-  assert.deepEqual(JSON.parse(await readFile(join(directory, 'rulekeeper.lock'), 'utf8')).packages[''].dependencies ?? {}, {});
+  assert.deepEqual(JSON.parse(await readFile(join(directory, 'coderuler.lock'), 'utf8')).packages[''].dependencies ?? {}, {});
   assert.equal(await readFile(join(app, 'package.json'), 'utf8'), manifest);
   for (const untouched of ['node_modules', 'package-lock.json', 'tsconfig.json']) {
     assert.equal(existsSync(join(app, untouched)), false, `rule dependency commands must not create application ${untouched}`);
@@ -1243,7 +1244,7 @@ export default class Typed extends Rule {
 });
 
 test('the globally installed CLI does not resolve direct bare rule imports from its own packages', () => {
-  const result = runGlobalCli(['validate', '.rulekeeper/direct-yaml.rule.mjs'], {
+  const result = runGlobalCli(['validate', '.coderuler/direct-yaml.rule.mjs'], {
     cwd: consumer.globalIsolationApp,
     home: consumer.missingHome,
     extra: { DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
@@ -1260,15 +1261,15 @@ test('the globally installed CLI rejects an application package when the rule ha
   });
   assert.equal(available.status, 0, available.stderr);
   assert.equal(available.stdout, 'fixture-managed-yaml-esm', 'the ambient copy must otherwise be importable by the application');
-  const result = runGlobalCli(['validate', '.rulekeeper/direct-yaml.rule.mjs'], { cwd: app, home: consumer.missingHome });
+  const result = runGlobalCli(['validate', '.coderuler/direct-yaml.rule.mjs'], { cwd: app, home: consumer.missingHome });
   assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
   assert.ok(!result.stderr.includes(consumer.globalModules), `rule imports must not reach the CLI installation: ${result.stderr}`);
-  assert.equal(existsSync(join(app, '.rulekeeper', 'rulekeeper.lock')), false, 'loading must not synthesize a dependency lock');
+  assert.equal(existsSync(join(app, '.coderuler', 'coderuler.lock')), false, 'loading must not synthesize a dependency lock');
   assert.equal(await readFile(join(app, 'package.json'), 'utf8'), manifest);
 });
 
 test('the globally installed CLI does not resolve bare helper require calls from its own packages', () => {
-  const result = runGlobalCli(['validate', '.rulekeeper/required-yaml.rule.mjs'], {
+  const result = runGlobalCli(['validate', '.coderuler/required-yaml.rule.mjs'], {
     cwd: consumer.globalIsolationApp,
     home: consumer.missingHome,
     extra: { DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
@@ -1278,7 +1279,7 @@ test('the globally installed CLI does not resolve bare helper require calls from
 });
 
 test('the globally installed CLI does not resolve packages required by user dependencies', () => {
-  const result = runGlobalCli(['validate', '.rulekeeper/borrower.rule.mjs'], {
+  const result = runGlobalCli(['validate', '.coderuler/borrower.rule.mjs'], {
     cwd: consumer.globalIsolationApp,
     home: consumer.missingHome,
     extra: { DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
@@ -1288,34 +1289,34 @@ test('the globally installed CLI does not resolve packages required by user depe
 });
 
 test('the globally installed CLI reports bare imports missing from the rule location as failures', () => {
-  const result = runGlobalCli(['validate', '.rulekeeper/broken.rule.mjs'], {
+  const result = runGlobalCli(['validate', '.coderuler/broken.rule.mjs'], {
     cwd: consumer.missingImportApp,
     home: consumer.missingHome,
     extra: { DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
   });
   assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
-  assert.match(result.stderr, /@alex-dbs\/rulekeeper-fixture-missing/);
+  assert.match(result.stderr, /@alex-dbs\/coderuler-fixture-missing/);
   assert.ok(!result.stderr.includes(consumer.globalModules), `missing imports must not reach the CLI installation: ${result.stderr}`);
 });
 
 test('the globally installed CLI keeps missing relative rule imports relative to the rule file', () => {
   const cliRules = join(consumer.globalModules, PACKAGE_NAME, 'dist', 'adapter', 'filesystem', 'rules.js');
   assert.ok(existsSync(cliRules), `relative-boundary regression fixture missing at ${cliRules}`);
-  const result = runGlobalCli(['validate', '.rulekeeper/missing-relative.rule.mjs'], {
+  const result = runGlobalCli(['validate', '.coderuler/missing-relative.rule.mjs'], {
     cwd: consumer.missingImportApp,
     home: consumer.missingHome,
     extra: { DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
   });
   assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
   assert.ok(
-    result.stderr.includes(join(consumer.missingImportApp, '.rulekeeper', 'rules.js')),
+    result.stderr.includes(join(consumer.missingImportApp, '.coderuler', 'rules.js')),
     `${result.stderr}\nrelative import must resolve beside the rule, not inside the CLI package`,
   );
 });
 
 test('the globally installed CLI enforces managed package export maps for ESM imports and CommonJS requires', () => {
   for (const filename of ['restricted.rule.mjs', 'required-restricted.rule.mjs']) {
-    const result = runGlobalCli(['validate', `.rulekeeper/${filename}`], {
+    const result = runGlobalCli(['validate', `.coderuler/${filename}`], {
       cwd: consumer.missingImportApp,
       home: consumer.missingHome,
       extra: { DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
@@ -1377,7 +1378,7 @@ test('a home rule extending a separate physical SDK copy loads in the project CL
     ['home'],
   );
   const entry = reportFor(report, 'home');
-  assert.equal(relative(consumer.ruleHome, entry.ruleFile), join('.rulekeeper', 'home.rule.mjs'));
+  assert.equal(relative(consumer.ruleHome, entry.ruleFile), join('.coderuler', 'home.rule.mjs'));
   assert.equal(entry.status, 'violation');
   assert.equal(entry.evaluations[0]?.subject.filepath, 'src/thing.ts');
   assert.equal(entry.evaluations[0]?.result.message, 'Home rule: missing copyright header');

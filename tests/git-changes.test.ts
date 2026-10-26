@@ -7,7 +7,7 @@ import { after, test } from 'node:test';
 import { changedFiles } from '../dist/adapter/git/changes.js';
 import { createSandbox, writeFile } from './support.ts';
 
-const sandboxes = createSandbox('rulekeeper-git-changes-');
+const sandboxes = createSandbox('coderuler-git-changes-');
 after(() => sandboxes.cleanup());
 
 function repository(label: string) {
@@ -19,8 +19,8 @@ function repository(label: string) {
     stdio: ['ignore', 'pipe', 'pipe'],
   }).trim();
   git('init', '--quiet');
-  git('config', 'user.name', 'Rulekeeper Tests');
-  git('config', 'user.email', 'rulekeeper@example.test');
+  git('config', 'user.name', 'CodeRuler Tests');
+  git('config', 'user.email', 'coderuler@example.test');
   git('config', 'commit.gpgsign', 'false');
   git('config', 'core.hooksPath', '/dev/null');
   writeFile(join(sandbox.cwd, '.gitignore'), 'node_modules/\nignored/\n');
@@ -96,7 +96,7 @@ test('Git changes stream path lists larger than subprocess buffer defaults', asy
 test('Git changes retain normal traversal boundaries even for deleted reserved paths', async () => {
   const repo = repository('reserved-paths');
   const excluded = [
-    'old/deleted.txt', 'nested/node_modules/deleted.txt', '.rulekeeper/deleted.txt',
+    'old/deleted.txt', 'nested/node_modules/deleted.txt', '.coderuler/deleted.txt',
     'dist/deleted.txt', 'coverage/deleted.txt',
   ];
   const included = ['nested/dist/changed.txt', 'nested/coverage/changed.txt', 'notes/old', 'notes/dist'];

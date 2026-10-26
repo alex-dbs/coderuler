@@ -9,7 +9,7 @@ order: 5
 
 A selector turns one source file into zero or more scopes. A scope has a stable ID, source text, optional parsed data, and optional source lines.
 
-Import `scopes` from `@alex-dbs/rulekeeper`. Assign a selector to the rule's `scope` property. The signatures below show accepted options. Type parameters describe expected data, not runtime validation.
+Import `scopes` from `@alex-dbs/coderuler`. Assign a selector to the rule's `scope` property. The signatures below show accepted options. Type parameters describe expected data, not runtime validation.
 
 ## Whole files
 
@@ -181,7 +181,7 @@ Omitted or `undefined` options keep defaults. Explicit `null` is invalid for str
 Use a custom selector when the built-in factories cannot select the required region:
 
 ```ts
-import type { ScopeSelector } from '@alex-dbs/rulekeeper';
+import type { ScopeSelector } from '@alex-dbs/coderuler';
 
 const owners: ScopeSelector<string> = ({ source }) =>
   source.split('\n').flatMap((line, index) => {
@@ -233,6 +233,6 @@ async select(context: SelectionContext): Promise<readonly ScopeSubject<string>[]
 
 This method belongs in a `Rule<string>` subclass with an owner selector assigned to `scope`. Import `SelectionContext` and `ScopeSubject` as types. Avoid overlapping matches unless you preserve unique `(filepath, id)` pairs. Preserve fields when transforming built-in subjects.
 
-Custom selection still respects the CLI target and reserved-path boundaries. Traversal excludes symlinks and directories named `.git`, `node_modules`, `.rulekeeper`, or `old`. It also excludes root-level `dist` and `coverage`. Explicit targets inside these directories fail. Nested `dist` and `coverage` directories remain eligible.
+Custom selection still respects the CLI target and reserved-path boundaries. Traversal excludes symlinks and directories named `.git`, `node_modules`, `.coderuler`, or `old`. It also excludes root-level `dist` and `coverage`. Explicit targets inside these directories fail. Nested `dist` and `coverage` directories remain eligible.
 
-Read [grouping and defaults](/docs/configuration/) before comparing scopes. The full contracts live in the [author reference](https://github.com/alex-dbs/rulekeeper/blob/main/skills/rulekeeper-new-rule/reference.md#built-in-selectors).
+Read [grouping and defaults](/docs/configuration/) before comparing scopes. The full contracts live in the [author reference](https://github.com/alex-dbs/coderuler/blob/main/skills/coderuler-new-rule/reference.md#built-in-selectors).

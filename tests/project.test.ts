@@ -13,7 +13,7 @@ import {
   writeFile as writeSandboxFile,
 } from './support.ts';
 
-const cliSandbox = createSandbox('rulekeeper-project-');
+const cliSandbox = createSandbox('coderuler-project-');
 after(() => cliSandbox.cleanup());
 
 const TESTS_DIR = await realpath(fileURLToPath(new URL('.', import.meta.url)));
@@ -41,8 +41,8 @@ const TREE: readonly (readonly [string, string])[] = [
   ['node_modules/pkg/note.txt', 'pkg note'],
   ['.git/config', '[core]\n'],
   ['.git/note.txt', 'git note'],
-  ['.rulekeeper/local.rule.mjs', 'export default 1;\n'],
-  ['.rulekeeper/note.txt', 'rule note'],
+  ['.coderuler/local.rule.mjs', 'export default 1;\n'],
+  ['.coderuler/note.txt', 'rule note'],
   ['data.json', '{"name":"x","list":[1,2]}\n'],
   ['empty.json', ''],
   ['comment.json', '// nope\n{"a":1}\n'],
@@ -755,7 +755,7 @@ test('resolveTarget canonicalizes case-varied suffixes before selection and rese
     const directory = await resolveTarget(physical, join(rootSpelling, 'NESTED'));
     assert.equal(directory.path, 'nested');
     assert.equal(directory.contains('nested/deep/c.txt'), true);
-    for (const reserved of ['.GIT', 'NODE_MODULES', '.RULEKEEPER', 'OLD', 'DIST', 'COVERAGE']) {
+    for (const reserved of ['.GIT', 'NODE_MODULES', '.CODERULER', 'OLD', 'DIST', 'COVERAGE']) {
       await assert.rejects(() => resolveTarget(physical, join(rootSpelling, reserved)));
     }
     await assert.rejects(() =>
@@ -814,7 +814,7 @@ test('project helpers reject alternate-case aliases of actual reserved directori
   const project = createProject(root);
   for (const path of [
     'OLD/legacy.txt', '.GIT/note.txt', 'NODE_MODULES/pkg/note.txt',
-    '.RULEKEEPER/note.txt', 'DIST/note.txt', 'COVERAGE/note.txt', 'NESTED/OLD/legacy.txt',
+    '.CODERULER/note.txt', 'DIST/note.txt', 'COVERAGE/note.txt', 'NESTED/OLD/legacy.txt',
   ]) {
     await assert.rejects(() => project.readText(path), /reserved directory/);
     await assert.rejects(() => project.stat(path), /reserved directory/);
@@ -830,7 +830,7 @@ test('project boundaries use actual uppercase directory identities instead of al
     t.skip('filesystem is case-sensitive so alternate-case aliases do not exist');
     return;
   }
-  const names = ['OLD', '.GIT', 'NODE_MODULES', '.RULEKEEPER', 'DIST', 'COVERAGE'];
+  const names = ['OLD', '.GIT', 'NODE_MODULES', '.CODERULER', 'DIST', 'COVERAGE'];
   for (const name of names) {
     await mkdir(join(root, name), { recursive: true });
     await writeFile(join(root, name, 'file.txt'), name);
@@ -862,7 +862,7 @@ test('casefold boundary checks preserve nested generated directories, namesake f
     await mkdir(join(root, 'nested', name), { recursive: true });
     await writeFile(join(root, 'nested', name, 'file.txt'), name);
   }
-  for (const name of ['old', '.git', 'node_modules', '.rulekeeper', 'dist', 'coverage']) {
+  for (const name of ['old', '.git', 'node_modules', '.coderuler', 'dist', 'coverage']) {
     await writeFile(join(root, name), name);
   }
   const project = createProject(root);
@@ -872,7 +872,7 @@ test('casefold boundary checks preserve nested generated directories, namesake f
     assert.deepEqual(await project.stat(path), { kind: 'file' });
     assert.deepEqual(await project.glob(`nested/${name}/*.txt`), [`nested/${name}/file.txt`]);
   }
-  for (const name of ['old', '.git', 'node_modules', '.rulekeeper', 'dist', 'coverage']) {
+  for (const name of ['old', '.git', 'node_modules', '.coderuler', 'dist', 'coverage']) {
     assert.equal(await project.readText(name.toUpperCase()), name);
     assert.deepEqual(await project.stat(name.toUpperCase()), { kind: 'file' });
   }
@@ -901,7 +901,7 @@ test('CLI custom selection rejects a casefold alias into the archived tree', asy
   }
   writeSandboxFile(join(target.cwd, 'old/legacy.txt'), 'legacy');
   for (const filepath of ['old/legacy.txt', 'OLD/legacy.txt']) {
-    writeSandboxFile(join(target.cwd, '.rulekeeper/custom.rule.ts'), `import { Rule, pass } from '@alex-dbs/rulekeeper';
+    writeSandboxFile(join(target.cwd, '.coderuler/custom.rule.ts'), `import { Rule, pass } from '@alex-dbs/coderuler';
 export default class Custom extends Rule {
   select = () => [{ kind: 'scope' as const, filepath: '${filepath}', id: '$', source: 'legacy' }];
   check = pass;
@@ -920,7 +920,7 @@ test('CLI custom selection accepts a casefold alias into an actual uppercase eli
     return;
   }
   writeSandboxFile(join(target.cwd, 'OLD/file.txt'), 'eligible');
-  writeSandboxFile(join(target.cwd, '.rulekeeper/custom.rule.ts'), `import { Rule, pass } from '@alex-dbs/rulekeeper';
+  writeSandboxFile(join(target.cwd, '.coderuler/custom.rule.ts'), `import { Rule, pass } from '@alex-dbs/coderuler';
 export default class Custom extends Rule {
   select = () => [{ kind: 'scope' as const, filepath: 'old/file.txt', id: '$', source: 'eligible' }];
   check = pass;
@@ -977,7 +977,7 @@ test('literal dot prefix validation preserves nested generated directories and g
 
 test('literal dot prefixes do not classify an independent project root by its reserved basename', async () => {
   const holder = await makeTempRoot('dot-prefix-root-basename');
-  for (const name of ['old', '.git', 'node_modules', '.rulekeeper', 'dist', 'coverage']) {
+  for (const name of ['old', '.git', 'node_modules', '.coderuler', 'dist', 'coverage']) {
     const root = join(holder, name);
     await mkdir(root);
     await writeFile(join(root, 'visible.txt'), name);

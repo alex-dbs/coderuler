@@ -11,11 +11,11 @@ Configure each rule through its class members. Select rule files through the CLI
 
 ## Rule locations and names
 
-Discovery searches the project's `.rulekeeper/` first, then `~/.rulekeeper/`. Rules can live directly in either directory or in subfolders. Supported suffixes are `.rule.ts`, `.rule.mts`, `.rule.js`, and `.rule.mjs`.
+Discovery searches the project's `.coderuler/` first, then `~/.coderuler/`. Rules can live directly in either directory or in subfolders. Supported suffixes are `.rule.ts`, `.rule.mts`, `.rule.js`, and `.rule.mjs`.
 
 The filename without its rule suffix is the exact rule name. For example, `policies/internal-url.rule.ts` is named `internal-url`. A selected name must match exactly one discovered rule file across both discovery roots.
 
-Discovery does not follow symlinks. It skips `old`, `node_modules`, and RuleKeeper's temporary installation directories. Ordinary hidden rule folders are not excluded merely because their names start with a dot.
+Discovery does not follow symlinks. It skips `old`, `node_modules`, and CodeRuler's temporary installation directories. Ordinary hidden rule folders are not excluded merely because their names start with a dot.
 
 Use `validate [rule]`, `test [rule]`, or `check --rules <rule>` to select a rule name, module path, or directory. A name filters discovered rules; an explicit path or directory replaces discovery. `inspect` takes one module path or exact discovered name, not a rule directory.
 
@@ -47,7 +47,7 @@ Use class field syntax such as `tags = ['go', 'security'];`.
 
 Paths and globs are relative to the project root, with `/` separators. Globs use Node.js `path.matchesGlob` semantics. `exclude` always wins.
 
-Target traversal excludes symbolic links and directories named `.git`, `node_modules`, `.rulekeeper`, or `old`. Root-level `dist` and `coverage` are also excluded. Nested `dist` and `coverage` directories and regular files with reserved directory names remain eligible.
+Target traversal excludes symbolic links and directories named `.git`, `node_modules`, `.coderuler`, or `old`. Root-level `dist` and `coverage` are also excluded. Nested `dist` and `coverage` directories and regular files with reserved directory names remain eligible.
 
 An explicit target inside an excluded directory fails. Custom selectors and project readers cannot use parent escapes or symlink traversal to bypass these boundaries. Loaded rule modules are excluded from check targets.
 
@@ -56,7 +56,7 @@ For `check` and `validate`, run the command from the intended project root. A `c
 ## Grouping
 
 ```ts
-import type { Grouping } from '@alex-dbs/rulekeeper';
+import type { Grouping } from '@alex-dbs/coderuler';
 
 // Inside a Rule subclass:
 group: Grouping = 'project';
@@ -81,6 +81,6 @@ Group checks receive `subject.kind === 'group'` and `subject.members`. One group
 
 `RuleSettings` supports `backend: 'jev'`, `model`, `threshold`, `inputCostPerMillion`, and `outputCostPerMillion`. See [AI checks](/docs/ai-checks/) for defaults and precedence.
 
-`comment` replaces the generated finding body during `check --diff --auto-comment` or `check --pr ... --auto-comment`. It does not change decisions or inline locations. Omit it to keep generated text. RuleKeeper strips terminal controls and redacts credentials from overrides.
+`comment` replaces the generated finding body during `check --diff --auto-comment` or `check --pr ... --auto-comment`. It does not change decisions or inline locations. Omit it to keep generated text. CodeRuler strips terminal controls and redacts credentials from overrides.
 
-The class contracts are defined in [rule.ts](https://github.com/alex-dbs/rulekeeper/blob/main/src/app/rule.ts). The [CLI reference](/docs/cli/) lists command-level options.
+The class contracts are defined in [rule.ts](https://github.com/alex-dbs/coderuler/blob/main/src/app/rule.ts). The [CLI reference](/docs/cli/) lists command-level options.

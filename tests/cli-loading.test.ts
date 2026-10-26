@@ -5,7 +5,7 @@ import { after, test } from 'node:test';
 
 import { createSandbox, parseCheckOutput, reportNamed, ROOT, runCli, writeFile, type Sandbox } from './support.ts';
 
-const sandbox = createSandbox('rulekeeper-cli-loading-');
+const sandbox = createSandbox('coderuler-cli-loading-');
 const unavailableForStartup = [
   'axios',
   'yaml',
@@ -38,8 +38,8 @@ async function runUnavailable(args: readonly string[], target: Sandbox, packages
 
 test('help and version do not load unused dependencies', async () => {
   const cases = [
-    { args: ['--help'], expected: 'Usage: rulekeeper' },
-    { args: ['inspect', '--help'], expected: 'Usage: rulekeeper inspect' },
+    { args: ['--help'], expected: 'Usage: coderuler' },
+    { args: ['inspect', '--help'], expected: 'Usage: coderuler inspect' },
     { args: ['--version'], expected: installedVersion },
   ] as const;
 
@@ -78,8 +78,8 @@ test('local checks do not require AI or dependency-management packages', async (
   const target = sandbox.isolated('local-check');
   writeFile(join(target.cwd, 'inputs/a.txt'), 'GOOD');
   writeFile(join(target.cwd, 'inputs/b.txt'), 'BAD');
-  writeFile(join(target.cwd, '.rulekeeper/smoke.rule.ts'), `
-import { Rule, pass, violation } from '@alex-dbs/rulekeeper';
+  writeFile(join(target.cwd, '.coderuler/smoke.rule.ts'), `
+import { Rule, pass, violation } from '@alex-dbs/coderuler';
 export default class Smoke extends Rule {
   files = ['inputs/*.txt'];
   check = subject => subject.source === 'BAD' ? violation('bad input') : pass();

@@ -14,7 +14,7 @@ import {
 } from './dependency-support.ts';
 import { CLI, ROOT, createSandbox, parseCheckOutput, writeFile, type CliResult, type Sandbox } from './support.ts';
 
-const sandbox = createSandbox('rulekeeper-cli-dependencies-');
+const sandbox = createSandbox('coderuler-cli-dependencies-');
 const registry = createDependencyFixture(join(sandbox.root, 'registry'));
 after(() => sandbox.cleanup());
 let invocation = 0;
@@ -63,7 +63,7 @@ async function cli(
 
 function policy(consumer: Sandbox): string {
   writeFile(join(consumer.cwd, 'inputs/working.txt'), 'BAD');
-  return writeFile(join(consumer.cwd, '.rulekeeper/policy.rule.ts'), `import { Rule, pass, test, violation } from '@alex-dbs/rulekeeper';
+  return writeFile(join(consumer.cwd, '.coderuler/policy.rule.ts'), `import { Rule, pass, test, violation } from '@alex-dbs/coderuler';
 import { message } from 'fixture-policy';
 export default class Policy extends Rule {
   files = ['inputs/*.txt'];
@@ -77,7 +77,7 @@ export const tests = [
 }
 
 function lock(consumer: Sandbox): string {
-  return readFileSync(join(consumer.cwd, '.rulekeeper/rulekeeper.lock'), 'utf8');
+  return readFileSync(join(consumer.cwd, '.coderuler/coderuler.lock'), 'utf8');
 }
 
 function assertPolicy(result: CliResult, message: string): void {
@@ -99,20 +99,22 @@ test('deps add in a fresh consumer acquires exact direct/transitive packages wit
   execFileSync('git', ['init', '--quiet'], { cwd: consumer.cwd, env: consumer.env });
   const added = await cli(consumer, ['deps', 'add', 'fixture-policy@1.0.0']);
   assert.equal(added.status, 0, added.stderr);
-  assert.equal(added.stdout, `Added fixture-policy@1.0.0\n${join(consumer.cwd, '.rulekeeper/rulekeeper.lock')}\n`);
+  assert.equal(added.stdout, `Added fixture-policy@1.0.0
+${join(consumer.cwd, '.coderuler/coderuler.lock')}
+`);
   assert.equal(added.stderr, '');
   assert.equal(readFileSync(join(consumer.cwd, 'package.json'), 'utf8'), manifest);
   assert.equal(existsSync(join(consumer.cwd, 'node_modules')), false);
   assert.equal(existsSync(join(consumer.cwd, 'package-lock.json')), false);
   assert.equal(readFileSync(applicationIgnore, 'utf8'), 'application-only/\n');
-  assert.equal(readFileSync(join(consumer.cwd, '.rulekeeper/.gitignore'), 'utf8'), '/node_modules/\n');
+  assert.equal(readFileSync(join(consumer.cwd, '.coderuler/.gitignore'), 'utf8'), '/node_modules/\n');
   const ignored = execFileSync('git', ['check-ignore', '--no-index', '--stdin'], {
     cwd: consumer.cwd,
     env: consumer.env,
-    input: '.rulekeeper/node_modules/fixture-policy/package.json\n.rulekeeper/rulekeeper.lock\n.rulekeeper/policy.rule.ts\n.rulekeeper/.gitignore\n',
+    input: '.coderuler/node_modules/fixture-policy/package.json\n.coderuler/coderuler.lock\n.coderuler/policy.rule.ts\n.coderuler/.gitignore\n',
     encoding: 'utf8',
   });
-  assert.equal(ignored, '.rulekeeper/node_modules/fixture-policy/package.json\n');
+  assert.equal(ignored, '.coderuler/node_modules/fixture-policy/package.json\n');
   const parsed = JSON.parse(lock(consumer));
   assert.equal(parsed.lockfileVersion, 3);
   assert.deepEqual(parsed.packages[''].dependencies, { 'fixture-policy': '1.0.0' });
@@ -126,7 +128,7 @@ test('deps add in a fresh consumer acquires exact direct/transitive packages wit
   assert.ok(existsSync(join(consumer.cwd, 'dependency-cache/tarballs')), 'relative RK_DEPENDENCY_CACHE must resolve against invocation cwd');
   assert.deepEqual(readdirSync(join(consumer.cwd, 'dependency-cache')), ['tarballs']);
   for (const name of ['fixture-policy', 'fixture-shared']) {
-    const installed = lstatSync(join(consumer.cwd, '.rulekeeper/node_modules', name));
+    const installed = lstatSync(join(consumer.cwd, '.coderuler/node_modules', name));
     assert.equal(installed.isDirectory(), true);
     assert.equal(installed.isSymbolicLink(), false);
   }
@@ -139,8 +141,8 @@ test('intact copied rules and lock replay tarballs, then check and concurrent in
   assert.equal((await cli(original, ['deps', 'add', 'fixture-policy@1.0.0'])).status, 0);
   const committed = lock(original);
   const copy = target('copy-clean');
-  writeFile(join(copy.cwd, '.rulekeeper/policy.rule.ts'), readFileSync(rule, 'utf8'));
-  writeFile(join(copy.cwd, '.rulekeeper/rulekeeper.lock'), committed);
+  writeFile(join(copy.cwd, '.coderuler/policy.rule.ts'), readFileSync(rule, 'utf8'));
+  writeFile(join(copy.cwd, '.coderuler/coderuler.lock'), committed);
   writeFile(join(copy.cwd, 'inputs/working.txt'), 'BAD');
   const first = await cli(copy, ['check', '--json'], 'tarballs');
   assertPolicy(first, POLICY_MESSAGE_V1);
@@ -160,13 +162,13 @@ test('intact copied rules and lock replay tarballs, then check and concurrent in
 
   const unavailable = target('copy-offline-empty');
   policy(unavailable);
-  writeFile(join(unavailable.cwd, '.rulekeeper/rulekeeper.lock'), committed);
+  writeFile(join(unavailable.cwd, '.coderuler/coderuler.lock'), committed);
   const failed = await cli(unavailable, ['check', '--json'], 'offline');
   assert.equal(failed.status, 2, failed.stdout);
   assert.equal(failed.stdout, '');
   assert.equal(lock(unavailable), committed);
-  assert.equal(existsSync(join(unavailable.cwd, '.rulekeeper/node_modules')), false);
-  assert.equal(existsSync(join(unavailable.cwd, '.rulekeeper/.gitignore')), false);
+  assert.equal(existsSync(join(unavailable.cwd, '.coderuler/node_modules')), false);
+  assert.equal(existsSync(join(unavailable.cwd, '.coderuler/.gitignore')), false);
 });
 
 for (const [label, args, missing] of [
@@ -185,12 +187,12 @@ for (const [label, args, missing] of [
     assert.ok(unused);
     damaged.packages['node_modules/fixture-empty'] = { version: unused.manifest.version, resolved: unused.tarball, integrity: unused.integrity };
     const damagedBytes = `${JSON.stringify(damaged, null, 2)}\n`;
-    writeFile(join(consumer.cwd, '.rulekeeper/rulekeeper.lock'), damagedBytes);
+    writeFile(join(consumer.cwd, '.coderuler/coderuler.lock'), damagedBytes);
     const repaired = await cli(consumer, args);
     if (label === 'automatic check') assertPolicy(repaired, POLICY_MESSAGE_V1);
     else {
       assert.equal(repaired.status, 0, repaired.stderr);
-      assert.equal(repaired.stdout, `Rule dependencies ready: ${join(consumer.cwd, '.rulekeeper')}\n`);
+      assert.equal(repaired.stdout, `Rule dependencies ready: ${join(consumer.cwd, '.coderuler')}\n`);
       assert.equal(repaired.stderr, '');
     }
     assert.ok(repaired.requests.some(request => request.kind === 'metadata'), 'missing graph nodes must use real registry resolution');
@@ -218,13 +220,13 @@ for (const args of [['deps', 'sync'], ['check', '--json']]) {
     const added = await cli(consumer, ['deps', 'add', 'fixture-policy@1.0.0']);
     assert.equal(added.status, 0, added.stderr);
     const committed = lock(consumer);
-    const nodeModules = join(consumer.cwd, '.rulekeeper/node_modules');
+    const nodeModules = join(consumer.cwd, '.coderuler/node_modules');
     rmSync(join(nodeModules, 'fixture-shared'), { recursive: true });
     const repaired = await cli(consumer, args, 'offline');
     if (args[0] === 'check') assertPolicy(repaired, POLICY_MESSAGE_V1);
     else {
       assert.equal(repaired.status, 0, repaired.stderr);
-      assert.equal(repaired.stdout, `Rule dependencies ready: ${join(consumer.cwd, '.rulekeeper')}\n`);
+      assert.equal(repaired.stdout, `Rule dependencies ready: ${join(consumer.cwd, '.coderuler')}\n`);
       assert.equal(repaired.stderr, '');
     }
     assert.deepEqual(repaired.requests, []);
@@ -248,13 +250,13 @@ for (const args of [['deps', 'sync'], ['check', '--json']]) {
     damaged.packages[''].dependencies = { 'fixture-policy': '99.0.0' };
     delete damaged.packages['node_modules/fixture-policy'];
     const committed = `${JSON.stringify(damaged, null, 2)}\n`;
-    writeFile(join(consumer.cwd, '.rulekeeper/rulekeeper.lock'), committed);
+    writeFile(join(consumer.cwd, '.coderuler/coderuler.lock'), committed);
     const failed = await cli(consumer, args);
     assert.equal(failed.status, 2, failed.stdout);
     assert.equal(failed.stdout, '');
     assert.ok(failed.requests.some(request => request.kind === 'metadata'));
     assert.equal(lock(consumer), committed);
-    writeFile(join(consumer.cwd, '.rulekeeper/rulekeeper.lock'), healthy);
+    writeFile(join(consumer.cwd, '.coderuler/coderuler.lock'), healthy);
     assertPolicy(await cli(consumer, ['check', '--json'], 'offline'), POLICY_MESSAGE_V1);
   });
 
@@ -266,8 +268,8 @@ for (const args of [['deps', 'sync'], ['check', '--json']]) {
     const damaged = JSON.parse(lock(consumer));
     delete damaged.packages['node_modules/fixture-shared'];
     const committed = `${JSON.stringify(damaged, null, 2)}\n`;
-    writeFile(join(consumer.cwd, '.rulekeeper/rulekeeper.lock'), committed);
-    const nodeModules = join(consumer.cwd, '.rulekeeper/node_modules');
+    writeFile(join(consumer.cwd, '.coderuler/coderuler.lock'), committed);
+    const nodeModules = join(consumer.cwd, '.coderuler/node_modules');
     rmSync(nodeModules, { recursive: true });
     const userFile = writeFile(join(nodeModules, 'user-owned.txt'), 'preserve me\n');
     const failed = await cli(consumer, args);
@@ -289,21 +291,21 @@ test('explicit add updates behavior and remove denies ambient application copies
   assert.equal((await cli(consumer, ['deps', 'add', 'fixture-policy@1.0.0'])).status, 0);
   const updated = await cli(consumer, ['deps', 'add', 'fixture-policy@2.0.0']);
   assert.equal(updated.status, 0, updated.stderr);
-  assert.equal(updated.stdout, `Added fixture-policy@2.0.0\n${join(consumer.cwd, '.rulekeeper/rulekeeper.lock')}\n`);
+  assert.equal(updated.stdout, `Added fixture-policy@2.0.0\n${join(consumer.cwd, '.coderuler/coderuler.lock')}\n`);
   assertPolicy(await cli(consumer, ['check', '--json'], 'offline'), POLICY_MESSAGE_V2);
   assert.equal(JSON.parse(lock(consumer)).packages['node_modules/fixture-shared'].version, '2.0.0');
   writeFile(join(consumer.cwd, 'node_modules/fixture-policy/package.json'), '{"name":"fixture-policy","version":"99.0.0","type":"module","main":"index.js"}');
   writeFile(join(consumer.cwd, 'node_modules/fixture-policy/index.js'), 'export const message = "ambient application dependency";');
   const removed = await cli(consumer, ['deps', 'remove', 'fixture-policy'], 'offline');
   assert.equal(removed.status, 0, removed.stderr);
-  assert.equal(removed.stdout, `Removed fixture-policy\n${join(consumer.cwd, '.rulekeeper/rulekeeper.lock')}\n`);
+  assert.equal(removed.stdout, `Removed fixture-policy\n${join(consumer.cwd, '.coderuler/coderuler.lock')}\n`);
   assert.deepEqual(JSON.parse(lock(consumer)).packages[''].dependencies ?? {}, {});
-  assert.equal(existsSync(join(consumer.cwd, '.rulekeeper/node_modules/fixture-policy')), false);
+  assert.equal(existsSync(join(consumer.cwd, '.coderuler/node_modules/fixture-policy')), false);
   assert.ok(existsSync(join(consumer.cwd, 'node_modules/fixture-policy/index.js')));
   const denied = await cli(consumer, ['check', '--json'], 'offline');
   assert.equal(denied.status, 2, denied.stdout);
   assert.equal(denied.stdout, '');
-  assert.match(denied.stderr, /rulekeeper deps add fixture-policy/);
+  assert.match(denied.stderr, /coderuler deps add fixture-policy/);
 });
 
 for (const [operation, packages, directVersions] of [
@@ -312,8 +314,8 @@ for (const [operation, packages, directVersions] of [
 ] as const) {
   test(`deps add reports its own committed version after another ${operation} commits before it returns`, { timeout: 30_000 }, async context => {
     const consumer = target(`committed-output-${operation}`);
-    const mutex = join(consumer.cwd, '.rulekeeper/.rulekeeper-deps-write');
-    const lockPath = join(consumer.cwd, '.rulekeeper/rulekeeper.lock');
+    const mutex = join(consumer.cwd, '.coderuler/.coderuler-deps-write');
+    const lockPath = join(consumer.cwd, '.coderuler/coderuler.lock');
     const preload = writeFile(join(consumer.root, 'pause-after-mutex-release.mjs'), `import promises from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 const original = promises.rm;
@@ -394,7 +396,7 @@ for (const [specifier, version] of [['fixture-policy', '2.0.0'], ['fixture-polic
     const added = await cli(consumer, ['deps', 'add', specifier!]);
     assert.equal(added.status, 0, added.stderr);
     assert.deepEqual(JSON.parse(lock(consumer)).packages[''].dependencies, { 'fixture-policy': version });
-    assert.equal(added.stdout, `Added fixture-policy@${version}\n${join(consumer.cwd, '.rulekeeper/rulekeeper.lock')}\n`);
+    assert.equal(added.stdout, `Added fixture-policy@${version}\n${join(consumer.cwd, '.coderuler/coderuler.lock')}\n`);
   });
 }
 
@@ -405,8 +407,8 @@ test('invalid and missing dependency commands fail with exit 2 and preserve a us
   const committed = lock(consumer);
   const commands = [
     ['deps'], ['deps', 'unknown'], ['deps', 'add'], ['deps', 'remove'], ['deps', 'sync', 'extra'],
-    ['deps', 'sync', '--global', '--directory', '.rulekeeper'],
-    ['deps', 'add', 'fixture-policy@1', '--global', '--directory', '.rulekeeper'],
+    ['deps', 'sync', '--global', '--directory', '.coderuler'],
+    ['deps', 'add', 'fixture-policy@1', '--global', '--directory', '.coderuler'],
     ['deps', 'remove', 'fixture-policy@1.0.0'], ['deps', 'remove', 'fixture-unknown'],
     ['deps', 'add', 'fixture-policy@1', 'fixture-policy@2'],
     ['deps', 'add', 'fixture-missing@1.0.0'], ['deps', 'add', 'fixture-bad-integrity@1.0.0'],
@@ -426,15 +428,15 @@ test('remove and sync require an existing directory and a malformed lock is neve
   for (const args of [['deps', 'sync'], ['deps', 'remove', 'fixture-policy']]) {
     const failed = await cli(consumer, args, 'offline');
     assert.equal(failed.status, 2, failed.stdout);
-    assert.equal(existsSync(join(consumer.cwd, '.rulekeeper')), false);
+    assert.equal(existsSync(join(consumer.cwd, '.coderuler')), false);
   }
   const malformed = '{broken lock';
-  writeFile(join(consumer.cwd, '.rulekeeper/rulekeeper.lock'), malformed);
+  writeFile(join(consumer.cwd, '.coderuler/coderuler.lock'), malformed);
   policy(consumer);
   for (const args of [['deps', 'sync'], ['deps', 'add', 'fixture-policy@1.0.0'], ['check', '--json']]) {
     const failed = await cli(consumer, args, 'offline');
     assert.equal(failed.status, 2, failed.stdout);
-    assert.match(failed.stderr, /rulekeeper\.lock/);
+    assert.match(failed.stderr, /coderuler\.lock/);
     assert.equal(lock(consumer), malformed);
   }
 });
@@ -452,7 +454,7 @@ for (const empty of [false, true]) {
       assert.deepEqual(JSON.parse(lock(consumer)).packages[''].dependencies ?? {}, {});
     }
     const committed = lock(consumer);
-    const ignore = join(consumer.cwd, '.rulekeeper/.gitignore');
+    const ignore = join(consumer.cwd, '.coderuler/.gitignore');
     rmSync(ignore, { force: true });
     if (!empty) {
       assertPolicy(await cli(consumer, ['check', '--json'], 'offline'), POLICY_MESSAGE_V1);
@@ -472,7 +474,7 @@ for (const empty of [false, true]) {
 test('add and repeated sync preserve custom ignore lines and their newline style', async () => {
   const consumer = target('custom-ignore');
   const original = '# Keep local files\r\nscratch/';
-  const ignore = writeFile(join(consumer.cwd, '.rulekeeper/.gitignore'), original);
+  const ignore = writeFile(join(consumer.cwd, '.coderuler/.gitignore'), original);
   const added = await cli(consumer, ['deps', 'add', 'fixture-policy@1.0.0']);
   assert.equal(added.status, 0, added.stderr);
   const expected = `${original}\r\n/node_modules/\r\n`;
@@ -488,7 +490,7 @@ for (const pattern of ['node_modules', '/node_modules', 'node_modules/', '/node_
   test(`repeated add and sync retain an existing ${pattern} ignore without duplicating it`, async () => {
     const consumer = target('existing-ignore');
     const original = `# Keep custom ignores\nscratch/\n${pattern}`;
-    const ignore = writeFile(join(consumer.cwd, '.rulekeeper/.gitignore'), original);
+    const ignore = writeFile(join(consumer.cwd, '.coderuler/.gitignore'), original);
     for (const args of [['deps', 'add', 'fixture-policy@1.0.0'], ['deps', 'sync'], ['deps', 'add', 'fixture-policy@1.0.0'], ['deps', 'sync']]) {
       const result = await cli(consumer, args, args[1] === 'sync' ? 'offline' : 'all');
       assert.equal(result.status, 0, result.stderr);
@@ -503,7 +505,7 @@ test('add and sync refuse a symlinked local ignore without changing its target o
   const added = await cli(consumer, ['deps', 'add', 'fixture-policy@1.0.0']);
   assert.equal(added.status, 0, added.stderr);
   const committed = lock(consumer);
-  const ignore = join(consumer.cwd, '.rulekeeper/.gitignore');
+  const ignore = join(consumer.cwd, '.coderuler/.gitignore');
   rmSync(ignore, { force: true });
   const outside = writeFile(join(consumer.root, 'outside-ignore'), 'outside-only/\n');
   symlinkSync(outside, ignore);
@@ -520,14 +522,14 @@ test('add and sync refuse a symlinked local ignore without changing its target o
 
 test('SDK-only sync exposes the running SDK without creating a lock, cache or application installation', async () => {
   const consumer = target('sdk-sync');
-  const directory = join(consumer.cwd, '.rulekeeper');
+  const directory = join(consumer.cwd, '.coderuler');
   mkdirSync(directory);
   const synced = await cli(consumer, ['deps', 'sync'], 'offline');
   assert.equal(synced.status, 0, synced.stderr);
   assert.equal(synced.stdout, `Rule dependencies ready: ${directory}\n`);
   assert.deepEqual(synced.requests, []);
-  assert.ok(lstatSync(join(directory, 'node_modules/@alex-dbs/rulekeeper')).isSymbolicLink());
-  assert.equal(existsSync(join(directory, 'rulekeeper.lock')), false);
+  assert.ok(lstatSync(join(directory, 'node_modules/@alex-dbs/coderuler')).isSymbolicLink());
+  assert.equal(existsSync(join(directory, 'coderuler.lock')), false);
   assert.equal(existsSync(join(directory, '.gitignore')), false);
   assert.equal(existsSync(join(consumer.cwd, '.gitignore')), false);
   assert.equal(existsSync(join(consumer.cwd, 'dependency-cache')), false);
@@ -543,32 +545,32 @@ test('global and cwd-relative explicit directories select separate owners', asyn
   const applicationIgnore = writeFile(join(consumer.cwd, '.gitignore'), 'application-only/\n');
   const global = await cli(consumer, ['deps', 'add', 'fixture-policy@1.0.0', '--global']);
   assert.equal(global.status, 0, global.stderr);
-  assert.equal(global.stdout, `Added fixture-policy@1.0.0\n${join(consumer.home, '.rulekeeper/rulekeeper.lock')}\n`);
-  assert.equal(existsSync(join(consumer.cwd, '.rulekeeper')), false);
-  assert.equal(readFileSync(join(consumer.home, '.rulekeeper/.gitignore'), 'utf8'), '/node_modules/\n');
+  assert.equal(global.stdout, `Added fixture-policy@1.0.0\n${join(consumer.home, '.coderuler/coderuler.lock')}\n`);
+  assert.equal(existsSync(join(consumer.cwd, '.coderuler')), false);
+  assert.equal(readFileSync(join(consumer.home, '.coderuler/.gitignore'), 'utf8'), '/node_modules/\n');
   const directory = 'custom/rules';
   const explicit = await cli(consumer, ['deps', 'add', 'fixture-policy@2.0.0', '--directory', directory]);
   assert.equal(explicit.status, 0, explicit.stderr);
-  assert.equal(explicit.stdout, `Added fixture-policy@2.0.0\n${join(consumer.cwd, directory, 'rulekeeper.lock')}\n`);
+  assert.equal(explicit.stdout, `Added fixture-policy@2.0.0\n${join(consumer.cwd, directory, 'coderuler.lock')}\n`);
   assert.equal(readFileSync(join(consumer.cwd, directory, '.gitignore'), 'utf8'), '/node_modules/\n');
   const synced = await cli(consumer, ['deps', 'sync', '--directory', directory], 'offline');
   assert.equal(synced.status, 0, synced.stderr);
   assert.equal(synced.stdout, `Rule dependencies ready: ${join(consumer.cwd, directory)}\n`);
   const globalSync = await cli(consumer, ['deps', 'sync', '--global'], 'offline');
   assert.equal(globalSync.status, 0, globalSync.stderr);
-  assert.equal(globalSync.stdout, `Rule dependencies ready: ${join(consumer.home, '.rulekeeper')}\n`);
+  assert.equal(globalSync.stdout, `Rule dependencies ready: ${join(consumer.home, '.coderuler')}\n`);
   assert.equal(existsSync(join(consumer.cwd, 'node_modules')), false);
   assert.equal(readFileSync(applicationIgnore, 'utf8'), 'application-only/\n');
-  assert.equal(existsSync(join(consumer.cwd, '.rulekeeper')), false);
-  const globalModules = join(consumer.home, '.rulekeeper/node_modules');
+  assert.equal(existsSync(join(consumer.cwd, '.coderuler')), false);
+  const globalModules = join(consumer.home, '.coderuler/node_modules');
   const customModules = join(consumer.cwd, directory, 'node_modules');
   assert.equal(lstatSync(join(globalModules, 'fixture-policy')).isDirectory(), true);
   assert.equal(lstatSync(join(customModules, 'fixture-policy')).isDirectory(), true);
   assert.equal(JSON.parse(readFileSync(join(globalModules, 'fixture-policy/package.json'), 'utf8')).version, '1.0.0');
   assert.equal(JSON.parse(readFileSync(join(customModules, 'fixture-policy/package.json'), 'utf8')).version, '2.0.0');
   assert.notEqual(
-    JSON.parse(readFileSync(join(globalModules, '.rulekeeper-install.json'), 'utf8')).key,
-    JSON.parse(readFileSync(join(customModules, '.rulekeeper-install.json'), 'utf8')).key,
+    JSON.parse(readFileSync(join(globalModules, '.coderuler-install.json'), 'utf8')).key,
+    JSON.parse(readFileSync(join(customModules, '.coderuler-install.json'), 'utf8')).key,
   );
 });
 
@@ -578,8 +580,8 @@ test('deps sync provides actual typed package and SDK declarations to strict Nod
   assert.equal(added.status, 0, added.stderr);
   const synced = await cli(consumer, ['deps', 'sync'], 'offline');
   assert.equal(synced.status, 0, synced.stderr);
-  const filename = join(consumer.cwd, '.rulekeeper/typed.rule.ts');
-  const source = `import { Rule, violation } from '@alex-dbs/rulekeeper';
+  const filename = join(consumer.cwd, '.coderuler/typed.rule.ts');
+  const source = `import { Rule, violation } from '@alex-dbs/coderuler';
 import { format } from '@fixture/typed';
 export default class Typed extends Rule {
   files = ['inputs/*.txt'];
@@ -602,10 +604,10 @@ export default class Typed extends Rule {
   assert.match(invalid?.stdout ?? '', /Argument of type 'number' is not assignable to parameter of type 'string'/);
   assert.equal(existsSync(join(consumer.cwd, 'node_modules')), false);
   assert.equal(existsSync(join(consumer.cwd, 'tsconfig.json')), false);
-  assert.equal(lstatSync(join(consumer.cwd, '.rulekeeper/node_modules/@fixture/typed')).isDirectory(), true);
-  assert.equal(lstatSync(join(consumer.cwd, '.rulekeeper/node_modules/@fixture/typed')).isSymbolicLink(), false);
-  assert.equal(lstatSync(join(consumer.cwd, '.rulekeeper/node_modules/@alex-dbs/rulekeeper')).isSymbolicLink(), true);
-  assert.ok(existsSync(join(consumer.cwd, '.rulekeeper/node_modules/.rulekeeper-install.json')));
+  assert.equal(lstatSync(join(consumer.cwd, '.coderuler/node_modules/@fixture/typed')).isDirectory(), true);
+  assert.equal(lstatSync(join(consumer.cwd, '.coderuler/node_modules/@fixture/typed')).isSymbolicLink(), false);
+  assert.equal(lstatSync(join(consumer.cwd, '.coderuler/node_modules/@alex-dbs/coderuler')).isSymbolicLink(), true);
+  assert.ok(existsSync(join(consumer.cwd, '.coderuler/node_modules/.coderuler-install.json')));
 });
 
 for (const installed of [true, false]) {
@@ -614,9 +616,9 @@ for (const installed of [true, false]) {
     policy(consumer);
     const added = await cli(consumer, ['deps', 'add', 'fixture-policy@1.0.0']);
     assert.equal(added.status, 0, added.stderr);
-    const directory = join(consumer.cwd, '.rulekeeper');
+    const directory = join(consumer.cwd, '.coderuler');
     const committed = lock(consumer);
-    const markerPath = join(directory, 'node_modules/.rulekeeper-install.json');
+    const markerPath = join(directory, 'node_modules/.coderuler-install.json');
     const marker = readFileSync(markerPath, 'utf8');
     rmSync(join(directory, '.gitignore'), { force: true });
     if (!installed) rmSync(join(directory, 'node_modules'), { recursive: true });

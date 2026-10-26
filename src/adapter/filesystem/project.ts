@@ -11,7 +11,7 @@ import { parseYaml } from '../scope/yaml.js';
 const SKIPPED_ANY_DEPTH: ReadonlySet<string> = new Set([
   '.git',
   'node_modules',
-  '.rulekeeper',
+  '.coderuler',
   'old',
 ]);
 
