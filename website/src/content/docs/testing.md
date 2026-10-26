@@ -14,7 +14,7 @@ A passing test means the actual result matches the expected result. A test that 
 ## Write the cases
 
 ```ts
-import { test } from '@alex-dbs/rulekeeper';
+import { test } from '@alex-dbs/coderuler';
 
 export const tests = [
   test('internal URL passes').withFiles({
@@ -37,9 +37,9 @@ Each case uses a fresh temporary root. Rule modules can be reused by test worker
 ## Run offline tests
 
 ```sh
-rulekeeper test .rulekeeper/internal-url.rule.ts
-rulekeeper test
-rulekeeper test . --failures-only --concurrency 4 --timeout 30s
+coderuler test .coderuler/internal-url.rule.ts
+coderuler test
+coderuler test . --failures-only --concurrency 4 --timeout 30s
 ```
 
 An explicit module or directory replaces rule discovery. Without a path, the command tests discovered project and home rules. `--failures-only` hides successful case details, but keeps the summary.
@@ -50,7 +50,7 @@ Output stays in declaration order even with concurrent execution. A mismatch, in
 
 ## Keep ordinary tests offline
 
-Ordinary `tests` cannot use RuleKeeper's AI decision backend. If a check calls it, the case fails with `Inline rule tests must not call the decision backend`.
+Ordinary `tests` cannot use CodeRuler's AI decision backend. If a check calls it, the case fails with `Inline rule tests must not call the decision backend`.
 
 This guard still applies to ordinary cases when the command also includes `--ai`. It is not a network sandbox: rule modules are trusted Node.js code and can call external APIs directly. Keep those calls out of offline tests.
 
@@ -70,7 +70,7 @@ Use these cases with a matching AI rule, such as the example in [AI checks](/doc
 
 ```sh
 export TYPESAFE_API_KEY='your-api-key'
-rulekeeper test .rulekeeper/actionable-instructions.rule.ts --ai --timeout 45s
+coderuler test .coderuler/actionable-instructions.rule.ts --ai --timeout 45s
 ```
 
 `--ai` adds `aiTests` to the ordinary test cases. It authorizes live provider calls for those cases. The requests send selected fixture content to the configured service and can incur charges. Results can vary. Provider errors are errors, not passes.
@@ -83,4 +83,4 @@ A selected rule set with no selected test cases is an error. If only `aiTests` e
 
 After tests pass, [inspect the rule](/docs/cli/#inspect) on representative project files. Fixtures cannot show whether your real project globs and data select the intended subjects.
 
-See the [test helper source](https://github.com/alex-dbs/rulekeeper/blob/main/src/app/rule-tests.ts) and [worker implementation](https://github.com/alex-dbs/rulekeeper/blob/main/src/adapter/filesystem/rule-test-worker.ts) for execution details.
+See the [test helper source](https://github.com/alex-dbs/coderuler/blob/main/src/app/rule-tests.ts) and [worker implementation](https://github.com/alex-dbs/coderuler/blob/main/src/adapter/filesystem/rule-test-worker.ts) for execution details.

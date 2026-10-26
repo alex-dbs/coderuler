@@ -24,10 +24,10 @@ export interface RuleDependencyManager {
 }
 
 const registry = 'https://registry.npmjs.org/';
-const lockName = 'rulekeeper.lock';
-const sdkName = '@alex-dbs/rulekeeper';
-const markerName = '.rulekeeper-install.json';
-const rootIdentity = { name: 'rulekeeper-rules', version: '1.0.0' };
+const lockName = 'coderuler.lock';
+const sdkName = '@alex-dbs/coderuler';
+const markerName = '.coderuler-install.json';
+const rootIdentity = { name: 'coderuler-rules', version: '1.0.0' };
 const forbiddenRootFields = ['scripts', 'workspaces', 'overrides', 'devDependencies', 'optionalDependencies', 'peerDependencies', 'peerDependenciesMeta'];
 const dependencyFields = ['dependencies', 'optionalDependencies', 'peerDependencies'] as const;
 const compatibilityFields = ['engines', 'os', 'cpu', 'libc'] as const;
@@ -123,28 +123,28 @@ function validateUrl(value: unknown, label: string): void {
 function validateLock(text: string, directory: string): Snapshot {
   let parsed: Manifest;
   try { parsed = object(JSON.parse(text) as unknown, 'Rule dependency lock'); }
-  catch (error) { throw new Error('Invalid rulekeeper.lock JSON; regenerate it with rulekeeper deps add', { cause: error }); }
-  if (parsed.lockfileVersion !== 3) throw new Error('rulekeeper.lock must use npm lockfileVersion 3');
-  const packages = object(parsed.packages, 'rulekeeper.lock packages') as Record<string, Manifest>;
-  const root = object(packages[''], 'rulekeeper.lock root package');
+  catch (error) { throw new Error('Invalid coderuler.lock JSON; regenerate it with coderuler deps add', { cause: error }); }
+  if (parsed.lockfileVersion !== 3) throw new Error('coderuler.lock must use npm lockfileVersion 3');
+  const packages = object(parsed.packages, 'coderuler.lock packages') as Record<string, Manifest>;
+  const root = object(packages[''], 'coderuler.lock root package');
   if (parsed.name !== rootIdentity.name || parsed.version !== rootIdentity.version || root.name !== rootIdentity.name || root.version !== rootIdentity.version) {
-    throw new Error('rulekeeper.lock must use the rulekeeper-rules@1.0.0 root identity');
+    throw new Error('coderuler.lock must use the coderuler-rules@1.0.0 root identity');
   }
   for (const field of forbiddenRootFields) {
-    if (root[field] !== undefined || parsed[field] !== undefined) throw new Error(`rulekeeper.lock root ${field} is not supported`);
+    if (root[field] !== undefined || parsed[field] !== undefined) throw new Error(`coderuler.lock root ${field} is not supported`);
   }
   for (const field of Object.keys(root)) {
-    if (!['name', 'version', 'dependencies'].includes(field)) throw new Error(`rulekeeper.lock root ${field} is not supported`);
+    if (!['name', 'version', 'dependencies'].includes(field)) throw new Error(`coderuler.lock root ${field} is not supported`);
   }
-  const direct = dependencyMap(root, 'dependencies', 'rulekeeper.lock root');
+  const direct = dependencyMap(root, 'dependencies', 'coderuler.lock root');
   for (const [name, version] of Object.entries(direct)) {
-    if (name === sdkName) throw new Error(`${sdkName}: the SDK comes from the selected Rulekeeper installation`);
+    if (name === sdkName) throw new Error(`${sdkName}: the SDK comes from the selected CodeRuler installation`);
     exactVersion(name, version);
   }
   for (const [location, unknownEntry] of Object.entries(packages)) {
     if (location === '') continue;
     const name = locationName(location);
-    const entry = object(unknownEntry, `rulekeeper.lock ${location}`);
+    const entry = object(unknownEntry, `coderuler.lock ${location}`);
     exactVersion(name, entry.version);
     if (entry.name !== undefined && entry.name !== name) throw new Error(`${name}: package aliases are unsupported`);
     for (const field of ['acceptDependencies', 'overrides', 'workspaces', 'packageExtensions', 'packageExtensionsHash', 'npmExtensionHash']) {
@@ -185,9 +185,9 @@ function canonicalJson(value: unknown): string {
 
 export function ruleDependencyLockKey(parsed: Manifest | null, directory: string): string {
   if (parsed === null) return 'empty';
-  const packages = object(parsed.packages, 'rulekeeper.lock packages');
-  const root = object(packages[''], 'rulekeeper.lock root package');
-  if (Object.keys(packages).length === 1 && Object.keys(dependencyMap(root, 'dependencies', 'rulekeeper.lock root')).length === 0) return 'empty';
+  const packages = object(parsed.packages, 'coderuler.lock packages');
+  const root = object(packages[''], 'coderuler.lock root package');
+  if (Object.keys(packages).length === 1 && Object.keys(dependencyMap(root, 'dependencies', 'coderuler.lock root')).length === 0) return 'empty';
   return createHash('sha256').update(JSON.stringify([
     canonicalJson(parsed), directory, 1, process.version, process.platform, process.arch, currentEnv.libc(process.platform) ?? '',
   ])).digest('hex');
@@ -230,7 +230,7 @@ export async function dependencyDirectory(ruleFile: string): Promise<string> {
   const initial = dirname(await realpath(ruleFile));
   let directory = initial;
   for (;;) {
-    if (await readRuleDependencyLock(directory) !== null || basename(directory) === '.rulekeeper') return directory;
+    if (await readRuleDependencyLock(directory) !== null || basename(directory) === '.coderuler') return directory;
     const parent = dirname(directory);
     if (parent === directory) return initial;
     directory = parent;
@@ -304,9 +304,9 @@ async function validateExtracted(directory: string, location: string, locked: Ma
   const normalized = await new PackageJson().fromContent(structuredClone(raw)).normalize({ steps: PackageJson.normalizeSteps.filter(step => step !== '_attributes') });
   const manifest = normalized.content;
   for (const field of dependencyFields) dependencyMap(manifest, field, name);
-  if (manifest.name !== name || manifest.version !== locked.version) throw new Error(`${name}: extracted package name or version does not match rulekeeper.lock`);
+  if (manifest.name !== name || manifest.version !== locked.version) throw new Error(`${name}: extracted package name or version does not match coderuler.lock`);
   for (const field of [...dependencyFields, 'peerDependenciesMeta', ...compatibilityFields]) {
-    if (!isDeepStrictEqual(comparable(manifest, field), comparable(locked, field))) throw new Error(`${name}: extracted ${field} does not match rulekeeper.lock`);
+    if (!isDeepStrictEqual(comparable(manifest, field), comparable(locked, field))) throw new Error(`${name}: extracted ${field} does not match coderuler.lock`);
   }
 }
 
@@ -368,7 +368,7 @@ async function installedLocally(directory: string, snapshot: Snapshot): Promise<
 }
 
 async function install(directory: string, cacheRoot: string, previous: Snapshot, request?: { readonly add?: readonly string[]; readonly rm?: readonly string[] }): Promise<Installation> {
-  const stage = await realpath(await mkdtemp(join(directory, '.rulekeeper-deps-stage-')));
+  const stage = await realpath(await mkdtemp(join(directory, '.coderuler-deps-stage-')));
   try {
     let snapshot = previous;
     let expected: string[] = [];
@@ -395,7 +395,7 @@ async function install(directory: string, cacheRoot: string, previous: Snapshot,
       for (const node of tree.inventory.values()) {
         for (const edge of node.edgesOut.values()) {
           if (!edge.valid && !(edge.peer && edge.optional && !edge.to)) {
-            throw new Error(`${node.location || 'rulekeeper.lock root'}: package resolution failed for dependency ${edge.name}`);
+            throw new Error(`${node.location || 'coderuler.lock root'}: package resolution failed for dependency ${edge.name}`);
           }
         }
       }
@@ -414,7 +414,7 @@ async function install(directory: string, cacheRoot: string, previous: Snapshot,
       const actual = await arborist.reify({ save: false });
       for (const location of expected) {
         if (!actual.inventory.get(location) || !await pathExists(join(stage, location))) {
-          throw new Error(`${locationName(location)}: locked package acquisition failed; run rulekeeper deps sync after correcting the package or cache`);
+          throw new Error(`${locationName(location)}: locked package acquisition failed; run coderuler deps sync after correcting the package or cache`);
         }
       }
     }
@@ -440,14 +440,14 @@ function prepared(directory: string, snapshot: Snapshot | null): PreparedRuleDep
 }
 
 function parsedPackages(operation: 'add' | 'remove', packages: readonly string[]): string[] {
-  if (packages.length === 0) throw new Error(`rulekeeper deps ${operation} requires at least one package`);
+  if (packages.length === 0) throw new Error(`coderuler deps ${operation} requires at least one package`);
   const names = new Set<string>();
   return packages.map(value => {
     const parsed = npa(value);
     if (!parsed.name || !parsed.registry || !['version', 'range', 'tag'].includes(parsed.type)) throw new Error(`${JSON.stringify(value)}: only public npm package names, versions, ranges and tags are supported`);
     const name = parsed.name;
     if (operation === 'remove' && value !== name) throw new Error(`${JSON.stringify(value)}: remove requires an unversioned direct package name`);
-    if (name === sdkName) throw new Error(`${sdkName}: the SDK comes from the selected Rulekeeper installation`);
+    if (name === sdkName) throw new Error(`${sdkName}: the SDK comes from the selected CodeRuler installation`);
     if (names.has(name)) throw new Error(`${name}: duplicate package in dependency command`);
     names.add(name);
     return value;
@@ -463,18 +463,18 @@ export function createRuleDependencyManager(options: {
   readonly cacheRoot?: string;
   readonly onWarning?: (message: string) => void;
 } = {}): RuleDependencyManager {
-  const cacheRoot = resolve(options.cacheRoot ?? join(homedir(), '.cache', 'rulekeeper', 'dependencies'));
+  const cacheRoot = resolve(options.cacheRoot ?? join(homedir(), '.cache', 'coderuler', 'dependencies'));
   const snapshotAt = async (directory: string): Promise<Snapshot | null> => {
     const text = await readRuleDependencyLock(directory);
     try { return text === null ? null : validateLock(text, directory); }
     catch (error) {
       const detail = error instanceof Error ? error.message : 'invalid lock contents';
-      throw new Error(`${join(directory, lockName)}: ${detail}; use rulekeeper deps add to regenerate the lock`, { cause: error });
+      throw new Error(`${join(directory, lockName)}: ${detail}; use coderuler deps add to regenerate the lock`, { cause: error });
     }
   };
   const publish = async (directory: string, previousLock: string | null, installation: Installation): Promise<PreparedRuleDependencies> => {
     try {
-      if (await readRuleDependencyLock(directory) !== previousLock) throw new Error(`${join(directory, lockName)}: dependency lock changed during installation; rerun rulekeeper deps sync`);
+      if (await readRuleDependencyLock(directory) !== previousLock) throw new Error(`${join(directory, lockName)}: dependency lock changed during installation; rerun coderuler deps sync`);
       await ensureDependencyIgnore(directory);
     } catch (error) {
       await rm(installation.stage, { recursive: true, force: true });
@@ -489,10 +489,10 @@ export function createRuleDependencyManager(options: {
   };
   const prepare = async (input: string, explicit: boolean): Promise<PreparedRuleDependencies> => {
     const directory = await realpath(input);
-    if (!explicit && !await pathExists(join(directory, '.rulekeeper-deps-write'))) {
+    if (!explicit && !await pathExists(join(directory, '.coderuler-deps-write'))) {
       const snapshot = await snapshotAt(directory);
       if ((!snapshot || snapshot.key === 'empty' || await installedLocally(directory, snapshot))
-        && !await pathExists(join(directory, '.rulekeeper-deps-write'))
+        && !await pathExists(join(directory, '.coderuler-deps-write'))
         && await readRuleDependencyLock(directory) === (snapshot?.text ?? null)) return prepared(directory, snapshot);
     }
     return withRuleDependencyDirectoryLock(directory, async () => {

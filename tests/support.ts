@@ -97,13 +97,13 @@ export function isolatedEnv(home: string): NodeJS.ProcessEnv {
 }
 
 function linkSdk(base: string): void {
-  const link = join(base, 'node_modules', '@alex-dbs/rulekeeper');
+  const link = join(base, 'node_modules', '@alex-dbs/coderuler');
   mkdirSync(dirname(link), { recursive: true });
   if (!existsSync(link)) symlinkSync(ROOT, link, 'dir');
 }
 
 function linkHomeSdk(sandbox: Sandbox): void {
-  if (!existsSync(join(sandbox.home, '.rulekeeper'))) return;
+  if (!existsSync(join(sandbox.home, '.coderuler'))) return;
   linkSdk(sandbox.home);
 }
 
@@ -464,12 +464,12 @@ export function scopeSubjects(report: CheckReportShape, label: string): readonly
 export function expectFailure(result: CliResult, label: string): void {
   assert.equal(result.status, 2, `${label}: expected exit 2 (stdout: ${result.stdout} stderr: ${result.stderr})`);
   assert.equal(result.stdout, '', `${label}: expected no partial report on stdout`);
-  assert.ok(result.stderr.trimStart().startsWith('rulekeeper:'), `${label}: stderr must be prefixed (${result.stderr})`);
+  assert.ok(result.stderr.trimStart().startsWith('coderuler:'), `${label}: stderr must be prefixed (${result.stderr})`);
 }
 
 export function expectStreamingFailure(result: CliResult, label: string): void {
   assert.equal(result.status, 2, `${label}: expected exit 2 (stdout: ${result.stdout} stderr: ${result.stderr})`);
-  assert.ok(result.stderr.trimStart().startsWith('rulekeeper:'), `${label}: stderr must be prefixed (${result.stderr})`);
+  assert.ok(result.stderr.trimStart().startsWith('coderuler:'), `${label}: stderr must be prefixed (${result.stderr})`);
 }
 
 export interface DecisionRequestRecord {

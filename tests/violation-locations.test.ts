@@ -21,7 +21,7 @@ import { executeRules } from '../dist/app/execute.js';
 import { validateCheckResult } from '../dist/app/validate.js';
 import { createSandbox, writeFile } from './support.ts';
 
-const sandbox = createSandbox('rulekeeper-violation-locations-');
+const sandbox = createSandbox('coderuler-violation-locations-');
 after(() => sandbox.cleanup());
 
 class LocationRule extends Rule {
@@ -65,7 +65,7 @@ async function run(
 ) {
   const events: RunEvent[] = [];
   const reports = await executeRules([{
-    name: 'location-policy', ruleFile: '.rulekeeper/location-policy.rule.ts', rule: rule as Rule<unknown>,
+    name: 'location-policy', ruleFile: '.coderuler/location-policy.rule.ts', rule: rule as Rule<unknown>,
   }], {
     project,
     isTarget: () => true,

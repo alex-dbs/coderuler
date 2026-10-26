@@ -8,7 +8,7 @@ import { createProject } from '../dist/adapter/filesystem/project.js';
 import { executeRules } from '../dist/app/execute.js';
 import { createSandbox, writeFile } from './support.ts';
 
-const sandbox = createSandbox('rulekeeper-execute-diff-');
+const sandbox = createSandbox('coderuler-execute-diff-');
 after(() => sandbox.cleanup());
 
 class RecordingRule extends Rule {
@@ -42,7 +42,7 @@ async function run(
   isTarget: RunContext['isTarget'] = () => true,
 ) {
   const events: RunEvent[] = [];
-  const reports = await executeRules([{ name: 'diff', ruleFile: '.rulekeeper/diff.rule.ts', rule: rule as unknown as Rule<unknown> }], {
+  const reports = await executeRules([{ name: 'diff', ruleFile: '.coderuler/diff.rule.ts', rule: rule as unknown as Rule<unknown> }], {
     project,
     isTarget,
     concurrency: 2,

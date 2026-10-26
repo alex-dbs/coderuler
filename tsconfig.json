@@ -19,8 +19,8 @@
     "src/**/*.mts",
     "tests/**/*.ts",
     "tests/**/*.mts",
-    ".rulekeeper/**/*.ts",
-    ".rulekeeper/**/*.mts"
+    ".coderuler/**/*.ts",
+    ".coderuler/**/*.mts"
   ],
   "exclude": ["old", "dist", "coverage", "node_modules"]
 }

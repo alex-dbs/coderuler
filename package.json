@@ -1,10 +1,10 @@
 {
-  "name": "@alex-dbs/rulekeeper",
+  "name": "@alex-dbs/coderuler",
   "version": "1.2.0",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/alex-dbs/rulekeeper.git"
+    "url": "git+https://github.com/alex-dbs/coderuler.git"
   },
   "publishConfig": {
     "access": "public"
@@ -14,7 +14,7 @@
     "node": "^24.15.0 || >=26.0.0"
   },
   "bin": {
-    "rulekeeper": "dist/cli.js"
+    "coderuler": "dist/cli.js"
   },
   "types": "./dist/index.d.ts",
   "exports": {
@@ -25,7 +25,7 @@
   },
   "files": [
     "dist",
-    "skills/rulekeeper-new-rule"
+    "skills/coderuler-new-rule"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

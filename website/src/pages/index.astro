@@ -7,15 +7,15 @@ import RuleWorkflow from '../components/RuleWorkflow.astro';
 import { sitePath } from '../lib/paths';
 import '../styles/home.css';
 
-const install = 'npm install -g @alex-dbs/rulekeeper';
+const install = 'npm install -g @alex-dbs/coderuler';
 ---
-<Base title="RuleKeeper — Your code. Your rules." description="Your AI agent can forget instructions and conventions. RuleKeeper never forgets the rules you save. Run repository checks before review." page="home">
+<Base title="CodeRuler — Your code. Your rules." description="Your AI agent can forget instructions and conventions. CodeRuler never forgets the rules you save. Run repository checks before review." page="home">
   <main id="main" class="home-page" tabindex="-1">
     <section class="home-hero page-shell" aria-labelledby="hero-title">
       <div class="home-hero-copy">
         <p class="eyebrow home-hero-eyebrow"><span class="home-tiny-square" aria-hidden="true"></span>Policy as code</p>
         <h1 id="hero-title">Your code.<br />Your <em>rules.</em></h1>
-        <p class="home-hero-description">Your AI agent can forget instructions and conventions. RuleKeeper never forgets the rules you save.</p>
+        <p class="home-hero-description">Your AI agent can forget instructions and conventions. CodeRuler never forgets the rules you save.</p>
         <div class="home-hero-actions">
           <a class="button" href={sitePath('/docs/quickstart/')}>Start building rules <span aria-hidden="true">↗</span></a>
           <a class="home-text-link" href="#how-it-works">See how it works <span aria-hidden="true">↓</span></a>

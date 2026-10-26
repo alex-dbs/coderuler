@@ -228,14 +228,14 @@ export function createGithubCommenter(
     if (inline.length > 0) {
       for (let index = 0; index < inline.length; index += 100) {
         const response = await request(`${path}/reviews`, 'POST', {
-          commit_id: head, event: 'COMMENT', body: 'Rulekeeper violations', comments: inline.slice(index, index + 100),
+          commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: inline.slice(index, index + 100),
         });
         await response.body?.cancel().catch(() => undefined);
       }
     }
     if (fallback.length > 0) {
       const response = await request(`/repos/${pull.repository}/issues/${pull.number}/comments`, 'POST', {
-        body: `## Rulekeeper violations\n\n${fallback.join('\n\n')}\n`,
+        body: `## CodeRuler violations\n\n${fallback.join('\n\n')}\n`,
       });
       await response.body?.cancel().catch(() => undefined);
     }

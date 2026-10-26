@@ -6,7 +6,7 @@ export class CliExit extends Error {
   readonly exitCode: number;
 
   constructor(exitCode: number) {
-    super(`rulekeeper exit ${exitCode}`);
+    super(`coderuler exit ${exitCode}`);
     this.exitCode = exitCode;
   }
 }

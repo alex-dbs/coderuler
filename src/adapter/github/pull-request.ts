@@ -132,7 +132,7 @@ export function createPullRequestCheckout(
       throw new Error('GitHub API returned an invalid pull request response: expected a base branch.');
     }
     const branch = baseBranch ?? defaultBranch as string;
-    const workspace = await mkdtemp(join(await realpath(tmpdir()), 'rulekeeper-pr-'));
+    const workspace = await mkdtemp(join(await realpath(tmpdir()), 'coderuler-pr-'));
     const root = join(workspace, 'head');
     const rulesRoot = join(workspace, 'base');
     const cleanup = (): Promise<void> => rm(workspace, { recursive: true, force: true });
@@ -143,13 +143,13 @@ export function createPullRequestCheckout(
       await runGit(root, ['check-ref-format', `refs/heads/${branch}`]);
       await runGit(root, [
         'fetch', '--no-tags', 'origin',
-        `+refs/heads/${branch}:refs/rulekeeper/base`,
-        `+refs/pull/${pullRequest.number}/head:refs/rulekeeper/head`,
+        `+refs/heads/${branch}:refs/coderuler/base`,
+        `+refs/pull/${pullRequest.number}/head:refs/coderuler/head`,
       ]);
-      await runGit(root, ['checkout', '--detach', 'refs/rulekeeper/head']);
+      await runGit(root, ['checkout', '--detach', 'refs/coderuler/head']);
       const head = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
-      await runGit(root, ['worktree', 'add', '--detach', rulesRoot, 'refs/rulekeeper/base']);
-      const mergeBase = (await runGit(root, ['merge-base', 'refs/rulekeeper/base', 'refs/rulekeeper/head'])).stdout.trim();
+      await runGit(root, ['worktree', 'add', '--detach', rulesRoot, 'refs/coderuler/base']);
+      const mergeBase = (await runGit(root, ['merge-base', 'refs/coderuler/base', 'refs/coderuler/head'])).stdout.trim();
       const files = await changedFiles(root, mergeBase, isolatedEnv);
       await assertNoWorktreeOverride(rulesRoot);
       return { root, rulesRoot, changedFiles: files, pullRequest: { ...pullRequest, head }, cleanup };

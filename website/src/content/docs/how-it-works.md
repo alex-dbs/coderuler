@@ -9,7 +9,7 @@ order: 3
 
 A scope is a file or a selected part of a file. A subject is the scope or group of scopes passed to a check.
 
-RuleKeeper loads and structurally validates all selected rules before it runs this pipeline:
+CodeRuler loads and structurally validates all selected rules before it runs this pipeline:
 
 ```text
 enabled → when → files and excludes → scope or select → filter → group → check → report
@@ -23,7 +23,7 @@ With reduced motion enabled, select a step to inspect its source and result with
 
 ## Find the rules
 
-Without an explicit selector, RuleKeeper searches `.rulekeeper/` in the project and `~/.rulekeeper/` in your home directory. It searches subfolders for `.rule.ts`, `.rule.mts`, `.rule.js`, and `.rule.mjs` files.
+Without an explicit selector, CodeRuler searches `.coderuler/` in the project and `~/.coderuler/` in your home directory. It searches subfolders for `.rule.ts`, `.rule.mts`, `.rule.js`, and `.rule.mjs` files.
 
 The filename without its rule suffix is the exact rule name. A selected name must match exactly one discovered rule file, including across both discovery roots. An explicit module path or directory replaces discovery.
 
@@ -39,7 +39,7 @@ A skip means that the rule did not apply. It is not a passing policy decision.
 
 ## Select files and scopes
 
-`files` selects root-relative globs. `exclude` removes matches, and exclusions win. Without a `scope`, RuleKeeper selects one whole-file scope per eligible file.
+`files` selects root-relative globs. `exclude` removes matches, and exclusions win. Without a `scope`, CodeRuler selects one whole-file scope per eligible file.
 
 A structured selector can instead select JSON values, YAML documents, CSV rows, Protobuf declarations and options, or syntax nodes. Scopes preserve identity and source locations so findings can refer to the selected content.
 
@@ -67,8 +67,8 @@ Diff checks evaluate all applicable scopes in changed files, not only scopes on 
 
 A check returns `pass()` or `violation(message)`. Built-in `regex()` checks allowed patterns. Optional `ai()` checks use an external decision service.
 
-RuleKeeper can run selection and evaluation tasks concurrently. Keep check results independent of execution order and mutable shared state.
+CodeRuler can run selection and evaluation tasks concurrently. Keep check results independent of execution order and mutable shared state.
 
 Normal `check` output focuses on violations. Add `--output-all` to see passing and skipped results. Use `inspect` for selected content, filter reasons, groups, traces, and decisions. Runtime errors remain errors rather than becoming passes.
 
-Read [configuration](/docs/configuration/) for defaults or the [CLI reference](/docs/cli/) for formats and exit codes. The implementation contracts are in [rule.ts](https://github.com/alex-dbs/rulekeeper/blob/main/src/app/rule.ts).
+Read [configuration](/docs/configuration/) for defaults or the [CLI reference](/docs/cli/) for formats and exit codes. The implementation contracts are in [rule.ts](https://github.com/alex-dbs/coderuler/blob/main/src/app/rule.ts).

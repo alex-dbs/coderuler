@@ -9,15 +9,15 @@ order: 4
 
 Give each rule one policy. Define the applicable input, a violating example, and a passing counterpart before you write the check.
 
-Save the module under `.rulekeeper/` with a supported rule suffix. Default-export a constructible class that extends `Rule`. Use ordinary modules for shared helpers, without a `.rule` suffix.
+Save the module under `.coderuler/` with a supported rule suffix. Default-export a constructible class that extends `Rule`. Use ordinary modules for shared helpers, without a `.rule` suffix.
 
 ## A rule with structured data
 
-This example allows an absent `spec.replicas`. For integer counts, it requires at least two replicas. Save it as `.rulekeeper/k8s-replica-floor.rule.ts`:
+This example allows an absent `spec.replicas`. For integer counts, it requires at least two replicas. Save it as `.coderuler/k8s-replica-floor.rule.ts`:
 
 ```ts
-import { Rule, pass, scopes, test, violation } from '@alex-dbs/rulekeeper';
-import type { Evaluator, ScopeSubject } from '@alex-dbs/rulekeeper';
+import { Rule, pass, scopes, test, violation } from '@alex-dbs/coderuler';
+import type { Evaluator, ScopeSubject } from '@alex-dbs/coderuler';
 
 type Deployment = { replicas?: number };
 
@@ -72,7 +72,7 @@ The filter admits deployment spec objects with an absent or integer replica coun
 This rule checks each whole file in `config/*.txt`. A match passes. A nonmatch violates the policy.
 
 ```ts
-import { Rule, regex } from '@alex-dbs/rulekeeper';
+import { Rule, regex } from '@alex-dbs/coderuler';
 
 export default class InternalUrl extends Rule {
   files = ['config/*.txt'];
@@ -92,7 +92,7 @@ AI checks are optional. Configure the provider in [AI checks](/docs/ai-checks/) 
 This rule sends each whole guide file to the AI check:
 
 ```ts
-import { Rule, ai } from '@alex-dbs/rulekeeper';
+import { Rule, ai } from '@alex-dbs/coderuler';
 
 export default class ActionableInstructions extends Rule {
   files = ['guides/**/*.md'];
@@ -153,4 +153,4 @@ violation('This selected identifier is duplicated', [{
 
 Each location needs a real evaluated filepath and a scope ID, line span, or both. Line spans use positive, inclusive file coordinates. `locations: []` disables automatic scope attribution.
 
-Use [inline tests](/docs/testing/) to exercise the policy. Then use `inspect` on real files before normal checks. See [configuration](/docs/configuration/) for members and [the full source reference](https://github.com/alex-dbs/rulekeeper/blob/main/skills/rulekeeper-new-rule/reference.md) for contracts.
+Use [inline tests](/docs/testing/) to exercise the policy. Then use `inspect` on real files before normal checks. See [configuration](/docs/configuration/) for members and [the full source reference](https://github.com/alex-dbs/coderuler/blob/main/skills/coderuler-new-rule/reference.md) for contracts.

@@ -39,7 +39,7 @@ export function commit(target: Sandbox, message: string): string {
 }
 
 export function policy(check: string, imports = '', fields = ''): string {
-  return `import { Rule, pass, violation } from '@alex-dbs/rulekeeper';
+  return `import { Rule, pass, violation } from '@alex-dbs/coderuler';
 ${imports}
 export default class FixturePolicy extends Rule {
   files = ['src/*.txt'];
@@ -71,27 +71,27 @@ export function createPrFixture(sandbox: SandboxRoot, label: string): PrFixture 
   };
   const remote = join(target.root, 'remote.git');
   const transportConfig = join(target.home, 'temporary-checkout.gitconfig');
-  writeFile(globalConfig, `[includeIf "gitdir:**/rulekeeper-pr-*/head/.git"]\n\tpath = ${JSON.stringify(transportConfig)}\n`);
+  writeFile(globalConfig, `[includeIf "gitdir:**/coderuler-pr-*/head/.git"]\n\tpath = ${JSON.stringify(transportConfig)}\n`);
   writeFile(transportConfig, `[url ${JSON.stringify(remote)}]\n\tinsteadOf = https://github.com/${PR_REPOSITORY}.git\n\tinsteadOf = git@github.com:${PR_REPOSITORY}.git\n`);
 
   writeFile(join(target.cwd, '.gitignore'), 'node_modules/\n');
   writeFile(join(target.cwd, 'src/changed.txt'), 'GOOD before the PR\n');
   writeFile(join(target.cwd, 'src/unchanged.txt'), 'BAD unchanged on the PR\n');
   writeFile(join(target.cwd, 'policy/helper.ts'), `export const message = 'Common ancestor policy';\n`);
-  writeFile(join(target.cwd, '.rulekeeper/base.rule.ts'), policy(`() => pass('Weak common ancestor policy')`));
+  writeFile(join(target.cwd, '.coderuler/base.rule.ts'), policy(`() => pass('Weak common ancestor policy')`));
   git(target, 'init', '--initial-branch=main');
-  git(target, 'config', 'user.name', 'Rulekeeper tests');
+  git(target, 'config', 'user.name', 'CodeRuler tests');
   git(target, 'config', 'user.email', 'tests@example.invalid');
   git(target, 'config', 'commit.gpgsign', 'false');
   const base = commit(target, 'common ancestor');
 
   git(target, 'checkout', '-b', 'release');
-  writeFile(join(target.cwd, '.rulekeeper/base.rule.ts'), policy(`subject => subject.source.includes('BAD') ? violation('Committed release policy rejects BAD') : pass()`));
+  writeFile(join(target.cwd, '.coderuler/base.rule.ts'), policy(`subject => subject.source.includes('BAD') ? violation('Committed release policy rejects BAD') : pass()`));
   const release = commit(target, 'release policy');
 
   git(target, 'checkout', 'main');
   writeFile(join(target.cwd, 'policy/helper.ts'), `export const message = ${JSON.stringify(BASE_MESSAGE)};\n`);
-  writeFile(join(target.cwd, '.rulekeeper/base.rule.ts'), policy(
+  writeFile(join(target.cwd, '.coderuler/base.rule.ts'), policy(
     `subject => subject.source.includes('BAD') ? violation(message) : pass()`,
     `import { message } from '../policy/helper.ts';`,
   ));
@@ -104,16 +104,16 @@ export function createPrFixture(sandbox: SandboxRoot, label: string): PrFixture 
   git(target, 'checkout', '-b', 'feature/pr-fixture', base);
   writeFile(join(target.cwd, 'src/changed.txt'), 'BAD changed by the PR\n');
   writeFile(join(target.cwd, 'policy/helper.ts'), `export const message = 'UNTRUSTED PR-head helper';\n`);
-  writeFile(join(target.cwd, '.rulekeeper/base.rule.ts'), policy(`() => pass('Weakened PR-head policy')`));
-  writeFile(join(target.cwd, '.rulekeeper/head-only.rule.ts'), `throw new Error('PR-head policy must never execute');\n`);
+  writeFile(join(target.cwd, '.coderuler/base.rule.ts'), policy(`() => pass('Weakened PR-head policy')`));
+  writeFile(join(target.cwd, '.coderuler/head-only.rule.ts'), `throw new Error('PR-head policy must never execute');\n`);
   const head = commit(target, 'PR changes and untrusted policy');
 
   git(target, 'init', '--bare', remote);
   git(target, 'push', remote, 'main:refs/heads/main', 'release:refs/heads/release', `${head}:refs/pull/${PR_NUMBER}/head`);
   git(target, 'remote', 'add', 'origin', `git@github.com:${PR_REPOSITORY}.git`);
-  writeFile(join(target.cwd, '.rulekeeper/base.rule.ts'), `throw new Error('Dirty caller policy must never execute');\n`);
-  writeFile(join(target.cwd, '.rulekeeper/caller-only.rule.ts'), `throw new Error('Caller-only policy must never execute');\n`);
-  writeFile(join(target.home, '.rulekeeper/global.rule.ts'), policy(`subject => subject.source.includes('BAD') ? violation(${JSON.stringify(GLOBAL_MESSAGE)}) : pass()`));
+  writeFile(join(target.cwd, '.coderuler/base.rule.ts'), `throw new Error('Dirty caller policy must never execute');\n`);
+  writeFile(join(target.cwd, '.coderuler/caller-only.rule.ts'), `throw new Error('Caller-only policy must never execute');\n`);
+  writeFile(join(target.home, '.coderuler/global.rule.ts'), policy(`subject => subject.source.includes('BAD') ? violation(${JSON.stringify(GLOBAL_MESSAGE)}) : pass()`));
   return { ...target, remote, temporary, base, main, release, head };
 }
 

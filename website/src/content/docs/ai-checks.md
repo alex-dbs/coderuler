@@ -13,7 +13,7 @@ The built-in AI backend is Jev from [Typesafe](https://typesafe.ai/). AI is opti
 
 ## Configure the service
 
-Set environment variables in the process that runs RuleKeeper:
+Set environment variables in the process that runs CodeRuler:
 
 ```sh
 export TYPESAFE_API_KEY='your-api-key'
@@ -34,10 +34,10 @@ The key is required only when an AI call runs. Do not commit credentials to rule
 
 ## Write a focused policy
 
-Save this module as `.rulekeeper/actionable-instructions.rule.ts`:
+Save this module as `.coderuler/actionable-instructions.rule.ts`:
 
 ```ts
-import { Rule, ai, test } from '@alex-dbs/rulekeeper';
+import { Rule, ai, test } from '@alex-dbs/coderuler';
 
 export default class ActionableInstructions extends Rule {
   files = ['guides/**/*.md'];
@@ -65,7 +65,7 @@ export const aiTests = [
 Run the live test only when you intend to contact the service:
 
 ```sh
-rulekeeper test .rulekeeper/actionable-instructions.rule.ts --ai --timeout 45s
+coderuler test .coderuler/actionable-instructions.rule.ts --ai --timeout 45s
 ```
 
 Both `check` and `inspect` run actual AI checks. They do not require a separate `--ai` flag. See [testing](/docs/testing/) for the offline/live distinction.
@@ -77,7 +77,7 @@ By default, AI receives the selected scopes, including their path and scope meta
 Use the `input` option to reduce the context further. This example sends only the selected source text:
 
 ```ts
-import { Rule, ai } from '@alex-dbs/rulekeeper';
+import { Rule, ai } from '@alex-dbs/coderuler';
 
 export default class ActionableInstructions extends Rule {
   files = ['guides/**/*.md'];
@@ -90,7 +90,7 @@ export default class ActionableInstructions extends Rule {
 }
 ```
 
-The [Go append rule](https://github.com/alex-dbs/rulekeeper/blob/main/.rulekeeper/go-append-slice.rule.ts) selects functions with an `append` call inside a loop. Its AI check decides whether the final length is known. Conditional appends can pass because their final count depends on the data.
+The [Go append rule](https://github.com/alex-dbs/coderuler/blob/main/.coderuler/go-append-slice.rule.ts) selects functions with an `append` call inside a loop. Its AI check decides whether the final length is known. Conditional appends can pass because their final count depends on the data.
 
 ## Understand decisions and precedence
 
@@ -106,4 +106,4 @@ Costs depend on the service, model, input size, and billing terms. Configured to
 
 Inspection reports calls, unreported calls, token counts, and estimated input/output costs. Missing provider counts remain unreported. Totals cover reported usage only. Override inspection prices with `--input-cost-per-million` and `--output-cost-per-million`.
 
-See the [author reference](https://github.com/alex-dbs/rulekeeper/blob/main/skills/rulekeeper-new-rule/reference.md#ai-options-examples-and-settings) and [settings source](https://github.com/alex-dbs/rulekeeper/blob/main/src/infra/settings.ts) for the exact contracts.
+See the [author reference](https://github.com/alex-dbs/coderuler/blob/main/skills/coderuler-new-rule/reference.md#ai-options-examples-and-settings) and [settings source](https://github.com/alex-dbs/coderuler/blob/main/src/infra/settings.ts) for the exact contracts.

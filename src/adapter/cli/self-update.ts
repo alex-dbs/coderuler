@@ -5,10 +5,10 @@ import { constants as osConstants } from 'node:os';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const PACKAGE_NAME = '@alex-dbs/rulekeeper';
+const PACKAGE_NAME = '@alex-dbs/coderuler';
 const PACKAGE_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
-const UPDATE_INSTRUCTIONS = 'Self-update requires the active global npm installation. For project-local installs, run npm install --save-dev @alex-dbs/rulekeeper@latest. Otherwise use your package manager or reinstall with npm install --global @alex-dbs/rulekeeper@latest.';
+const UPDATE_INSTRUCTIONS = 'Self-update requires the active global npm installation. For project-local installs, run npm install --save-dev @alex-dbs/coderuler@latest. Otherwise use your package manager or reinstall with npm install --global @alex-dbs/coderuler@latest.';
 
 async function findNpm(env: NodeJS.ProcessEnv): Promise<string> {
   const path = process.platform === 'win32'
@@ -24,7 +24,7 @@ async function findNpm(env: NodeJS.ProcessEnv): Promise<string> {
         ? join(dirname(executable), 'node_modules', 'npm', 'bin', 'npm-cli.js')
         : executable;
       if (basename(cli) !== 'npm-cli.js') {
-        throw new Error('The active npm executable is not a supported npm installation; update Rulekeeper using your package manager.');
+        throw new Error('The active npm executable is not a supported npm installation; update CodeRuler using your package manager.');
       }
       await access(cli, fsConstants.R_OK);
       return cli;
@@ -32,7 +32,7 @@ async function findNpm(env: NodeJS.ProcessEnv): Promise<string> {
       if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
     }
   }
-  throw new Error('npm was not found on PATH; install npm or update Rulekeeper using your package manager.');
+  throw new Error('npm was not found on PATH; install npm or update CodeRuler using your package manager.');
 }
 
 function runNpm(
@@ -85,7 +85,7 @@ export function createToolUpdater(cwd: string, env: NodeJS.ProcessEnv): () => Pr
       ? join(globalPrefix, 'node_modules')
       : join(globalPrefix, 'lib', 'node_modules');
     if (resolve(globalRoot) !== resolve(expectedRoot)) {
-      throw new Error('The active npm global prefix does not match this installation; update Rulekeeper using your package manager.');
+      throw new Error('The active npm global prefix does not match this installation; update CodeRuler using your package manager.');
     }
     const result = await runNpm(executable, ['install', '--global', '--prefix', globalPrefix, `${PACKAGE_NAME}@latest`], cwd, env, false);
     return result.status;

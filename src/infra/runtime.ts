@@ -38,7 +38,7 @@ export function createServices(
       const { createRuleDependencyManager } = await import('../adapter/filesystem/dependencies.js');
       return createRuleDependencyManager({
         ...(env.RK_DEPENDENCY_CACHE === undefined ? {} : { cacheRoot: resolve(cwd, env.RK_DEPENDENCY_CACHE) }),
-        onWarning: message => context.writeError(`rulekeeper: ${context.redact(escapeDiagnostic(message))}\n`),
+        onWarning: message => context.writeError(`coderuler: ${context.redact(escapeDiagnostic(message))}\n`),
       });
     })();
   const getRuleServices = (context: CliContext): Promise<RuleServices> =>
@@ -144,8 +144,8 @@ export function createServices(
             throw new Error('--global and --directory are mutually exclusive');
           }
           const directory = options.global === true
-            ? resolve(homedir(), '.rulekeeper')
-            : resolve(cwd, options.directory ?? '.rulekeeper');
+            ? resolve(homedir(), '.coderuler')
+            : resolve(cwd, options.directory ?? '.coderuler');
           if (operation !== 'add' && !(await stat(directory)).isDirectory()) {
             throw new Error(`Rule dependency directory is not a directory: ${directory}`);
           }
@@ -163,7 +163,7 @@ export function createServices(
           } else {
             for (const name of packages) context.write(context.redact(escapeDiagnostic(`Removed ${name}`)) + '\n');
           }
-          context.write(context.redact(escapeDiagnostic(join(prepared.directory, 'rulekeeper.lock'))) + '\n');
+          context.write(context.redact(escapeDiagnostic(join(prepared.directory, 'coderuler.lock'))) + '\n');
         };
         return { manageDependencies };
       },
@@ -180,7 +180,7 @@ export async function runCli(argv: readonly string[]): Promise<number> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const redact = createRedactor([process.env.TYPESAFE_API_KEY, process.env.GITHUB_TOKEN]);
-    process.stderr.write(`rulekeeper: ${redact(escapeDiagnostic(message))}\n`);
+    process.stderr.write(`coderuler: ${redact(escapeDiagnostic(message))}\n`);
     return EXIT_FAILURE;
   }
   return runProgram(argv, createServices(cwd, process.env));

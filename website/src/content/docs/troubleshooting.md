@@ -10,22 +10,22 @@ order: 12
 Start with the explicit rule path. Validate its structure, run its fixtures, then inspect representative project files:
 
 ```sh
-rulekeeper validate .rulekeeper/internal-url.rule.ts
-rulekeeper test .rulekeeper/internal-url.rule.ts
-rulekeeper inspect .rulekeeper/internal-url.rule.ts .
+coderuler validate .coderuler/internal-url.rule.ts
+coderuler test .coderuler/internal-url.rule.ts
+coderuler inspect .coderuler/internal-url.rule.ts .
 ```
 
 Replace the example path with your rule. Inspection executes the actual check, including live AI calls.
 
 ## The CLI does not start
 
-Use Node.js `^24.15.0 || >=26.0.0`. Node.js 25 is outside that supported range. Run `node --version` in the same terminal or CI job as RuleKeeper.
+Use Node.js `^24.15.0 || >=26.0.0`. Node.js 25 is outside that supported range. Run `node --version` in the same terminal or CI job as CodeRuler.
 
-If `rulekeeper` is not on your PATH, use `npx rulekeeper` with a project-local installation. For a built source checkout, use `node /absolute/path/to/rulekeeper/dist/cli.js` from the project you want to analyze. Follow the [source installation steps](/docs/quickstart/#install) when the built file does not exist.
+If `coderuler` is not on your PATH, use `npx coderuler` with a project-local installation. For a built source checkout, use `node /absolute/path/to/coderuler/dist/cli.js` from the project you want to analyze. Follow the [source installation steps](/docs/quickstart/#install) when the built file does not exist.
 
 ## No rule files are found
 
-Discovery expects `.rule.ts`, `.rule.mts`, `.rule.js`, or `.rule.mjs` under the project or home `.rulekeeper/` directory. A plain `.ts` helper is not discovered as a rule.
+Discovery expects `.rule.ts`, `.rule.mts`, `.rule.js`, or `.rule.mjs` under the project or home `.coderuler/` directory. A plain `.ts` helper is not discovered as a rule.
 
 Run from the intended project root. Use an explicit module path to separate a discovery problem from a loading problem. Discovery skips symlinks, `old`, `node_modules`, and temporary installation directories.
 
@@ -42,15 +42,14 @@ Validation still applies to disabled rules. It does not type-check your TypeScri
 Normal output hides passing and skipped results. Add `--output-all`, then inspect the rule:
 
 ```sh
-rulekeeper check . --rules .rulekeeper/internal-url.rule.ts --output-all
+coderuler check . --rules .coderuler/internal-url.rule.ts --output-all
 ```
 
 Follow the stages in order. Review the root, `files`, `exclude`, selector path or AST query, filter reasons, and group members. A rule with no applicable subjects is not evidence that the policy passes.
 
-Do not target reserved directories. Traversal excludes `.git`, `node_modules`, `.rulekeeper`, `old`, and root-level `dist` or `coverage`, along with symlinks.
+Do not target reserved directories. Traversal excludes `.git`, `node_modules`, `.coderuler`, `old`, and root-level `dist` or `coverage`, along with symlinks.
 
 ## A regex makes the opposite decision
-
 `regex()` matches mean pass. Express the allowed pattern, not the forbidden pattern. For example, `/^\/internal\//` passes an internal URL and violates a public one.
 
 Default input is scalar parsed data converted to a string, or source text for other scopes. Supply `input` if the selected value is not the text you intend to match. For groups, every member must match.
@@ -83,7 +82,7 @@ A probability equal to the threshold violates. Only a strictly greater probabili
 
 ## An imported package cannot resolve
 
-Declare supported public npm dependencies with `rulekeeper deps add <package>`. After checkout or lock changes, run `rulekeeper deps sync`. Do not assume application-installed packages are declared rule dependencies.
+Declare supported public npm dependencies with `coderuler deps add <package>`. After checkout or lock changes, run `coderuler deps sync`. Do not assume application-installed packages are declared rule dependencies.
 
 Use `--global` or `--directory` if the package belongs to another rule directory. The manager rejects unsupported package sources, install scripts, native add-ons, and graph or integrity mismatches. Fix the package declaration or restore the committed lock rather than editing the installed tree.
 
@@ -95,21 +94,21 @@ Git is required for `--diff` and `--pr`. Make sure that the selected base ref ex
 
 Without explicit `--pr`, comment target discovery needs GitHub event context or one open PR for the current branch and origin. Fork workflows can lack write permission or secrets. Keep offline checks independent of comments.
 
-If the PR head changes, RuleKeeper refuses stale comments. Re-run on the current revision. If no current diff anchor fits a finding, expect an ordinary summary comment instead of an inline review comment.
+If the PR head changes, CodeRuler refuses stale comments. Re-run on the current revision. If no current diff anchor fits a finding, expect an ordinary summary comment instead of an inline review comment.
 
 ## Report a problem or contribute
 
-Use [GitHub issues](https://github.com/alex-dbs/rulekeeper/issues) for reproducible failures. Include the command, Node.js version, a minimal rule and fixture, and the observed error. Remove secrets and private source first. Raw check JSON can contain unredacted report content.
+Use [GitHub issues](https://github.com/alex-dbs/coderuler/issues) for reproducible failures. Include the command, Node.js version, a minimal rule and fixture, and the observed error. Remove secrets and private source first. Raw check JSON can contain unredacted report content.
 
 The repository's contribution workflow is:
 
 ```sh
 npm ci
-NODE_COMPILE_CACHE="${TMPDIR:-/tmp}/rulekeeper-node-compile-cache" npm test
+NODE_COMPILE_CACHE="${TMPDIR:-/tmp}/coderuler-node-compile-cache" npm test
 node dist/cli.js deps sync
 npm run typecheck
 ```
 
-Run those commands from a source checkout when you contribute. Add or update tests for behavior changes. The [authoring skill](https://github.com/alex-dbs/rulekeeper/blob/main/skills/rulekeeper-new-rule/SKILL.md) describes policy development, and the [API reference](https://github.com/alex-dbs/rulekeeper/blob/main/skills/rulekeeper-new-rule/reference.md) gives detailed contracts.
+Run those commands from a source checkout when you contribute. Add or update tests for behavior changes. The [authoring skill](https://github.com/alex-dbs/coderuler/blob/main/skills/coderuler-new-rule/SKILL.md) describes policy development, and the [API reference](https://github.com/alex-dbs/coderuler/blob/main/skills/coderuler-new-rule/reference.md) gives detailed contracts.
 
-RuleKeeper uses the [Apache License, Version 2.0](https://github.com/alex-dbs/rulekeeper/blob/main/LICENSE). Read the [source repository](https://github.com/alex-dbs/rulekeeper) for implementation and contribution context.
+CodeRuler uses the [Apache License, Version 2.0](https://github.com/alex-dbs/coderuler/blob/main/LICENSE). Read the [source repository](https://github.com/alex-dbs/coderuler) for implementation and contribution context.

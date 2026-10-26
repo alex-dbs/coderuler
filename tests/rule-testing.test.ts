@@ -8,10 +8,10 @@ import { after, test } from 'node:test';
 
 import { createSandbox, runCli, startDecisionFixture, writeFile, type Sandbox } from './support.ts';
 
-const sandbox = createSandbox('rulekeeper-testing-');
+const sandbox = createSandbox('coderuler-testing-');
 after(() => sandbox.cleanup());
 
-const TEXT_RULE = `import { Rule, pass, test, violation } from '@alex-dbs/rulekeeper';
+const TEXT_RULE = `import { Rule, pass, test, violation } from '@alex-dbs/coderuler';
 export default class Text extends Rule {
   files = ['inputs/*.txt'];
   check = subject => subject.source.includes('BAD') ? violation('bad input') : pass();
@@ -19,12 +19,12 @@ export default class Text extends Rule {
 `;
 
 function writeRule(target: Sandbox, name: string, cases: string): string {
-  return writeFile(join(target.cwd, '.rulekeeper', `${name}.rule.ts`), `${TEXT_RULE}\nexport const tests = [${cases}];\n`);
+  return writeFile(join(target.cwd, '.coderuler', `${name}.rule.ts`), `${TEXT_RULE}\nexport const tests = [${cases}];\n`);
 }
 
 test('test runs fluent cases through selection, filtering and grouping with isolated state and files', async () => {
   const target = sandbox.isolated('pipeline');
-  writeFile(join(target.cwd, '.rulekeeper/budget.rule.ts'), `import { Rule, scopes, pass, test, violation } from '@alex-dbs/rulekeeper';
+  writeFile(join(target.cwd, '.coderuler/budget.rule.ts'), `import { Rule, scopes, pass, test, violation } from '@alex-dbs/coderuler';
 export default class Budget extends Rule {
   files = ['budgets/*.yml'];
   scope = scopes.yaml({ path: '$.budget' });
@@ -50,7 +50,7 @@ export const tests = [
 ];
 `);
   writeFile(join(target.cwd, 'budgets/working-tree.yml'), 'budget: 1000');
-  writeFile(join(target.cwd, '.rulekeeper/no-tests.rule.ts'), TEXT_RULE);
+  writeFile(join(target.cwd, '.coderuler/no-tests.rule.ts'), TEXT_RULE);
 
   const result = await runCli(['test', '--concurrency', '1'], target);
   assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -84,7 +84,7 @@ test('test reports mismatches, continues to later cases, and does not run during
 test('test discovers local and home cases and explicit paths replace discovery', async () => {
   const target = sandbox.isolated('selection');
   const local = writeRule(target, 'local', `test('local case').withFiles({ 'inputs/a.txt': 'GOOD' }).passes()`);
-  writeFile(join(target.home, '.rulekeeper/home.rule.ts'), `${TEXT_RULE}
+  writeFile(join(target.home, '.coderuler/home.rule.ts'), `${TEXT_RULE}
 export const tests = [test('home case').withFiles({ 'inputs/a.txt': 'GOOD' }).passes()];`);
   const discovered = await runCli(['test'], target);
   assert.equal(discovered.status, 0, discovered.stderr);
@@ -92,7 +92,7 @@ export const tests = [test('home case').withFiles({ 'inputs/a.txt': 'GOOD' }).pa
   assert.ok(discovered.stdout.includes('home case'), discovered.stdout);
 
   writeRule(target, 'other', `test('excluded failure').withFiles({ 'inputs/a.txt': 'BAD' }).passes()`);
-  for (const path of [local, '.rulekeeper/local.rule.ts', 'local']) {
+  for (const path of [local, '.coderuler/local.rule.ts', 'local']) {
     const explicit = await runCli(['test', path], target);
     assert.equal(explicit.status, 0, explicit.stderr || explicit.stdout);
     assert.ok(explicit.stdout.includes('local case'), explicit.stdout);
@@ -104,7 +104,7 @@ export const tests = [test('home case').withFiles({ 'inputs/a.txt': 'GOOD' }).pa
   assert.ok(home.stdout.includes('home case'), home.stdout);
   assert.equal(home.stdout.includes('local case'), false);
   assert.equal(home.stdout.includes('excluded failure'), false);
-  const directory = await runCli(['test', '.rulekeeper'], target);
+  const directory = await runCli(['test', '.coderuler'], target);
   assert.equal(directory.status, 1, directory.stderr || directory.stdout);
   assert.ok(directory.stdout.includes('excluded failure'), directory.stdout);
   assert.equal(directory.stdout.includes('home case'), false);
@@ -122,7 +122,7 @@ test('test rejects unfinished declarations without affecting ordinary rule valid
 test('test fails when selected rules contain no test cases', async () => {
   const target = sandbox.isolated('no-cases');
   writeRule(target, 'empty', '');
-  writeFile(join(target.cwd, '.rulekeeper/absent.rule.ts'), TEXT_RULE);
+  writeFile(join(target.cwd, '.coderuler/absent.rule.ts'), TEXT_RULE);
   const result = await runCli(['test'], target);
   assert.equal(result.status, 2, result.stdout || result.stderr);
   assert.equal(result.stdout, '');
@@ -133,7 +133,7 @@ test('test rejects escaping fixture paths before writing outside its project', a
   for (const absolute of [false, true]) {
     await t.test(absolute ? 'absolute path' : 'parent traversal', async () => {
       const target = sandbox.isolated('escape');
-      const filename = `rulekeeper-escape-${randomUUID()}.txt`;
+      const filename = `coderuler-escape-${randomUUID()}.txt`;
       const outside = join(tmpdir(), filename);
       t.after(() => rm(outside, { force: true }));
       const path = absolute ? outside : `../${filename}`;
@@ -149,8 +149,8 @@ test('test rejects escaping fixture paths before writing outside its project', a
 test('test removes temporary projects when rule execution fails and identifies the case', { timeout: 15_000 }, async context => {
   const target = sandbox.isolated('runtime-error');
   const marker = join(target.root, 'temporary-root.txt');
-  writeFile(join(target.cwd, '.rulekeeper/throwing.rule.ts'), `import { writeFileSync } from 'node:fs';
-import { Rule, pass, test } from '@alex-dbs/rulekeeper';
+  writeFile(join(target.cwd, '.coderuler/throwing.rule.ts'), `import { writeFileSync } from 'node:fs';
+import { Rule, pass, test } from '@alex-dbs/coderuler';
 export default class Throwing extends Rule {
   files = ['inputs/*.txt'];
   when({ project }) {
@@ -182,7 +182,7 @@ test('test never contacts an AI provider, even when credentials and an endpoint 
   const target = sandbox.isolated('offline');
   const fixture = await startDecisionFixture();
   t.after(() => fixture.close());
-  writeFile(join(target.cwd, '.rulekeeper/offline.rule.ts'), `import { Rule, ai, test } from '@alex-dbs/rulekeeper';
+  writeFile(join(target.cwd, '.coderuler/offline.rule.ts'), `import { Rule, ai, test } from '@alex-dbs/coderuler';
 export default class Offline extends Rule {
   files = ['inputs/*.txt'];
   check = ai({ rule: 'The input must be good.' });
@@ -198,7 +198,7 @@ test('test runs ordinary cases by default without executing opt-in AI cases', as
   const target = sandbox.isolated('ai-opt-in');
   const fixture = await startDecisionFixture();
   t.after(() => fixture.close());
-  writeFile(join(target.cwd, '.rulekeeper/mixed.rule.ts'), `import { Rule, pass, test } from '@alex-dbs/rulekeeper';
+  writeFile(join(target.cwd, '.coderuler/mixed.rule.ts'), `import { Rule, pass, test } from '@alex-dbs/coderuler';
 export default class Mixed extends Rule {
   files = ['inputs/*.txt'];
   check = (subject, context) => subject.source === 'LOCAL' ? pass() : context.ai({ rule: 'The input must be good.' });
@@ -217,7 +217,7 @@ test('test explains how to enable an explicitly selected AI-only rule', async t 
   const target = sandbox.isolated('ai-only');
   const fixture = await startDecisionFixture();
   t.after(() => fixture.close());
-  const path = writeFile(join(target.cwd, '.rulekeeper/live.rule.ts'), `import { Rule, ai, test } from '@alex-dbs/rulekeeper';
+  const path = writeFile(join(target.cwd, '.coderuler/live.rule.ts'), `import { Rule, ai, test } from '@alex-dbs/coderuler';
 export default class Live extends Rule {
   files = ['inputs/*.txt'];
   check = ai({ rule: 'The input must be good.' });
@@ -235,7 +235,7 @@ test('test --ai compares HTTP decisions with expectations and preserves mixed ca
   const fixture = await startDecisionFixture();
   t.after(() => fixture.close());
   fixture.answer = (_request, index) => ({ probability: index === 0 ? 0.9 : 0.1 });
-  const path = writeFile(join(target.cwd, '.rulekeeper/mixed.rule.ts'), `import { Rule, pass, test } from '@alex-dbs/rulekeeper';
+  const path = writeFile(join(target.cwd, '.coderuler/mixed.rule.ts'), `import { Rule, pass, test } from '@alex-dbs/coderuler';
 export default class Mixed extends Rule {
   files = ['inputs/*.txt'];
   check = (subject, context) => subject.source === 'LOCAL' ? pass() : context.ai({ rule: 'The input must be good.' });
@@ -274,15 +274,15 @@ test('test --ai never authorizes ordinary cases after a live case used the same 
   const target = sandbox.isolated('ai-permission');
   const fixture = await startDecisionFixture();
   t.after(() => fixture.close());
-  const rule = `import { Rule, ai, test } from '@alex-dbs/rulekeeper';
+  const rule = `import { Rule, ai, test } from '@alex-dbs/coderuler';
 export default class Live extends Rule {
   files = ['inputs/*.txt'];
   check = ai({ rule: 'The input must be good.' });
 }
 `;
-  writeFile(join(target.cwd, '.rulekeeper/a-live.rule.ts'), `${rule}
+  writeFile(join(target.cwd, '.coderuler/a-live.rule.ts'), `${rule}
 export const aiTests = [test('authorized live case').withFiles({ 'inputs/a.txt': 'GOOD' }).passes()];`);
-  writeFile(join(target.cwd, '.rulekeeper/b-offline.rule.ts'), `${rule}
+  writeFile(join(target.cwd, '.coderuler/b-offline.rule.ts'), `${rule}
 export const tests = [test('ordinary AI call').withFiles({ 'inputs/a.txt': 'GOOD' }).passes()];`);
 
   const result = await runCli(['test', '--ai', '--concurrency', '1'], target, fixture.env);
@@ -294,7 +294,7 @@ export const tests = [test('ordinary AI call').withFiles({ 'inputs/a.txt': 'GOOD
 
 test('test validates the aiTests export only when AI cases are selected', async () => {
   const target = sandbox.isolated('invalid-ai-tests');
-  const path = writeFile(join(target.cwd, '.rulekeeper/invalid-ai.rule.ts'), `${TEXT_RULE}
+  const path = writeFile(join(target.cwd, '.coderuler/invalid-ai.rule.ts'), `${TEXT_RULE}
 export const tests = [test('ordinary valid case').withFiles({ 'inputs/a.txt': 'GOOD' }).passes()];
 export const aiTests = {};
 `);

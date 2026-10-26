@@ -10,7 +10,7 @@ const repoRoot = fileURLToPath(new URL('../', import.meta.url));
 const loader = createRuleLoader();
 const rules = await loader.load({
   root: repoRoot,
-  explicit: join(repoRoot, '.rulekeeper'),
+  explicit: join(repoRoot, '.coderuler'),
   invocationCwd: repoRoot,
 });
 

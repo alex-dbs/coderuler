@@ -28,7 +28,7 @@ import { wholeFileScope } from '../dist/app/selection.js';
 
 import { GOLDEN_CASES } from './fixtures/golden-cases.ts';
 
-const RULE_DIR = '/repo/.rulekeeper';
+const RULE_DIR = '/repo/.coderuler';
 
 class GoldenProject implements Project {
   readonly root: string;
@@ -138,7 +138,7 @@ test('golden: whole-file selection report for a mixed pass/violation run', async
   assert.deepEqual(stableReports(reports), [
     {
       name: 'file-polarity',
-      ruleFile: '/repo/.rulekeeper/file-polarity.rule.ts',
+      ruleFile: '/repo/.coderuler/file-polarity.rule.ts',
       status: 'violation',
       evaluations: [
         {
@@ -174,7 +174,7 @@ test('golden: negative-level folder grouping lifts files to their ancestor folde
   assert.deepEqual(stableReports(reports), [
     {
       name: 'negative-folder',
-      ruleFile: '/repo/.rulekeeper/negative-folder.rule.ts',
+      ruleFile: '/repo/.coderuler/negative-folder.rule.ts',
       status: 'pass',
       evaluations: [
         {
@@ -235,7 +235,7 @@ test('golden: a custom data scope preserves id, data, captures, and lines', asyn
   assert.deepEqual(stableReports(reports), [
     {
       name: 'data-scope',
-      ruleFile: '/repo/.rulekeeper/data-scope.rule.ts',
+      ruleFile: '/repo/.coderuler/data-scope.rule.ts',
       status: 'violation',
       evaluations: [
         {
@@ -409,7 +409,7 @@ test('fixture: the feature project discovers rule modules and ignores its helper
     ],
   );
   for (const entry of featureRules) {
-    assert.ok(entry.ruleFile.endsWith(`.rulekeeper/${entry.name}.rule.ts`), entry.ruleFile);
+    assert.ok(entry.ruleFile.endsWith(`.coderuler/${entry.name}.rule.ts`), entry.ruleFile);
   }
 });
 
@@ -722,7 +722,7 @@ test('fixture: a strict policy reaches the backend while a relaxed one never res
 
   const relaxed = await createRuleLoader({ home: ABSENT_HOME }).load({
     root: RELAXED_ROOT,
-    explicit: join(FEATURE_ROOT, '.rulekeeper', 'conditional-ai.rule.ts'),
+    explicit: join(FEATURE_ROOT, '.coderuler', 'conditional-ai.rule.ts'),
     invocationCwd: FEATURE_ROOT,
   });
   assert.deepEqual(relaxed.map(entry => entry.name), ['conditional-ai']);
@@ -776,7 +776,7 @@ test('fixture: the approved ai example is skipped when its directory gate fails'
   ]);
 });
 
-const DUPLICATED_ENV_RULE = fileURLToPath(new URL('../.rulekeeper/duplicated-env.rule.ts', import.meta.url));
+const DUPLICATED_ENV_RULE = fileURLToPath(new URL('../.coderuler/duplicated-env.rule.ts', import.meta.url));
 const tempRoots: string[] = [];
 
 after(async () => {
@@ -784,7 +784,7 @@ after(async () => {
 });
 
 async function makeManualRoot(label: string, files: Readonly<Record<string, string>>): Promise<string> {
-  const root = await mkdtemp(join(await realpath(tmpdir()), `rulekeeper-${label}-`));
+  const root = await mkdtemp(join(await realpath(tmpdir()), `coderuler-${label}-`));
   tempRoots.push(root);
   for (const [filepath, source] of Object.entries(files)) {
     const target = join(root, filepath);

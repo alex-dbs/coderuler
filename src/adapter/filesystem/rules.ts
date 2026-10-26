@@ -10,7 +10,7 @@ import { createRuleDependencyManager, dependencyDirectory } from './dependencies
 import type { PreparedRuleDependencies, RuleDependencyManager } from './dependencies.js';
 import { assertRuleDependenciesCurrent, getRuleDependencies, registerRuleDependencies } from './rule-resolution.js';
 
-const RULE_DIR = '.rulekeeper';
+const RULE_DIR = '.coderuler';
 const RULE_MODULE = /\.rule\.(?:ts|mts|js|mjs)$/;
 const PATH_LIKE = /[/\\]|\.rule\.(?:ts|mts|js|mjs)$/;
 const ARCHIVED_DIRECTORY = 'old';
@@ -46,9 +46,9 @@ async function collectModules(directory: string, files: string[]): Promise<void>
     const child = join(directory, entry.name);
     if (entry.isDirectory()) {
       if (entry.name === ARCHIVED_DIRECTORY || entry.name === 'node_modules'
-        || entry.name === '.rulekeeper-deps-write'
-        || entry.name.startsWith('.rulekeeper-deps-stage-')
-        || entry.name.startsWith('.rulekeeper-sdk-')) continue;
+        || entry.name === '.coderuler-deps-write'
+        || entry.name.startsWith('.coderuler-deps-stage-')
+        || entry.name.startsWith('.coderuler-sdk-')) continue;
       await collectModules(child, files);
     } else if (entry.isFile() && RULE_MODULE.test(entry.name)) {
       files.push(child);

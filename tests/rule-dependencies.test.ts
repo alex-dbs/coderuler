@@ -33,13 +33,13 @@ interface RuleLock {
   [field: string]: unknown;
 }
 
-const root = realpathSync(mkdtempSync(join(tmpdir(), 'rulekeeper-dependencies-')));
+const root = realpathSync(mkdtempSync(join(tmpdir(), 'coderuler-dependencies-')));
 const fixture = createDependencyFixture(join(root, 'registry'));
 let sequence = 0;
 after(() => rmSync(root, { recursive: true, force: true }));
 
 function setup(context: TestContext, registry: DependencyFixture = fixture) {
-  const directory = join(root, `case-${sequence++}`, '.rulekeeper');
+  const directory = join(root, `case-${sequence++}`, '.coderuler');
   const cacheRoot = join(dirname(directory), 'cache');
   mkdirSync(directory, { recursive: true });
   let network = installDependencyRegistry(registry);
@@ -56,13 +56,13 @@ function setup(context: TestContext, registry: DependencyFixture = fixture) {
 }
 
 function readLock(directory: string): RuleLock {
-  return JSON.parse(readFileSync(join(directory, 'rulekeeper.lock'), 'utf8')) as RuleLock;
+  return JSON.parse(readFileSync(join(directory, 'coderuler.lock'), 'utf8')) as RuleLock;
 }
 function lockBytes(directory: string): string {
-  return readFileSync(join(directory, 'rulekeeper.lock'), 'utf8');
+  return readFileSync(join(directory, 'coderuler.lock'), 'utf8');
 }
 function writeLock(directory: string, lock: RuleLock): void {
-  writeFileSync(join(directory, 'rulekeeper.lock'), `${JSON.stringify(lock, null, 2)}\n`);
+  writeFileSync(join(directory, 'coderuler.lock'), `${JSON.stringify(lock, null, 2)}\n`);
 }
 function node(lock: RuleLock, location: string): LockPackage {
   const entry = lock.packages[location];
@@ -104,7 +104,7 @@ test('adds exact direct and transitive versions, verifies real tarballs, and lea
   assert.equal(readFileSync(join(target.directory, 'package-lock.json'), 'utf8'), ownerNpmLock);
   const lock = readLock(target.directory);
   assert.equal(lock.lockfileVersion, 3);
-  assert.equal(lock.name, 'rulekeeper-rules');
+  assert.equal(lock.name, 'coderuler-rules');
   assert.equal(lock.version, '1.0.0');
   assert.deepEqual(node(lock, '').dependencies, { 'fixture-policy': '1.0.0' });
   assert.equal(node(lock, 'node_modules/fixture-shared').version, '1.0.0');
@@ -127,10 +127,10 @@ test('adds exact direct and transitive versions, verifies real tarballs, and lea
 test('intact copied locks replay frozen tarballs and healthy cached loads remain offline without lock changes', async context => {
   const source = setup(context);
   await source.manager.change(source.directory, 'add', ['fixture-policy@1.0.0']);
-  const directory = join(root, `copy-${sequence++}`, '.rulekeeper');
+  const directory = join(root, `copy-${sequence++}`, '.coderuler');
   mkdirSync(directory, { recursive: true });
   const committed = lockBytes(source.directory);
-  writeFileSync(join(directory, 'rulekeeper.lock'), committed);
+  writeFileSync(join(directory, 'coderuler.lock'), committed);
   const cacheRoot = join(dirname(directory), 'cache');
   source.network('tarballs');
   const prepared = await createRuleDependencyManager({ cacheRoot }).prepare(directory);
@@ -161,17 +161,17 @@ test('missing locks are dependency-free and do not create cache files', async co
   });
   assert.equal(existsSync(join(target.directory, 'node_modules')), false);
   assert.equal(existsSync(target.cacheRoot), false);
-  assert.equal(existsSync(join(target.directory, 'rulekeeper.lock')), false);
+  assert.equal(existsSync(join(target.directory, 'coderuler.lock')), false);
   assert.deepEqual(target.requests, []);
 });
 
 test('ordinary preparation of an existing empty lock performs no filesystem writes or editor warnings', async context => {
   const target = setup(context);
   writeLock(target.directory, {
-    name: 'rulekeeper-rules',
+    name: 'coderuler-rules',
     version: '1.0.0',
     lockfileVersion: 3,
-    packages: { '': { name: 'rulekeeper-rules', version: '1.0.0', dependencies: {} } },
+    packages: { '': { name: 'coderuler-rules', version: '1.0.0', dependencies: {} } },
   });
   const committed = lockBytes(target.directory);
   const warnings: string[] = [];
@@ -198,19 +198,19 @@ test('ordinary preparation of an existing empty lock performs no filesystem writ
   assert.deepEqual(warnings, []);
   assert.deepEqual(target.requests, []);
   assert.equal(existsSync(target.cacheRoot), false);
-  assert.deepEqual(readdirSync(target.directory), ['rulekeeper.lock']);
+  assert.deepEqual(readdirSync(target.directory), ['coderuler.lock']);
   assert.equal(lockBytes(target.directory), committed);
 });
 
 test('a read-only empty-lock owner loads silently while explicit sync still establishes SDK editor access', async context => {
   const target = setup(context);
   writeLock(target.directory, {
-    name: 'rulekeeper-rules',
+    name: 'coderuler-rules',
     version: '1.0.0',
     lockfileVersion: 3,
-    packages: { '': { name: 'rulekeeper-rules', version: '1.0.0', dependencies: {} } },
+    packages: { '': { name: 'coderuler-rules', version: '1.0.0', dependencies: {} } },
   });
-  const path = join(target.directory, 'rulekeeper.lock');
+  const path = join(target.directory, 'coderuler.lock');
   const committed = lockBytes(target.directory);
   const warnings: string[] = [];
   const manager = createRuleDependencyManager({ cacheRoot: target.cacheRoot, onWarning: warning => { warnings.push(warning); } });
@@ -222,7 +222,7 @@ test('a read-only empty-lock owner loads silently while explicit sync still esta
       directory: target.directory, directDependencies: [], key: 'empty',
     });
     assert.deepEqual(warnings, []);
-    assert.deepEqual(readdirSync(target.directory), ['rulekeeper.lock']);
+    assert.deepEqual(readdirSync(target.directory), ['coderuler.lock']);
     assert.equal(existsSync(target.cacheRoot), false);
   } finally {
     chmodSync(target.directory, 0o755);
@@ -231,8 +231,8 @@ test('a read-only empty-lock owner loads silently while explicit sync still esta
   const synchronized = await manager.sync(target.directory);
   assert.equal(synchronized.directory, target.directory);
   assert.equal(synchronized.key, 'empty');
-  assert.equal(lstatSync(join(target.directory, 'node_modules/@alex-dbs/rulekeeper')).isSymbolicLink(), true);
-  assert.equal(existsSync(join(target.directory, 'node_modules/.rulekeeper-install.json')), true);
+  assert.equal(lstatSync(join(target.directory, 'node_modules/@alex-dbs/coderuler')).isSymbolicLink(), true);
+  assert.equal(existsSync(join(target.directory, 'node_modules/.coderuler-install.json')), true);
   assert.equal(existsSync(target.cacheRoot), false);
   assert.equal(lockBytes(target.directory), committed);
   assert.deepEqual(target.requests, []);
@@ -243,12 +243,12 @@ test('explicit sync replaces a previous owned installation with an empty committ
   await target.manager.change(target.directory, 'add', ['fixture-policy@1.0.0']);
   assert.equal(await message(target.directory), POLICY_MESSAGE_V1);
   const modules = join(target.directory, 'node_modules');
-  const markerPath = join(modules, '.rulekeeper-install.json');
+  const markerPath = join(modules, '.coderuler-install.json');
   const previousMarker = readFileSync(markerPath, 'utf8');
-  const sdk = join(modules, '@alex-dbs/rulekeeper');
+  const sdk = join(modules, '@alex-dbs/coderuler');
   const sdkTarget = realpathSync(sdk);
   const empty = readLock(target.directory);
-  empty.packages = { '': { name: 'rulekeeper-rules', version: '1.0.0', dependencies: {} } };
+  empty.packages = { '': { name: 'coderuler-rules', version: '1.0.0', dependencies: {} } };
   writeLock(target.directory, empty);
   const committed = lockBytes(target.directory);
   target.network('offline');
@@ -277,10 +277,10 @@ test('explicit sync replaces a previous owned installation with an empty committ
 test('empty-lock sync preserves an unowned node_modules directory instead of claiming or replacing it', async context => {
   const target = setup(context);
   writeLock(target.directory, {
-    name: 'rulekeeper-rules',
+    name: 'coderuler-rules',
     version: '1.0.0',
     lockfileVersion: 3,
-    packages: { '': { name: 'rulekeeper-rules', version: '1.0.0', dependencies: {} } },
+    packages: { '': { name: 'coderuler-rules', version: '1.0.0', dependencies: {} } },
   });
   const committed = lockBytes(target.directory);
   const modules = join(target.directory, 'node_modules');
@@ -298,14 +298,14 @@ test('empty-lock sync preserves an unowned node_modules directory instead of cla
 test('sync without a committed lock does not remove a previous owned dependency installation', async context => {
   const target = setup(context);
   await target.manager.change(target.directory, 'add', ['fixture-policy@1.0.0']);
-  const markerPath = join(target.directory, 'node_modules/.rulekeeper-install.json');
+  const markerPath = join(target.directory, 'node_modules/.coderuler-install.json');
   const previousMarker = readFileSync(markerPath, 'utf8');
-  rmSync(join(target.directory, 'rulekeeper.lock'));
+  rmSync(join(target.directory, 'coderuler.lock'));
   target.network('offline');
   assert.equal((await target.manager.sync(target.directory)).key, 'empty');
   assert.equal(await message(target.directory), POLICY_MESSAGE_V1);
   assert.equal(readFileSync(markerPath, 'utf8'), previousMarker);
-  assert.equal(existsSync(join(target.directory, 'rulekeeper.lock')), false);
+  assert.equal(existsSync(join(target.directory, 'coderuler.lock')), false);
   assert.deepEqual(target.requests, []);
 });
 
@@ -337,14 +337,14 @@ for (const specifier of ['fixture-policy', 'fixture-policy@latest', 'fixture-pol
 
 for (const invalid of [
   ['fixture-policy@1.0.0', 'fixture-policy@2.0.0'],
-  ['@alex-dbs/rulekeeper'], ['npm:fixture-policy@1.0.0'], ['alias@npm:fixture-policy@1.0.0'],
+  ['@alex-dbs/coderuler'], ['npm:fixture-policy@1.0.0'], ['alias@npm:fixture-policy@1.0.0'],
   ['git+https://github.com/example/policy.git'], ['file:../policy'], ['../policy'],
   ['https://registry.npmjs.org/fixture-policy/-/fixture-policy-1.0.0.tgz'], ['workspace:*'],
 ]) {
   test(`rejects disallowed or duplicate direct specifications before fetching: ${invalid.join(', ')}`, async context => {
     const target = setup(context);
     await assert.rejects(target.manager.change(target.directory, 'add', invalid));
-    assert.equal(existsSync(join(target.directory, 'rulekeeper.lock')), false);
+    assert.equal(existsSync(join(target.directory, 'coderuler.lock')), false);
     assert.deepEqual(target.requests, []);
   });
 }
@@ -371,7 +371,7 @@ for (const kind of ['git', 'file', 'url', 'alias']) {
     test(`rejects transitive ${kind} specifications in ${field}`, async context => {
       const target = setup(context);
       await assert.rejects(target.manager.change(target.directory, 'add', [`fixture-source-${kind}-${field}`]));
-      assert.equal(existsSync(join(target.directory, 'rulekeeper.lock')), false);
+      assert.equal(existsSync(join(target.directory, 'coderuler.lock')), false);
       assertNoSharedTrees(target.cacheRoot);
     });
   }
@@ -389,9 +389,9 @@ for (const name of ['fixture-preinstall', 'fixture-install', 'fixture-postinstal
     });
     await assert.rejects(target.manager.change(target.directory, 'add', [name]));
     assert.equal(existsSync(marker), false);
-    assert.equal(existsSync(join(target.directory, 'rulekeeper.lock')), false);
+    assert.equal(existsSync(join(target.directory, 'coderuler.lock')), false);
     assertNoSharedTrees(target.cacheRoot);
-    assert.equal(readdirSync(target.directory).some(name => name.startsWith('.rulekeeper-deps-stage-')), false);
+    assert.equal(readdirSync(target.directory).some(name => name.startsWith('.coderuler-deps-stage-')), false);
   });
 }
 
@@ -403,7 +403,7 @@ test('rejects a hidden bundle even when its files occupy an actual locked nested
     /node_modules|bundl/i,
   );
   assert.ok(target.requests.some(request => request.kind === 'tarball' && request.path.includes('/fixture-hidden-locked-bundle/')));
-  assert.equal(existsSync(join(target.directory, 'rulekeeper.lock')), false);
+  assert.equal(existsSync(join(target.directory, 'coderuler.lock')), false);
   assertNoSharedTrees(target.cacheRoot);
   assert.equal(existsSync(join(target.directory, 'node_modules')), false);
 });
@@ -435,7 +435,7 @@ test('an incompatible required child omits its entire optional-only parent branc
   assert.equal(existsSync(join(prepared.directory, 'node_modules/fixture-shared')), true);
   assert.equal(existsSync(join(prepared.directory, 'node_modules/fixture-optional-parent')), false);
   assert.equal(existsSync(join(prepared.directory, 'node_modules/fixture-engine')), false);
-  const marker = JSON.parse(readFileSync(join(prepared.directory, 'node_modules/.rulekeeper-install.json'), 'utf8')) as { installedLocations: string[] };
+  const marker = JSON.parse(readFileSync(join(prepared.directory, 'node_modules/.coderuler-install.json'), 'utf8')) as { installedLocations: string[] };
   assert.deepEqual(marker.installedLocations.toSorted(), ['node_modules/fixture-optional-root', 'node_modules/fixture-shared']);
   const committed = lockBytes(target.directory);
   await assert.rejects(target.manager.change(target.directory, 'add', ['fixture-required-optional-root']));
@@ -446,7 +446,7 @@ for (const name of ['fixture-engine', 'fixture-platform']) {
   test(`rejects incompatible required package ${name}`, async context => {
     const target = setup(context);
     await assert.rejects(target.manager.change(target.directory, 'add', [name]));
-    assert.equal(existsSync(join(target.directory, 'rulekeeper.lock')), false);
+    assert.equal(existsSync(join(target.directory, 'coderuler.lock')), false);
   });
 }
 
@@ -535,7 +535,7 @@ test('read-only intact installations load without writes, but a missing installa
   const committed = lockBytes(target.directory);
   const mkdir = fsPromises.mkdir;
   const intercepted = context.mock.method(fsPromises, 'mkdir', (...args: Parameters<typeof fsPromises.mkdir>) => {
-    if (String(args[0]) === join(target.directory, '.rulekeeper-deps-write')) {
+    if (String(args[0]) === join(target.directory, '.coderuler-deps-write')) {
       return Promise.reject(Object.assign(new Error('injected read-only owner'), { code: 'EACCES' }));
     }
     return mkdir(...args);
@@ -566,7 +566,7 @@ for (const damage of ['missing package', 'wrong version', 'package symlink', 'mi
       const manifest = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
       writeFileSync(path, JSON.stringify({ ...manifest, version: '99.0.0' }));
     } else if (damage === 'missing required marker location') {
-      const path = join(target.directory, 'node_modules/.rulekeeper-install.json');
+      const path = join(target.directory, 'node_modules/.coderuler-install.json');
       const marker = JSON.parse(readFileSync(path, 'utf8')) as { installedLocations: string[] };
       marker.installedLocations = marker.installedLocations.filter(location => location !== 'node_modules/fixture-shared');
       writeFileSync(path, JSON.stringify(marker));
@@ -666,7 +666,7 @@ test('does not trust optional flags to hide an incompatible required edge', asyn
 
 test('rejects malformed, symlinked and nonregular committed locks', async context => {
   const target = setup(context);
-  const path = join(target.directory, 'rulekeeper.lock');
+  const path = join(target.directory, 'coderuler.lock');
   writeFileSync(path, '{not json');
   await assert.rejects(target.manager.prepare(target.directory));
   rmSync(path);
@@ -685,22 +685,22 @@ test('rejects malformed, symlinked and nonregular committed locks', async contex
   assert.deepEqual(target.requests, []);
 });
 
-test('dependency ownership follows canonical rule paths and stops at the nearest .rulekeeper boundary', async context => {
+test('dependency ownership follows canonical rule paths and stops at the nearest .coderuler boundary', async context => {
   const target = setup(context);
   const nested = join(target.directory, 'nested', 'policy.rule.ts');
   mkdirSync(dirname(nested), { recursive: true });
   writeFileSync(nested, 'export default {};');
   assert.equal(await dependencyDirectory(nested), target.directory);
   const owned = join(target.directory, 'nested');
-  writeFileSync(join(owned, 'rulekeeper.lock'), '{}');
+  writeFileSync(join(owned, 'coderuler.lock'), '{}');
   assert.equal(await dependencyDirectory(nested), owned);
   const external = join(dirname(target.directory), 'custom', 'rule.ts');
   mkdirSync(dirname(external), { recursive: true });
   writeFileSync(external, 'export default {};');
   assert.equal(await dependencyDirectory(external), dirname(external));
-  writeFileSync(join(dirname(target.directory), 'rulekeeper.lock'), '{}');
+  writeFileSync(join(dirname(target.directory), 'coderuler.lock'), '{}');
   assert.equal(await dependencyDirectory(external), dirname(target.directory));
-  rmSync(join(owned, 'rulekeeper.lock'));
+  rmSync(join(owned, 'coderuler.lock'));
   assert.equal(await dependencyDirectory(nested), target.directory);
   const link = join(dirname(target.directory), 'linked-rule.ts');
   symlinkSync(nested, link);
@@ -710,9 +710,9 @@ test('dependency ownership follows canonical rule paths and stops at the nearest
 test('identical locks install independent owner files and keys, sharing only download artifacts', async context => {
   const target = setup(context);
   const first = await target.manager.change(target.directory, 'add', ['fixture-policy@1.0.0']);
-  const other = join(dirname(target.directory), 'other', '.rulekeeper');
+  const other = join(dirname(target.directory), 'other', '.coderuler');
   mkdirSync(other, { recursive: true });
-  writeFileSync(join(other, 'rulekeeper.lock'), lockBytes(target.directory));
+  writeFileSync(join(other, 'coderuler.lock'), lockBytes(target.directory));
   const second = await target.manager.prepare(other);
   assert.notEqual(second.key, first.key);
   for (const directory of [target.directory, other]) {
@@ -740,7 +740,7 @@ test('concurrent first preparations publish one complete owner installation', as
   for (const result of results) assert.equal(await message(result.directory), POLICY_MESSAGE_V1);
   assert.equal(lockBytes(target.directory), committed);
   assertNoSharedTrees(cacheRoot);
-  assert.equal(readdirSync(target.directory).some(name => name.startsWith('.rulekeeper-deps-stage-')), false);
+  assert.equal(readdirSync(target.directory).some(name => name.startsWith('.coderuler-deps-stage-')), false);
   target.network('offline');
   assert.equal((await target.manager.prepare(target.directory)).key, results[0]?.key);
 });
@@ -748,7 +748,7 @@ test('concurrent first preparations publish one complete owner installation', as
 test('a missing ownership marker never permits replacement of user-owned package files', async context => {
   const target = setup(context);
   await target.manager.change(target.directory, 'add', ['fixture-policy@1.0.0']);
-  rmSync(join(target.directory, 'node_modules/.rulekeeper-install.json'));
+  rmSync(join(target.directory, 'node_modules/.coderuler-install.json'));
   const sentinel = join(target.directory, 'node_modules/user-file');
   writeFileSync(sentinel, 'preserve');
   await assert.rejects(target.manager.sync(target.directory), /node_modules|owned|conflict/i);
@@ -866,7 +866,7 @@ for (const [field, value] of mismatchedFields) {
     const registry = createDependencyFixture(join(root, `mismatch-${sequence++}`), definitions);
     const target = setup(context, registry);
     await assert.rejects(target.manager.change(target.directory, 'add', [manifest.name]));
-    assert.equal(existsSync(join(target.directory, 'rulekeeper.lock')), false);
+    assert.equal(existsSync(join(target.directory, 'coderuler.lock')), false);
     assertNoSharedTrees(target.cacheRoot);
   });
 }
@@ -904,7 +904,7 @@ test('a concurrent external lock edit is preserved rather than overwritten by ad
   target.network('all', incoming => {
     if (incoming.kind !== 'metadata' || edited) return;
     edited = true;
-    writeFileSync(join(target.directory, 'rulekeeper.lock'), external);
+    writeFileSync(join(target.directory, 'coderuler.lock'), external);
   });
   await assert.rejects(target.manager.change(target.directory, 'add', ['fixture-second']));
   assert.equal(edited, true, 'the external edit must occur at the transport barrier during resolution');

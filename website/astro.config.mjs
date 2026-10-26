@@ -2,7 +2,7 @@ import { defineConfig } from 'astro/config';
 import { satteri } from '@astrojs/markdown-satteri';
 import { markdownBaseUrls } from './src/lib/paths.ts';
 
-const base = '/rulekeeper';
+const base = '/coderuler';
 
 export default defineConfig({
   site: process.env.SITE_URL ?? 'https://alex-dbs.github.io',

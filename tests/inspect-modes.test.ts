@@ -28,7 +28,7 @@ import {
   type Sandbox,
 } from './support.ts';
 
-const sandbox = createSandbox('rulekeeper-inspect-modes-');
+const sandbox = createSandbox('coderuler-inspect-modes-');
 const fixtures: DecisionFixture[] = [];
 after(async () => {
   await Promise.all(fixtures.map(fixture => fixture.close()));
@@ -43,7 +43,7 @@ async function fixture(options: DecisionFixtureOptions = {}): Promise<DecisionFi
 
 function project(label: string, rule: string, source = 'Unicode α 日本語\nsecond line'): Sandbox {
   const target = sandbox.isolated(label);
-  writeFile(join(target.cwd, '.rulekeeper/example.rule.ts'), rule);
+  writeFile(join(target.cwd, '.coderuler/example.rule.ts'), rule);
   writeFile(join(target.cwd, 'src/example.txt'), source);
   return target;
 }
@@ -60,7 +60,7 @@ async function runProgramCaptured(
   const env = { ...target.env, ...overrides };
   const loader = createRuleLoader({
     home: target.home,
-    dependencies: createRuleDependencyManager({ cacheRoot: join(target.home, '.cache', 'rulekeeper', 'dependencies') }),
+    dependencies: createRuleDependencyManager({ cacheRoot: join(target.home, '.cache', 'coderuler', 'dependencies') }),
   });
   const context: CliServices = {
     ...createServices(target.cwd, env),
@@ -80,20 +80,20 @@ async function runProgramCaptured(
   return { status, stdout: stdout.join(''), stderr: stderr.join('') };
 }
 
-const MIXED_RULE = `import { Rule, pass, violation } from '@alex-dbs/rulekeeper';
+const MIXED_RULE = `import { Rule, pass, violation } from '@alex-dbs/coderuler';
 export default class Example extends Rule {
   files = ['src/*.txt'];
   check = subject => subject.source.includes('BAD') ? violation('Rejected source') : pass();
 }
 `;
-const AI_RULE = `import { Rule, ai } from '@alex-dbs/rulekeeper';
+const AI_RULE = `import { Rule, ai } from '@alex-dbs/coderuler';
 export default class Example extends Rule {
   files = ['src/*.txt'];
   settings = { threshold: 0.8 };
   check = ai({ rule: 'All text must be tidy.' });
 }
 `;
-const DISABLED_RULE = `import { Rule, pass } from '@alex-dbs/rulekeeper';
+const DISABLED_RULE = `import { Rule, pass } from '@alex-dbs/coderuler';
 export default class Example extends Rule {
   enabled = false;
   files = ['src/*.txt'];
@@ -275,11 +275,11 @@ test('inspect machine modes produce valid documents and terminal errors for prep
     for (const failure of ['selector', 'target', 'load', 'check', 'network'] as const) {
       const throwing = MIXED_RULE.replace("check = subject => subject.source.includes('BAD') ? violation('Rejected source') : pass();", "check = () => { throw new Error('check exploded'); };");
       const target = project(`${failure}-${mode}`, failure === 'network' ? AI_RULE : failure === 'check' ? throwing : MIXED_RULE);
-      if (failure === 'load') writeFile(join(target.cwd, '.rulekeeper/example.rule.ts'), 'export default {};');
+      if (failure === 'load') writeFile(join(target.cwd, '.coderuler/example.rule.ts'), 'export default {};');
       const args = ['inspect', failure === 'selector' ? 'missing-rule' : 'example', ...(failure === 'target' ? ['src/example.txt'] : []), mode];
       const result = await runCli(args, target, backend.env);
       assert.equal(result.status, 2, result.stderr);
-      assert.match(result.stderr, /^rulekeeper:/);
+      assert.match(result.stderr, /^coderuler:/);
       const document = inspection(result, mode);
       assert.equal(typeof document.error, 'string');
       assert.ok(document.error!.length > 0);
@@ -309,7 +309,7 @@ test('inspect machine formats retain valid diagnostics on a refused local connec
     const target = project(`connection-${mode}`, AI_RULE);
     const result = await runCli(['inspect', 'example', mode], target, backend.env);
     assert.equal(result.status, 2, result.stderr);
-    assert.match(result.stderr, /^rulekeeper:/);
+    assert.match(result.stderr, /^coderuler:/);
     const document = inspection(result, mode);
     assert.ok(document.error);
     assert.deepEqual(document.reports, []);
@@ -324,8 +324,8 @@ test('inspect rejects every pair of formats before selector resolution, loading,
   const target = sandbox.isolated('conflicts');
   const loadedMarker = join(target.cwd, 'loaded-marker');
   const hookMarker = join(target.cwd, 'hook-marker');
-  writeFile(join(target.cwd, '.rulekeeper/example.rule.ts'), `import { writeFileSync } from 'node:fs';
-import { Rule, ai } from '@alex-dbs/rulekeeper';
+  writeFile(join(target.cwd, '.coderuler/example.rule.ts'), `import { writeFileSync } from 'node:fs';
+import { Rule, ai } from '@alex-dbs/coderuler';
 writeFileSync(${JSON.stringify(loadedMarker)}, 'loaded');
 export default class Example extends Rule {
   files = ['src/*.txt'];
@@ -417,7 +417,7 @@ test('inspect diagnostics redact credentials while check machine reports remain 
     assert.equal(all.status, 0, all.stderr);
     assert.ok(all.stdout.includes(JSON.stringify(secret).slice(1, -1)), all.stdout);
   }
-  writeFile(join(target.cwd, '.rulekeeper/example.rule.ts'), `import { Rule } from '@alex-dbs/rulekeeper';
+  writeFile(join(target.cwd, '.coderuler/example.rule.ts'), `import { Rule } from '@alex-dbs/coderuler';
 export default class Example extends Rule {
   files = ['src/*.txt'];
   check = () => { throw new Error('check exploded ' + process.env.TYPESAFE_API_KEY); };
@@ -428,7 +428,7 @@ export default class Example extends Rule {
     assert.equal(result.status, 2);
     assert.equal((result.stdout + result.stderr).includes(secret), false);
     assert.equal((result.stdout + result.stderr).includes(JSON.stringify(secret).slice(1, -1)), false);
-    assert.match(result.stderr, /^rulekeeper:.*\[REDACTED\]/);
+    assert.match(result.stderr, /^coderuler:.*\[REDACTED\]/);
     if (mode !== '--raw') {
       const document = inspection(result, mode);
       assert.equal(document.error, 'check exploded [REDACTED]');
@@ -524,7 +524,7 @@ test('inspect recaps multiple actual calls and earlier verifications after a lat
   const backend = await fixture();
   let calls = 0;
   backend.answer = () => ++calls === 3 ? { status: 503, body: 'stopped' } : {};
-  const target = project('multi-partial', `import { Rule, pass } from '@alex-dbs/rulekeeper';
+  const target = project('multi-partial', `import { Rule, pass } from '@alex-dbs/coderuler';
 export default class Example extends Rule {
   files = ['src/*.txt'];
   async check(subject, context) {

@@ -10,7 +10,7 @@ import { createSkillManager, SKILL_NAME, SKILL_SOURCE } from '../dist/adapter/sk
 import { createServices } from '../dist/infra/runtime.js';
 import { createSandbox, ROOT, withLoadOverrides, writeFile } from './support.ts';
 
-const sandbox = createSandbox('rulekeeper-skill-cli-');
+const sandbox = createSandbox('coderuler-skill-cli-');
 after(() => sandbox.cleanup());
 
 const SHIM = `import { appendFileSync } from 'node:fs';
@@ -68,7 +68,7 @@ test('install defaults to the bundled skill in the universal directory, preservi
   assert.equal(await runProgram(['skill', 'install'], target.services), 0);
   assert.deepEqual(target.calls(), [{ args: [...ADD, '--agent', 'universal'], cwd: target.target.cwd, marker: 'inherited environment' }]);
   assert.equal(SKILL_SOURCE, join(ROOT, 'skills', SKILL_NAME));
-  assert.match(readFileSync(join(SKILL_SOURCE, 'SKILL.md'), 'utf8'), /name: rulekeeper-new-rule/);
+  assert.match(readFileSync(join(SKILL_SOURCE, 'SKILL.md'), 'utf8'), /name: coderuler-new-rule/);
 });
 
 test('install forwards global scope, multiple agents, confirmation and copy flags without shell parsing', async () => {
@@ -114,7 +114,7 @@ test('global universal update uses the home path even when XDG config is set', a
 });
 
 test('universal update verifies the exact canonical destination rather than an agent label', async () => {
-  for (const path of [undefined, '/another-project/.agents/skills/rulekeeper-new-rule']) {
+  for (const path of [undefined, '/another-project/.agents/skills/coderuler-new-rule']) {
     const target = fixture({
       SKILLS_LIST: JSON.stringify([{ name: SKILL_NAME, scope: 'project', path, agents: ['Universal'] }]),
     });
@@ -221,7 +221,7 @@ test('update refuses absent skills rather than refreshing another skill or insta
     const target = fixture({ SKILLS_LIST: JSON.stringify(installed) });
     assert.equal(await runProgram(['skill', 'update'], target.services), 2);
     assert.deepEqual(target.calls().map(call => call.args), [['list', '--json', '--agent', 'universal']]);
-    assert.match(target.stderr.join(''), /rulekeeper-new-rule is not installed/);
+    assert.match(target.stderr.join(''), /coderuler-new-rule is not installed/);
   }
 });
 

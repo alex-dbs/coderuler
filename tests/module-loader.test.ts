@@ -11,7 +11,7 @@ import { createRuleLoader } from '../dist/adapter/filesystem/rules.js';
 import { createRuleDependencyManager } from '../dist/adapter/filesystem/dependencies.js';
 import { createDependencyFixture, installDependencyRegistry } from './dependency-support.ts';
 
-const BRAND = Symbol.for('rulekeeper.Rule');
+const BRAND = Symbol.for('coderuler.Rule');
 
 const TESTS_DIR = await realpath(fileURLToPath(new URL('.', import.meta.url)));
 const tempRoots: string[] = [];
@@ -78,7 +78,7 @@ async function expectReject(
 }
 
 function plainRule(className: string, files = '**/*'): string {
-  return `import { Rule, pass } from '@alex-dbs/rulekeeper';
+  return `import { Rule, pass } from '@alex-dbs/coderuler';
 
 export default class ${className} extends Rule {
   files = ['${files}'];
@@ -88,7 +88,7 @@ export default class ${className} extends Rule {
 }
 
 function typedRule(className: string): string {
-  return `import { Rule, pass, type CheckResult } from '@alex-dbs/rulekeeper';
+  return `import { Rule, pass, type CheckResult } from '@alex-dbs/coderuler';
 
 export default class ${className} extends Rule {
   files: readonly string[] = ['**/*.md'];
@@ -104,7 +104,7 @@ function names(loaded: readonly { readonly name: string }[]): readonly string[] 
 
 test('loads TS, MTS, JS, and MJS rule modules and derives names from their file names', async () => {
   const root = await makeTempRoot('flavors');
-  const dir = join(root, '.rulekeeper');
+  const dir = join(root, '.coderuler');
   const written: Record<string, string> = {};
   written.alpha = await writeModule(join(dir, 'alpha.rule.mjs'), plainRule('Alpha'));
   written.beta = await writeModule(join(dir, 'beta.rule.ts'), typedRule('Beta'));
@@ -131,10 +131,10 @@ test('loads TS, MTS, JS, and MJS rule modules and derives names from their file 
 
 test('walks discovery roots recursively in lexical order, local before home', async () => {
   const root = await makeTempRoot('roots');
-  await writeModule(join(root, '.rulekeeper', 'a.rule.mjs'), plainRule('A'));
-  await writeModule(join(root, '.rulekeeper', 'nested', 'z.rule.mjs'), plainRule('Z'));
+  await writeModule(join(root, '.coderuler', 'a.rule.mjs'), plainRule('A'));
+  await writeModule(join(root, '.coderuler', 'nested', 'z.rule.mjs'), plainRule('Z'));
   const homeRule = await writeModule(
-    join(root, 'home', '.rulekeeper', 'c.rule.mjs'),
+    join(root, 'home', '.coderuler', 'c.rule.mjs'),
     plainRule('C'),
   );
 
@@ -147,7 +147,7 @@ test('walks discovery roots recursively in lexical order, local before home', as
 
 test('deduplicates a discovery root that resolves to the same physical directory', async () => {
   const root = await makeTempRoot('dedupe');
-  await writeModule(join(root, '.rulekeeper', 'only.rule.mjs'), plainRule('Only'));
+  await writeModule(join(root, '.coderuler', 'only.rule.mjs'), plainRule('Only'));
 
   const loaded = await loaderFor(root, root).load(selectionFor(root));
   assert.deepStrictEqual(names(loaded), ['only']);
@@ -156,8 +156,8 @@ test('deduplicates a discovery root that resolves to the same physical directory
 test('accepts a structurally valid rule carrying the shared brand without extending it', async () => {
   const root = await makeTempRoot('foreign-brand');
   await writeModule(
-    join(root, '.rulekeeper', 'foreign.rule.mjs'),
-    `const BRAND = Symbol.for('rulekeeper.Rule');
+    join(root, '.coderuler', 'foreign.rule.mjs'),
+    `const BRAND = Symbol.for('coderuler.Rule');
 
 class ForeignBase {
   enabled = true;
@@ -187,10 +187,10 @@ export default ForeignBase;
 
 test('imports helper modules without discovering them as rules', async () => {
   const root = await makeTempRoot('helpers');
-  await writeModule(join(root, '.rulekeeper', 'helper.mjs'), `export const files = ['**/*.md'];\n`);
+  await writeModule(join(root, '.coderuler', 'helper.mjs'), `export const files = ['**/*.md'];\n`);
   await writeModule(
-    join(root, '.rulekeeper', 'uses-helper.rule.mjs'),
-    `import { Rule, pass } from '@alex-dbs/rulekeeper';
+    join(root, '.coderuler', 'uses-helper.rule.mjs'),
+    `import { Rule, pass } from '@alex-dbs/coderuler';
 import { files } from './helper.mjs';
 
 export default class UsesHelper extends Rule {
@@ -208,8 +208,8 @@ export default class UsesHelper extends Rule {
 test('keeps additional fields and methods on a rule class', async () => {
   const root = await makeTempRoot('extra');
   await writeModule(
-    join(root, '.rulekeeper', 'extra.rule.mjs'),
-    `import { Rule, pass } from '@alex-dbs/rulekeeper';
+    join(root, '.coderuler', 'extra.rule.mjs'),
+    `import { Rule, pass } from '@alex-dbs/coderuler';
 
 export default class Extra extends Rule {
   label = 'extra';
@@ -233,8 +233,8 @@ export default class Extra extends Rule {
 test('loads a disabled rule and reports its disabled state', async () => {
   const root = await makeTempRoot('disabled');
   await writeModule(
-    join(root, '.rulekeeper', 'off.rule.mjs'),
-    `import { Rule, pass } from '@alex-dbs/rulekeeper';
+    join(root, '.coderuler', 'off.rule.mjs'),
+    `import { Rule, pass } from '@alex-dbs/coderuler';
 
 export default class Off extends Rule {
   enabled = false;
@@ -252,7 +252,7 @@ test('skips symlinked rule entries and symlinked discovery roots', async () => {
   const root = await makeTempRoot('symlink');
   const outside = join(root, 'outside');
   const realRule = await writeModule(join(outside, 'linked.rule.mjs'), plainRule('Linked'));
-  const dir = join(root, '.rulekeeper');
+  const dir = join(root, '.coderuler');
   await writeModule(join(dir, 'kept.rule.mjs'), plainRule('Kept'));
   await symlink(realRule, join(dir, 'linked.rule.mjs'));
   const nestedRule = await writeModule(
@@ -268,9 +268,9 @@ test('skips symlinked rule entries and symlinked discovery roots', async () => {
   const target = await makeTempRoot('symlink-target');
   const targetRules = join(target, 'rules');
   await writeModule(join(targetRules, 'hidden.rule.mjs'), plainRule('Hidden'));
-  await symlink(targetRules, join(symlinkedRoot, '.rulekeeper'));
+  await symlink(targetRules, join(symlinkedRoot, '.coderuler'));
   const homeRule = await writeModule(
-    join(symlinkedRoot, 'home', '.rulekeeper', 'visible.rule.mjs'),
+    join(symlinkedRoot, 'home', '.coderuler', 'visible.rule.mjs'),
     plainRule('Visible'),
   );
 
@@ -281,18 +281,18 @@ test('skips symlinked rule entries and symlinked discovery roots', async () => {
   assert.equal(await realpath(sole.ruleFile), homeRule);
 
   const symlinkOnly = await makeTempRoot('symlink-only');
-  await symlink(targetRules, join(symlinkOnly, '.rulekeeper'));
+  await symlink(targetRules, join(symlinkOnly, '.coderuler'));
   await expectReject(
     'symlinked discovery root without other rules',
     () => loaderFor(symlinkOnly).load(selectionFor(symlinkOnly)),
-    '.rulekeeper',
+    '.coderuler',
   );
 });
 
 test('skips rule modules nested under an old directory', async () => {
   const root = await makeTempRoot('old-dir');
-  await writeModule(join(root, '.rulekeeper', 'keep.rule.mjs'), plainRule('Keep'));
-  await writeModule(join(root, '.rulekeeper', 'old', 'legacy.rule.mjs'), plainRule('Legacy'));
+  await writeModule(join(root, '.coderuler', 'keep.rule.mjs'), plainRule('Keep'));
+  await writeModule(join(root, '.coderuler', 'old', 'legacy.rule.mjs'), plainRule('Legacy'));
 
   const loaded = await loaderFor(root).load(selectionFor(root));
   assert.deepStrictEqual(names(loaded), ['keep']);
@@ -300,11 +300,11 @@ test('skips rule modules nested under an old directory', async () => {
 
 test('skips reserved dependency working directories but keeps authored hidden directories', async () => {
   const root = await makeTempRoot('internal-directories');
-  const directory = join(root, '.rulekeeper');
+  const directory = join(root, '.coderuler');
   await writeModule(join(directory, 'keep.rule.mjs'), plainRule('Keep'));
   await writeModule(join(directory, '.authored', 'hidden-author.rule.mjs'), plainRule('HiddenAuthor'));
-  await writeModule(join(directory, '.rulekeeper-deps-write-custom', 'custom.rule.mjs'), plainRule('Custom'));
-  for (const internal of ['.rulekeeper-deps-stage-fixture', '.rulekeeper-sdk-fixture', 'node_modules', '.authored/.rulekeeper-deps-write']) {
+  await writeModule(join(directory, '.coderuler-deps-write-custom', 'custom.rule.mjs'), plainRule('Custom'));
+  for (const internal of ['.coderuler-deps-stage-fixture', '.coderuler-sdk-fixture', 'node_modules', '.authored/.coderuler-deps-write']) {
     await writeModule(join(directory, internal, 'hidden.rule.ts'), 'throw new Error("internal rules must not load");\n');
   }
 
@@ -313,7 +313,7 @@ test('skips reserved dependency working directories but keeps authored hidden di
 
 test('discovery ignores an active package audit and a mutex removed after root enumeration', async context => {
   const root = await makeTempRoot('concurrent-install-discovery');
-  const directory = join(root, '.rulekeeper');
+  const directory = join(root, '.coderuler');
   await writeModule(join(directory, 'authored.rule.mjs'), plainRule('Authored'));
   await writeModule(join(directory, '.authored', 'hidden-author.rule.mjs'), plainRule('HiddenAuthor'));
   const fixture = createDependencyFixture(join(root, 'registry'));
@@ -329,7 +329,7 @@ test('discovery ignores an active package audit and a mutex removed after root e
   const intercepted = context.mock.method(fsPromises, 'readdir', (async (...args: Parameters<typeof readdir>) => {
     const entries = await readdir(...args);
     const path = String(args[0]);
-    if (auditedDirectory === undefined && dirname(path).startsWith(join(directory, '.rulekeeper-deps-stage-'))
+    if (auditedDirectory === undefined && dirname(path).startsWith(join(directory, '.coderuler-deps-stage-'))
       && path.startsWith(join(dirname(path), '.audit-'))
       && entries.some(entry => String(entry.name) === 'hidden.rule.ts')) {
       // Pacote has finished writing the real artifact; keep its audit directory alive for discovery.
@@ -339,8 +339,8 @@ test('discovery ignores an active package audit and a mutex removed after root e
     }
     if (discoveryStarted && !rootEnumerated && path === directory) {
       rootEnumerated = true;
-      assert.ok(entries.some(entry => String(entry.name).startsWith('.rulekeeper-deps-stage-')));
-      assert.ok(entries.some(entry => String(entry.name) === '.rulekeeper-deps-write'));
+      assert.ok(entries.some(entry => String(entry.name).startsWith('.coderuler-deps-stage-')));
+      assert.ok(entries.some(entry => String(entry.name) === '.coderuler-deps-write'));
       assert.ok(auditedDirectory);
       assert.ok((await stat(join(auditedDirectory, 'hidden.rule.ts'))).isFile());
       // Return the actual enumeration only after these transient entries have disappeared.
@@ -348,7 +348,7 @@ test('discovery ignores an active package audit and a mutex removed after root e
       releaseAudit.resolve();
       assert.ok(installing);
       await installing;
-      await assert.rejects(stat(join(directory, '.rulekeeper-deps-write')), { code: 'ENOENT' });
+      await assert.rejects(stat(join(directory, '.coderuler-deps-write')), { code: 'ENOENT' });
     }
     return entries;
   }) as typeof readdir);
@@ -379,12 +379,12 @@ test('discovery ignores an active package audit and a mutex removed after root e
 test('rejects a discovery root that lives inside an archived old directory', async () => {
   const base = await makeTempRoot('discovery-under-old');
   const root = join(base, 'old', 'subproject');
-  const marker = join(root, '.rulekeeper', 'imported.marker');
+  const marker = join(root, '.coderuler', 'imported.marker');
   await writeModule(
-    join(root, '.rulekeeper', 'legacy.rule.mjs'),
+    join(root, '.coderuler', 'legacy.rule.mjs'),
     `import { writeFileSync } from 'node:fs';
 
-import { Rule, pass } from '@alex-dbs/rulekeeper';
+import { Rule, pass } from '@alex-dbs/coderuler';
 
 writeFileSync(new URL('./imported.marker', import.meta.url), 'imported');
 
@@ -412,30 +412,30 @@ test('reports a missing or malformed discovery root instead of a clean run', asy
   await expectReject(
     'no rules anywhere',
     () => loaderFor(empty).load(selectionFor(empty)),
-    '.rulekeeper',
+    '.coderuler',
   );
 
   const rootFile = await makeTempRoot('root-file');
-  await writeFile(join(rootFile, '.rulekeeper'), 'not a directory');
+  await writeFile(join(rootFile, '.coderuler'), 'not a directory');
   await expectReject(
     'discovery root is a file',
     () => loaderFor(rootFile).load(selectionFor(rootFile)),
-    '.rulekeeper',
+    '.coderuler',
   );
 
   const helpersOnly = await makeTempRoot('helpers-only');
-  await writeModule(join(helpersOnly, '.rulekeeper', 'helper.mjs'), `export const value = 1;\n`);
+  await writeModule(join(helpersOnly, '.coderuler', 'helper.mjs'), `export const value = 1;\n`);
   await expectReject(
     'helpers are not rules',
     () => loaderFor(helpersOnly).load(selectionFor(helpersOnly)),
-    '.rulekeeper',
+    '.coderuler',
   );
 });
 
 test('loads one explicit rule file and ignores the other discovered rules', async () => {
   const root = await makeTempRoot('explicit-file');
-  await writeModule(join(root, '.rulekeeper', 'alpha.rule.mjs'), plainRule('Alpha'));
-  const beta = await writeModule(join(root, '.rulekeeper', 'beta.rule.mjs'), plainRule('Beta'));
+  await writeModule(join(root, '.coderuler', 'alpha.rule.mjs'), plainRule('Alpha'));
+  const beta = await writeModule(join(root, '.coderuler', 'beta.rule.mjs'), plainRule('Beta'));
 
   const loaded = await loaderFor(root).load(selectionFor(root, { explicit: beta }));
   assert.deepStrictEqual(names(loaded), ['beta']);
@@ -446,7 +446,7 @@ test('loads one explicit rule file and ignores the other discovered rules', asyn
 
 test('scans an explicit directory recursively instead of discovery', async () => {
   const root = await makeTempRoot('explicit-dir');
-  await writeModule(join(root, '.rulekeeper', 'ignored.rule.mjs'), plainRule('Ignored'));
+  await writeModule(join(root, '.coderuler', 'ignored.rule.mjs'), plainRule('Ignored'));
   const rules = join(root, 'rules');
   await writeModule(join(rules, 'a.rule.mjs'), plainRule('A'));
   await writeModule(join(rules, 'nested', 'b.rule.mjs'), plainRule('B'));
@@ -471,7 +471,7 @@ test('rejects explicit paths that are missing, unsupported, symlinked, or archiv
   const root = await makeTempRoot('explicit-rejects');
   await writeModule(join(root, 'notes.mjs'), plainRule('Notes'));
   const target = await writeModule(join(root, 'elsewhere', 'real.rule.mjs'), plainRule('Real'));
-  const linkPath = join(root, '.rulekeeper', 'linked.rule.mjs');
+  const linkPath = join(root, '.coderuler', 'linked.rule.mjs');
   await mkdir(dirname(linkPath), { recursive: true });
   await symlink(target, linkPath);
   const archived = await writeModule(join(root, 'old', 'legacy.rule.mjs'), plainRule('Legacy'));
@@ -507,8 +507,8 @@ test('rejects explicit paths that are missing, unsupported, symlinked, or archiv
 
 test('resolves a rule by exact name across the working and home roots', async () => {
   const root = await makeTempRoot('by-name');
-  await writeModule(join(root, '.rulekeeper', 'alpha.rule.mjs'), plainRule('Alpha'));
-  await writeModule(join(root, 'home', '.rulekeeper', 'home-only.rule.mjs'), plainRule('HomeOnly'));
+  await writeModule(join(root, '.coderuler', 'alpha.rule.mjs'), plainRule('Alpha'));
+  await writeModule(join(root, 'home', '.coderuler', 'home-only.rule.mjs'), plainRule('HomeOnly'));
   const loader = loaderFor(root);
 
   assert.deepStrictEqual(names(await loader.load(selectionFor(root, { name: 'alpha' }))), ['alpha']);
@@ -524,7 +524,7 @@ test('resolves a rule by exact name across the working and home roots', async ()
 
 test('rejects a selection that mixes an explicit path with a rule name', async () => {
   const root = await makeTempRoot('mixed-selection');
-  const file = await writeModule(join(root, '.rulekeeper', 'alpha.rule.mjs'), plainRule('Alpha'));
+  const file = await writeModule(join(root, '.coderuler', 'alpha.rule.mjs'), plainRule('Alpha'));
 
   await expectReject('mixed selection', () =>
     loaderFor(root).load(selectionFor(root, { explicit: file, name: 'alpha' })),
@@ -533,10 +533,10 @@ test('rejects a selection that mixes an explicit path with a rule name', async (
 
 test('validates every module before returning any loaded rule', async () => {
   const root = await makeTempRoot('validate-all');
-  await writeModule(join(root, '.rulekeeper', 'a-good.rule.mjs'), plainRule('Good'));
+  await writeModule(join(root, '.coderuler', 'a-good.rule.mjs'), plainRule('Good'));
   const bad = await writeModule(
-    join(root, '.rulekeeper', 'b-throwing.rule.mjs'),
-    `import { Rule, pass } from '@alex-dbs/rulekeeper';
+    join(root, '.coderuler', 'b-throwing.rule.mjs'),
+    `import { Rule, pass } from '@alex-dbs/coderuler';
 
 export default class Throwing extends Rule {
   constructor() {
@@ -559,7 +559,7 @@ export default class Throwing extends Rule {
 
 test('instantiates a fresh rule object per load', async () => {
   const root = await makeTempRoot('fresh');
-  await writeModule(join(root, '.rulekeeper', 'alpha.rule.mjs'), plainRule('Alpha'));
+  await writeModule(join(root, '.coderuler', 'alpha.rule.mjs'), plainRule('Alpha'));
   const loader = loaderFor(root);
 
   const first = await loader.load(selectionFor(root));
@@ -581,7 +581,7 @@ interface MalformedCase {
 }
 
 function ruleWith(className: string, members: string): string {
-  return `import { Rule, pass } from '@alex-dbs/rulekeeper';
+  return `import { Rule, pass } from '@alex-dbs/coderuler';
 
 export default class ${className} extends Rule {
 ${members}
@@ -595,7 +595,7 @@ const malformedCases: readonly MalformedCase[] = [
   {
     label: 'default instance',
     file: 'instance.rule.mjs',
-    source: `import { Rule, pass } from '@alex-dbs/rulekeeper';
+    source: `import { Rule, pass } from '@alex-dbs/coderuler';
 
 class Instance extends Rule {
   check = async () => pass();
@@ -636,7 +636,7 @@ export default Plain;
   {
     label: 'missing check',
     file: 'no-check.rule.mjs',
-    source: `import { Rule } from '@alex-dbs/rulekeeper';
+    source: `import { Rule } from '@alex-dbs/coderuler';
 
 export default class NoCheck extends Rule {}
 `,
@@ -686,7 +686,7 @@ export default class NoCheck extends Rule {}
   {
     label: 'syntax error',
     file: 'syntax.rule.mjs',
-    source: `import { Rule } from '@alex-dbs/rulekeeper';
+    source: `import { Rule } from '@alex-dbs/coderuler';
 
 export default class Broken extends Rule {
   check = async () => ({ status: 'pass' });
@@ -698,7 +698,7 @@ test('rejects malformed rule modules with their module path', async () => {
   for (const malformed of malformedCases) {
     const label = malformed.label;
     const root = await makeTempRoot(`bad-${malformed.file.replace(/[^a-zA-Z0-9]+/g, '-')}`);
-    const file = await writeModule(join(root, '.rulekeeper', malformed.file), malformed.source);
+    const file = await writeModule(join(root, '.coderuler', malformed.file), malformed.source);
     const fragments = malformed.fragment === undefined ? [file] : [file, malformed.fragment];
     await expectReject(label, () => loaderFor(root).load(selectionFor(root)), ...fragments);
   }
@@ -707,15 +707,15 @@ test('rejects malformed rule modules with their module path', async () => {
 test('accepts every valid grouping form', async () => {
   const root = await makeTempRoot('groupings');
   await writeModule(
-    join(root, '.rulekeeper', 'groupings.rule.mjs'),
+    join(root, '.coderuler', 'groupings.rule.mjs'),
     ruleWith('Groupings', `  group = { by: 'folder', level: 0 };`),
   );
   await writeModule(
-    join(root, '.rulekeeper', 'clamped.rule.mjs'),
+    join(root, '.coderuler', 'clamped.rule.mjs'),
     ruleWith('Clamped', `  group = { by: 'folder', level: -2 };`),
   );
   await writeModule(
-    join(root, '.rulekeeper', 'project.rule.mjs'),
+    join(root, '.coderuler', 'project.rule.mjs'),
     ruleWith('ProjectWide', `  group = 'project';`),
   );
 
@@ -735,7 +735,7 @@ test('rejects an explicit rule reached through a directory symlink into the arch
     join(root, 'old', 'legacy.rule.mjs'),
     `import { writeFileSync } from 'node:fs';
 
-import { Rule, pass } from '@alex-dbs/rulekeeper';
+import { Rule, pass } from '@alex-dbs/coderuler';
 
 writeFileSync(new URL('./imported.marker', import.meta.url), 'imported');
 

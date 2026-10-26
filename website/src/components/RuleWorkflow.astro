@@ -85,7 +85,7 @@ const checks = [
     ],
   },
 ].map(check => {
-  const opening = `import { ${check.imports} } from '@alex-dbs/rulekeeper';\n\nexport default class ${check.name} extends Rule {\n`;
+  const opening = `import { ${check.imports} } from '@alex-dbs/coderuler';\n\nexport default class ${check.name} extends Rule {\n`;
   const lineStages: Record<number, number> = {};
   let line = opening.split('\n').length;
   check.sections.forEach((section, stage) => {

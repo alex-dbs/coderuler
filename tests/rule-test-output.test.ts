@@ -7,10 +7,10 @@ import { stripVTControlCharacters } from 'node:util';
 
 import { CLI, createSandbox, runCli, startDecisionFixture, writeFile } from './support.ts';
 
-const sandbox = createSandbox('rulekeeper-test-output-');
+const sandbox = createSandbox('coderuler-test-output-');
 after(() => sandbox.cleanup());
 
-const RULE = `import { Rule, pass, test, violation } from '@alex-dbs/rulekeeper';
+const RULE = `import { Rule, pass, test, violation } from '@alex-dbs/coderuler';
 export default class Example extends Rule {
   files = ['inputs/*.txt'];
   check = async subject => {
@@ -47,7 +47,7 @@ test('test prints completed results while the next case is still running', { tim
   });
   const address = server.address();
   assert.ok(address !== null && typeof address === 'object');
-  writeFile(join(target.cwd, '.rulekeeper/example.rule.ts'), `${RULE}
+  writeFile(join(target.cwd, '.coderuler/example.rule.ts'), `${RULE}
 export const tests = [
   test('completed first').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
   test('blocked second').withFiles({ 'inputs/one.txt': 'WAIT http://127.0.0.1:${address.port}' }).passes(),
@@ -89,7 +89,7 @@ export const tests = [
 
 test('test keeps completed results visible when a later case throws', async () => {
   const target = sandbox.isolated('later-error');
-  writeFile(join(target.cwd, '.rulekeeper/example.rule.ts'), `${RULE}
+  writeFile(join(target.cwd, '.coderuler/example.rule.ts'), `${RULE}
 export const tests = [
   test('completed before error').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
   test('exploding later case').withFiles({ 'inputs/one.txt': 'THROW' }).passes(),
@@ -103,7 +103,7 @@ export const tests = [
 
 test('test colors pass/fail results and totals without animating redirected output', async () => {
   const target = sandbox.isolated('colors');
-  writeFile(join(target.cwd, '.rulekeeper/example.rule.ts'), `${RULE}
+  writeFile(join(target.cwd, '.coderuler/example.rule.ts'), `${RULE}
 export const tests = [
   test('passing assertion').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
   test('failing assertion').withFiles({ 'inputs/one.txt': 'BAD' }).passes(),
@@ -128,12 +128,12 @@ export const tests = [
 
 test('test groups cases under their rule and ends every rule with a final branch', async () => {
   const target = sandbox.isolated('tree');
-  writeFile(join(target.cwd, '.rulekeeper/alpha.rule.ts'), `${RULE}
+  writeFile(join(target.cwd, '.coderuler/alpha.rule.ts'), `${RULE}
 export const tests = [
   test('first child').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
   test('last child').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
 ];`);
-  writeFile(join(target.cwd, '.rulekeeper/beta.rule.ts'), `${RULE}
+  writeFile(join(target.cwd, '.coderuler/beta.rule.ts'), `${RULE}
 export const tests = [test('only child').withFiles({ 'inputs/one.txt': 'GOOD' }).passes()];`);
   const result = await runCli(['test'], target);
   assert.equal(result.status, 0, result.stderr);
@@ -149,7 +149,7 @@ export const tests = [test('only child').withFiles({ 'inputs/one.txt': 'GOOD' })
 
 test('test redacts short credentials without corrupting colored headings or failure labels', async () => {
   const target = sandbox.isolated('short-secret');
-  writeFile(join(target.cwd, '.rulekeeper/rule-1.rule.ts'), `${RULE}
+  writeFile(join(target.cwd, '.coderuler/rule-1.rule.ts'), `${RULE}
 export const tests = [test('case-1').withFiles({ 'inputs/one.txt': 'BAD' }).passes()];`);
   const result = await runCli(['test'], target, {
     TYPESAFE_API_KEY: '1',
@@ -170,7 +170,7 @@ export const tests = [test('case-1').withFiles({ 'inputs/one.txt': 'BAD' }).pass
 
 test('test --failures-only prints just the summary for passing cases and includes their duration', async () => {
   const target = sandbox.isolated('failures-only-passes');
-  writeFile(join(target.cwd, '.rulekeeper/all-pass.rule.ts'), `${RULE}
+  writeFile(join(target.cwd, '.coderuler/all-pass.rule.ts'), `${RULE}
 export const tests = [
   test('hidden first pass').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
   test('hidden second pass').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
@@ -186,18 +186,18 @@ export const tests = [
 
 test('test --failures-only hides passing rules and closes failure trees before trailing passes', async () => {
   const target = sandbox.isolated('failures-only-trees');
-  writeFile(join(target.cwd, '.rulekeeper/alpha.rule.ts'), `${RULE}
+  writeFile(join(target.cwd, '.coderuler/alpha.rule.ts'), `${RULE}
 export const tests = [
   test('all-pass rule case').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
 ];`);
-  writeFile(join(target.cwd, '.rulekeeper/beta.rule.ts'), `${RULE}
+  writeFile(join(target.cwd, '.coderuler/beta.rule.ts'), `${RULE}
 export const tests = [
   test('first mismatch').withFiles({ 'inputs/one.txt': 'BAD' }).passes(),
   test('hidden middle pass').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
   test('last mismatch').withFiles({ 'inputs/one.txt': 'GOOD' }).violates(),
   test('hidden trailing pass').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
 ];`);
-  writeFile(join(target.cwd, '.rulekeeper/gamma.rule.ts'), `${RULE}
+  writeFile(join(target.cwd, '.coderuler/gamma.rule.ts'), `${RULE}
 export const tests = [
   test('only mismatch').withFiles({ 'inputs/one.txt': 'BAD' }).passes(),
   test('another hidden trailing pass').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
@@ -217,7 +217,7 @@ export const tests = [
 
 test('test --failures-only flushes completed failures and totals before reporting a runtime error', async () => {
   const target = sandbox.isolated('failures-only-error');
-  writeFile(join(target.cwd, '.rulekeeper/example.rule.ts'), `${RULE}
+  writeFile(join(target.cwd, '.coderuler/example.rule.ts'), `${RULE}
 export const tests = [
   test('hidden completed pass').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
   test('completed mismatch').withFiles({ 'inputs/one.txt': 'BAD' }).passes(),
@@ -239,7 +239,7 @@ export const tests = [
 
 test('test --failures-only displays timeouts as failures and continues counting later passes', { timeout: 15_000 }, async context => {
   const target = sandbox.isolated('failures-only-timeout');
-  writeFile(join(target.cwd, '.rulekeeper/deadline.rule.ts'), `import { Rule, pass, test } from '@alex-dbs/rulekeeper';
+  writeFile(join(target.cwd, '.coderuler/deadline.rule.ts'), `import { Rule, pass, test } from '@alex-dbs/coderuler';
 export default class Deadline extends Rule {
   files = ['inputs/*.txt'];
   check = subject => {
@@ -271,7 +271,7 @@ test('test --failures-only keeps AI authorization and provider decisions unchang
   const fixture = await startDecisionFixture();
   context.after(() => fixture.close());
   fixture.answer = (_request, index) => ({ probability: index === 0 ? 0.1 : 0.9 });
-  const path = writeFile(join(target.cwd, '.rulekeeper/mixed.rule.ts'), `import { Rule, pass, test } from '@alex-dbs/rulekeeper';
+  const path = writeFile(join(target.cwd, '.coderuler/mixed.rule.ts'), `import { Rule, pass, test } from '@alex-dbs/coderuler';
 export default class Mixed extends Rule {
   files = ['inputs/*.txt'];
   check = (subject, context) => subject.source === 'LOCAL' ? pass() : context.ai({ rule: 'The input must be good.' });

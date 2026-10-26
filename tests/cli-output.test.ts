@@ -23,22 +23,22 @@ import {
   withLoadOverrides,
 } from './support.ts';
 
-const sandbox = createSandbox('rulekeeper-cli-output-');
+const sandbox = createSandbox('coderuler-cli-output-');
 after(() => sandbox.cleanup());
 
-const MIXED_RULE = `import { Rule, pass, violation } from '@alex-dbs/rulekeeper';
+const MIXED_RULE = `import { Rule, pass, violation } from '@alex-dbs/coderuler';
 export default class Mixed extends Rule {
   files = ['items/*.txt'];
   check = subject => subject.source.includes('BAD') ? violation('custom rejection') : pass();
 }
 `;
-const CLEAN_RULE = `import { Rule, pass } from '@alex-dbs/rulekeeper';
+const CLEAN_RULE = `import { Rule, pass } from '@alex-dbs/coderuler';
 export default class Clean extends Rule {
   files = ['src/clean.txt'];
   check = pass;
 }
 `;
-const SKIPPED_RULE = `import { Rule, pass } from '@alex-dbs/rulekeeper';
+const SKIPPED_RULE = `import { Rule, pass } from '@alex-dbs/coderuler';
 export default class Skipped extends Rule {
   enabled = false;
   files = ['src/clean.txt'];
@@ -48,9 +48,9 @@ export default class Skipped extends Rule {
 
 function mixedProject(): Sandbox {
   const target = sandbox.isolated('mixed');
-  writeFile(join(target.cwd, '.rulekeeper/mixed.rule.ts'), MIXED_RULE);
-  writeFile(join(target.cwd, '.rulekeeper/clean.rule.ts'), CLEAN_RULE);
-  writeFile(join(target.cwd, '.rulekeeper/skipped.rule.ts'), SKIPPED_RULE);
+  writeFile(join(target.cwd, '.coderuler/mixed.rule.ts'), MIXED_RULE);
+  writeFile(join(target.cwd, '.coderuler/clean.rule.ts'), CLEAN_RULE);
+  writeFile(join(target.cwd, '.coderuler/skipped.rule.ts'), SKIPPED_RULE);
   writeFile(join(target.cwd, 'src/clean.txt'), 'CLEAN SOURCE\n');
   writeFile(join(target.cwd, 'items/bad.txt'), 'BAD SOURCE\n');
   for (let index = 1; index <= 12; index++) {
@@ -81,7 +81,7 @@ async function runCommand(argv: readonly string[], target: Sandbox, overrides: N
   const env = { ...target.env, ...overrides };
   const loader = createRuleLoader({
     home: target.home,
-    dependencies: createRuleDependencyManager({ cacheRoot: join(target.home, '.cache', 'rulekeeper', 'dependencies') }),
+    dependencies: createRuleDependencyManager({ cacheRoot: join(target.home, '.cache', 'coderuler', 'dependencies') }),
   });
   const services = withLoadOverrides({
     ...createServices(target.cwd, env),
@@ -114,9 +114,9 @@ test('real CLI scheduling honors debug concurrency and preserves lexical report 
       const target = sandbox.isolated(row.name);
       for (const filepath of expectedFilepaths) writeFile(join(target.cwd, filepath), 'GOOD');
       const journal = join(target.cwd, 'scheduling.journal');
-      writeFile(join(target.cwd, '.rulekeeper/scheduling.rule.ts'), `import { appendFileSync } from 'node:fs';
+      writeFile(join(target.cwd, '.coderuler/scheduling.rule.ts'), `import { appendFileSync } from 'node:fs';
 import { setImmediate } from 'node:timers/promises';
-import { Rule, pass } from '@alex-dbs/rulekeeper';
+import { Rule, pass } from '@alex-dbs/coderuler';
 const journal = ${JSON.stringify(journal)};
 export default class Scheduling extends Rule {
   files = ['inputs/*.txt'];
@@ -203,7 +203,7 @@ const ALL_GOLDEN = [
 test('machine report parsing preserves optional thresholds and rejects invalid threshold metadata', () => {
   const report = (result: string): string => JSON.stringify({
     name: 'threshold',
-    ruleFile: join(sandbox.root, '.rulekeeper/threshold.rule.ts'),
+    ruleFile: join(sandbox.root, '.coderuler/threshold.rule.ts'),
     status: 'pass',
     durationMs: 0,
     evaluations: [{
@@ -253,12 +253,12 @@ test('real machine outputs filter passing evaluations inside a mixed rule by def
 test('real CLI machine records retain independent active rule times rather than total or divided run time', async () => {
   const target = sandbox.isolated('independent-rule-times');
   writeFile(join(target.cwd, 'src/clean.txt'), 'CLEAN SOURCE\n');
-  writeFile(join(target.cwd, '.rulekeeper/timing-clock.mjs'), `let elapsed = 0;
+  writeFile(join(target.cwd, '.coderuler/timing-clock.mjs'), `let elapsed = 0;
 Object.defineProperty(performance, 'now', { configurable: true, value: () => elapsed });
 export function advance(durationMs) { elapsed += durationMs; }
 `);
   for (const [name, selectionMs, evaluationMs] of [['first', 7, 11], ['second', 19, 23]] as const) {
-    writeFile(join(target.cwd, '.rulekeeper', `${name}.rule.ts`), `import { Rule, pass } from '@alex-dbs/rulekeeper';
+    writeFile(join(target.cwd, '.coderuler', `${name}.rule.ts`), `import { Rule, pass } from '@alex-dbs/coderuler';
 import { advance } from './timing-clock.mjs';
 export default class Timed extends Rule {
   files = ['src/clean.txt'];
@@ -408,10 +408,10 @@ test('clean, all-skipped and no-subject real runs retain rule durations with out
   for (const kind of ['clean', 'skipped', 'empty'] as const) {
     const target = sandbox.isolated(kind);
     if (kind !== 'empty') {
-      writeFile(join(target.cwd, '.rulekeeper', `${kind}.rule.ts`), kind === 'clean' ? CLEAN_RULE : SKIPPED_RULE);
+      writeFile(join(target.cwd, '.coderuler', `${kind}.rule.ts`), kind === 'clean' ? CLEAN_RULE : SKIPPED_RULE);
       writeFile(join(target.cwd, 'src/clean.txt'), 'CLEAN SOURCE\n');
     } else {
-      writeFile(join(target.cwd, '.rulekeeper/empty.rule.ts'), CLEAN_RULE);
+      writeFile(join(target.cwd, '.coderuler/empty.rule.ts'), CLEAN_RULE);
     }
     for (const mode of ['human', '--json', '--jsonl'] as const) {
       for (const outputAll of [false, true]) {

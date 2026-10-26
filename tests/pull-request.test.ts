@@ -7,7 +7,7 @@ import { createPullRequestCheckout, type PullRequestCheckout } from '../dist/ada
 import { BASE_MESSAGE, commit, createPrFixture, git, interceptGithub, PR_NUMBER, PR_REPOSITORY, PR_TOKEN, PR_URL, type PrFixture } from './pr-support.ts';
 import { createSandbox, writeFile, type Sandbox } from './support.ts';
 
-const sandboxes = createSandbox('rulekeeper-pull-request-');
+const sandboxes = createSandbox('coderuler-pull-request-');
 after(() => sandboxes.cleanup());
 
 function fixture(context: TestContext, label: string): PrFixture {
@@ -28,7 +28,7 @@ function prepare(target: PrFixture, cwd = target.cwd, env: NodeJS.ProcessEnv = t
 }
 
 function assertClean(target: PrFixture): void {
-  assert.deepEqual(readdirSync(target.temporary).filter(name => name.startsWith('rulekeeper-pr-')), [], 'the entire allocated workspace must be removed');
+  assert.deepEqual(readdirSync(target.temporary).filter(name => name.startsWith('coderuler-pr-')), [], 'the entire allocated workspace must be removed');
 }
 
 async function checkout(context: TestContext, target: PrFixture, selector = '42', base?: string): Promise<PullRequestCheckout> {
@@ -57,7 +57,7 @@ function snapshot(target: PrFixture) {
 
 function cleanCaller(target: PrFixture): void {
   git(target, 'reset', '--hard', 'HEAD');
-  rmSync(join(target.cwd, '.rulekeeper/caller-only.rule.ts'));
+  rmSync(join(target.cwd, '.coderuler/caller-only.rule.ts'));
 }
 
 test('numeric SSH origin materializes complete committed trees and only merge-base changes', async context => {
@@ -67,7 +67,7 @@ test('numeric SSH origin materializes complete committed trees and only merge-ba
   const result = await checkout(context, target);
   assert.deepEqual(result.pullRequest, { repository: PR_REPOSITORY, number: PR_NUMBER, head: target.head });
   assert.equal(dirname(result.root), dirname(result.rulesRoot));
-  assert.equal(dirname(result.root).startsWith(join(target.temporary, 'rulekeeper-pr-')), true);
+  assert.equal(dirname(result.root).startsWith(join(target.temporary, 'coderuler-pr-')), true);
   assert.equal(lstatSync(join(result.root, '.git')).isDirectory(), true, 'head must be the main repository, not a linked worktree');
   assert.equal(lstatSync(join(result.rulesRoot, '.git')).isFile(), true);
   assert.equal(git(at(target, result.root), 'remote', 'get-url', '--push', 'origin'), target.remote);
@@ -80,8 +80,8 @@ test('numeric SSH origin materializes complete committed trees and only merge-ba
   assert.match(readFileSync(join(result.root, 'policy/helper.ts'), 'utf8'), /UNTRUSTED PR-head helper/);
   assert.match(readFileSync(join(result.rulesRoot, 'policy/helper.ts'), 'utf8'), new RegExp(BASE_MESSAGE));
   assert.equal(readFileSync(join(result.rulesRoot, 'src/base-only.txt'), 'utf8'), 'BAD added only on main\n');
-  assert.equal(existsSync(join(result.rulesRoot, '.rulekeeper/head-only.rule.ts')), false);
-  assert.equal(existsSync(join(result.rulesRoot, '.rulekeeper/caller-only.rule.ts')), false);
+  assert.equal(existsSync(join(result.rulesRoot, '.coderuler/head-only.rule.ts')), false);
+  assert.equal(existsSync(join(result.rulesRoot, '.coderuler/caller-only.rule.ts')), false);
   assert.deepEqual([...result.changedFiles].sort(), ['policy/helper.ts', 'src/changed.txt']);
   assert.deepEqual(requests.map(request => [request.method, request.url, request.authorization]), [
     ['GET', `/repos/${PR_REPOSITORY}/pulls/42`, `Bearer ${PR_TOKEN}`],
@@ -132,7 +132,7 @@ test('explicit base selects the branch tip policy and its distinct merge-base, n
   const main = await checkout(context, target);
   const selected = await checkout(context, target, '42', 'release');
   assert.equal(git(at(target, selected.rulesRoot), 'rev-parse', 'HEAD'), release);
-  assert.match(readFileSync(join(selected.rulesRoot, '.rulekeeper/base.rule.ts'), 'utf8'), /Committed release policy/);
+  assert.match(readFileSync(join(selected.rulesRoot, '.coderuler/base.rule.ts'), 'utf8'), /Committed release policy/);
   assert.deepEqual([...main.changedFiles].sort(), ['policy/helper.ts', 'src/changed.txt', 'src/release-shared.txt']);
   assert.deepEqual([...selected.changedFiles].sort(), ['policy/helper.ts', 'src/changed.txt']);
 });
@@ -220,7 +220,7 @@ test('missing PR head and unrelated histories fail and clean their temporary rep
     await interceptGithub(child, target);
     const orphan = sandboxes.isolated('orphan', target.env);
     git(orphan, 'init', '--initial-branch=orphan');
-    git(orphan, 'config', 'user.name', 'Rulekeeper tests');
+    git(orphan, 'config', 'user.name', 'CodeRuler tests');
     git(orphan, 'config', 'user.email', 'tests@example.invalid');
     git(orphan, 'config', 'commit.gpgsign', 'false');
     writeFile(join(orphan.cwd, 'src/unrelated.txt'), 'unrelated\n');
@@ -334,7 +334,7 @@ test('base and invocation-local core.worktree config are checked before checkout
     const globalConfig = join(target.home, '.gitconfig');
     const baseConfig = join(target.home, 'base-location.gitconfig');
     writeFile(baseConfig, `[core]\n\tworktree = ${JSON.stringify(target.cwd)}\n`);
-    writeFile(globalConfig, `${readFileSync(globalConfig, 'utf8')}\n[includeIf "gitdir:**/rulekeeper-pr-*/head/.git/worktrees/base"]\n\tpath = ${JSON.stringify(baseConfig)}\n`);
+    writeFile(globalConfig, `${readFileSync(globalConfig, 'utf8')}\n[includeIf "gitdir:**/coderuler-pr-*/head/.git/worktrees/base"]\n\tpath = ${JSON.stringify(baseConfig)}\n`);
     await assert.rejects(prepare(target)('42'), /core\.worktree.*unset/);
     assertClean(target);
     assert.deepEqual(snapshot(target), before);

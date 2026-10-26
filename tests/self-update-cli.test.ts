@@ -9,7 +9,7 @@ import { test } from 'node:test';
 
 import { createSandbox, isolatedEnv, ROOT, runCli } from './support.ts';
 
-const PACKAGE = '@alex-dbs/rulekeeper';
+const PACKAGE = '@alex-dbs/coderuler';
 const OLD_VERSION = '71.2.3';
 const NEW_VERSION = '72.3.4';
 
@@ -52,11 +52,11 @@ function globalRoot(prefix: string): string {
 }
 
 function installedPackage(prefix: string): string {
-  return join(globalRoot(prefix), '@alex-dbs', 'rulekeeper');
+  return join(globalRoot(prefix), '@alex-dbs', 'coderuler');
 }
 
 test('installed CLI versions and global self-updates stay within the active npm installation', { timeout: 180_000 }, async t => {
-  const root = await realpath(await mkdtemp(join(tmpdir(), 'rulekeeper-self-update-')));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'coderuler-self-update-')));
   t.after(() => rm(root, { recursive: true, force: true }));
   const home = join(root, 'home');
   const app = join(root, 'app');
@@ -84,7 +84,7 @@ test('installed CLI versions and global self-updates stay within the active npm 
   const npm = await npmCli();
   const pack = async (version: string): Promise<string> => {
     await writeFile(join(fixture, 'package.json'), JSON.stringify({
-      name: PACKAGE, version, type: 'module', bin: { rulekeeper: 'dist/cli.js' }, files: ['dist'],
+      name: PACKAGE, version, type: 'module', bin: { coderuler: 'dist/cli.js' }, files: ['dist'],
     }));
     const result = await run(process.execPath, [npm, 'pack', '--json', '--ignore-scripts'], fixture, env);
     assert.equal(result.status, 0, result.stderr);
@@ -103,7 +103,7 @@ test('installed CLI versions and global self-updates stay within the active npm 
       response.end(JSON.stringify({ error: 'self-update fixture forbids installation' }));
       return;
     }
-    if (request.url === '/rulekeeper.tgz') {
+    if (request.url === '/coderuler.tgz') {
       response.writeHead(200, { 'content-type': 'application/octet-stream' });
       response.end(newTarball);
       return;
@@ -114,9 +114,9 @@ test('installed CLI versions and global self-updates stay within the active npm 
         name: PACKAGE,
         'dist-tags': { latest: NEW_VERSION },
         versions: { [NEW_VERSION]: {
-          name: PACKAGE, version: NEW_VERSION, type: 'module', bin: { rulekeeper: 'dist/cli.js' },
+          name: PACKAGE, version: NEW_VERSION, type: 'module', bin: { coderuler: 'dist/cli.js' },
           dist: {
-            tarball: `${registry}/rulekeeper.tgz`,
+            tarball: `${registry}/coderuler.tgz`,
             integrity: `sha512-${createHash('sha512').update(newTarball).digest('base64')}`,
           },
         } },
@@ -159,8 +159,8 @@ test('installed CLI versions and global self-updates stay within the active npm 
   };
 
   await t.test('version reads installed metadata without npm or rules, including -V', async t => {
-    await mkdir(join(app, '.rulekeeper'));
-    await writeFile(join(app, '.rulekeeper', 'broken.ts'), 'throw new Error("rules must not load");');
+    await mkdir(join(app, '.coderuler'));
+    await writeFile(join(app, '.coderuler', 'broken.ts'), 'throw new Error("rules must not load");');
     await rm(join(app, '.env'));
     await mkdir(join(app, '.env'));
     t.after(() => rm(join(app, '.env'), { recursive: true, force: true }));
@@ -171,7 +171,7 @@ test('installed CLI versions and global self-updates stay within the active npm 
   });
 
   await t.test('local and inactive-global copies refuse without changing either global copy', async () => {
-    const local = join(app, 'node_modules', '@alex-dbs', 'rulekeeper');
+    const local = join(app, 'node_modules', '@alex-dbs', 'coderuler');
     await mkdir(dirname(local), { recursive: true });
     await cp(fixture, local, { recursive: true, filter: source => !source.endsWith('.tgz') });
     const manifest = JSON.parse(await readFile(join(local, 'package.json'), 'utf8')) as { version: string };
@@ -180,14 +180,14 @@ test('installed CLI versions and global self-updates stay within the active npm 
     await symlink(join(ROOT, 'node_modules'), join(local, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
     const result = await cli(local, ['update']);
     assert.equal(result.status, 2, result.stderr);
-    assert.match(result.stderr, /npm install --save-dev @alex-dbs\/rulekeeper@latest/);
+    assert.match(result.stderr, /npm install --save-dev @alex-dbs\/coderuler@latest/);
     const linkedPrefix = join(root, 'linked-prefix');
     const linkedPackage = installedPackage(linkedPrefix);
     await mkdir(dirname(linkedPackage), { recursive: true });
     await symlink(local, linkedPackage, process.platform === 'win32' ? 'junction' : 'dir');
     const linked = await cli(local, ['update'], { npm_config_prefix: linkedPrefix });
     assert.equal(linked.status, 2, linked.stderr);
-    assert.match(linked.stderr, /npm install --save-dev @alex-dbs\/rulekeeper@latest/);
+    assert.match(linked.stderr, /npm install --save-dev @alex-dbs\/coderuler@latest/);
     const inactive = await cli(installedPackage(other), ['update']);
     assert.equal(inactive.status, 2, inactive.stderr);
     assert.match(inactive.stderr, /global|installation/i);
@@ -210,7 +210,7 @@ test('installed CLI versions and global self-updates stay within the active npm 
     await version(other, OLD_VERSION);
     assert.equal(await readFile(join(app, 'package.json'), 'utf8'), appManifest);
     assert.equal(await readFile(join(app, 'package-lock.json'), 'utf8'), appLock);
-    const localManifest = JSON.parse(await readFile(join(app, 'node_modules', '@alex-dbs', 'rulekeeper', 'package.json'), 'utf8')) as { version: string };
+    const localManifest = JSON.parse(await readFile(join(app, 'node_modules', '@alex-dbs', 'coderuler', 'package.json'), 'utf8')) as { version: string };
     assert.equal(localManifest.version, OLD_VERSION);
   });
 
@@ -227,22 +227,22 @@ test('installed CLI versions and global self-updates stay within the active npm 
 });
 
 test('a version-named check target still loads the project environment', async t => {
-  const sandbox = createSandbox('rulekeeper-version-target-');
+  const sandbox = createSandbox('coderuler-version-target-');
   t.after(() => sandbox.cleanup());
   const target = sandbox.isolated('check');
-  await mkdir(join(target.cwd, '.rulekeeper'));
-  await writeFile(join(target.cwd, '.env'), 'RULEKEEPER_TEST_VALUE=loaded\n');
+  await mkdir(join(target.cwd, '.coderuler'));
+  await writeFile(join(target.cwd, '.env'), 'CODERULER_TEST_VALUE=loaded\n');
   await writeFile(join(target.cwd, '--version'), 'selected content\n');
-  await writeFile(join(target.cwd, '.rulekeeper', 'environment.rule.ts'), `
-import { Rule, pass, violation } from '@alex-dbs/rulekeeper';
+  await writeFile(join(target.cwd, '.coderuler', 'environment.rule.ts'), `
+import { Rule, pass, violation } from '@alex-dbs/coderuler';
 export default class Environment extends Rule {
   files = ['--version'];
-  check = () => process.env.RULEKEEPER_TEST_VALUE === 'loaded'
+  check = () => process.env.CODERULER_TEST_VALUE === 'loaded'
     ? pass() : violation('Project environment was not loaded');
 }
 `);
   const result = await runCli(['check', '--json', '--output-all', '--', '--version'], target, {
-    RULEKEEPER_TEST_VALUE: undefined,
+    CODERULER_TEST_VALUE: undefined,
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const output = JSON.parse(result.stdout) as {

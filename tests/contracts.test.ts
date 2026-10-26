@@ -32,7 +32,7 @@ import {
 } from '../dist/app/validate.js';
 import { UNREPORTED_AI_USAGE } from './support.ts';
 
-const BRAND = Symbol.for('rulekeeper.Rule');
+const BRAND = Symbol.for('coderuler.Rule');
 const RULE_FILE = '/rules/contracts.rule.ts';
 
 class MemoryProject implements Project {
