@@ -1,7 +1,25 @@
 {
   "name": "@alex-dbs/coderuler",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "license": "Apache-2.0",
+  "keywords": [
+    "ai",
+    "ai-agent",
+    "agent",
+    "rule",
+    "rules",
+    "coding-standards",
+    "standard",
+    "code-quality",
+    "code-review",
+    "security",
+    "linter",
+    "checker",
+    "static-analysis",
+    "policy-as-code",
+    "typescript",
+    "developer-tools"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/alex-dbs/coderuler.git"

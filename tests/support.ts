@@ -78,7 +78,7 @@ const SANDBOX_PACKAGE = `${JSON.stringify({ name: 'sandbox-project', private: tr
 function withoutInheritedOverrides(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(source)) {
-    if (name.startsWith('RK_') || name.startsWith('TYPESAFE_')) continue;
+    if (name === 'FORCE_COLOR' || name.startsWith('RK_') || name.startsWith('TYPESAFE_')) continue;
     if (name.toLowerCase().endsWith('proxy')) continue;
     env[name] = value;
   }

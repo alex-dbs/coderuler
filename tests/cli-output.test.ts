@@ -20,9 +20,9 @@ import {
   type CliResult,
   type CliLoadOverrides,
   type Sandbox,
+  type SandboxRoot,
   withLoadOverrides,
 } from './support.ts';
-
 const sandbox = createSandbox('coderuler-cli-output-');
 after(() => sandbox.cleanup());
 
@@ -46,8 +46,8 @@ export default class Skipped extends Rule {
 }
 `;
 
-function mixedProject(): Sandbox {
-  const target = sandbox.isolated('mixed');
+function mixedProject(root: SandboxRoot = sandbox): Sandbox {
+  const target = root.isolated('mixed');
   writeFile(join(target.cwd, '.coderuler/mixed.rule.ts'), MIXED_RULE);
   writeFile(join(target.cwd, '.coderuler/clean.rule.ts'), CLEAN_RULE);
   writeFile(join(target.cwd, '.coderuler/skipped.rule.ts'), SKIPPED_RULE);
@@ -280,6 +280,32 @@ export default class Timed extends Rule {
       assert.equal(output.durationMs, undefined);
       assert.equal(result.stdout.trimEnd().split('\n').length, 2);
     }
+  }
+});
+
+test('ordinary CLI output stays plain with inherited FORCE_COLOR', async () => {
+  const originalForceColor = process.env.FORCE_COLOR;
+  let forcedColorSandbox: SandboxRoot;
+  let target: Sandbox;
+  try {
+    process.env.FORCE_COLOR = '1';
+    forcedColorSandbox = createSandbox('coderuler-cli-force-color-');
+    target = mixedProject(forcedColorSandbox);
+  } finally {
+    if (originalForceColor === undefined) delete process.env.FORCE_COLOR;
+    else process.env.FORCE_COLOR = originalForceColor;
+  }
+
+  try {
+    const result = await runCli(['check', '--jsonl', '--output-all'], target);
+    assert.equal(result.status, 1, result.stderr);
+    const { reports } = readMachine(result, '--jsonl');
+    assert.deepEqual(
+      reports.flatMap(({ evaluations }) => evaluations.map(({ result: evaluation }) => evaluation.status)).sort(),
+      [...Array.from({ length: 13 }, () => 'pass'), 'violation'],
+    );
+  } finally {
+    forcedColorSandbox.cleanup();
   }
 });
 
