@@ -44,6 +44,8 @@ coderuler test . --failures-only --concurrency 4 --timeout 30s
 
 An explicit module or directory replaces rule discovery. Without a path, the command tests discovered project and home rules. `--failures-only` hides successful case details, but keeps the summary.
 
+A rule with `enabled = false` does not run its inline test cases.
+
 The default concurrency is `1`. The default timeout is `10s` per case. `--timeout` accepts positive durations with `ms`, `s`, or `m`. A timed-out case fails, and later cases can still run.
 
 Output stays in declaration order even with concurrent execution. A mismatch, including a timeout, exits with status `1`. Loading, validation, and execution failures exit with status `2`.
@@ -79,7 +81,7 @@ coderuler test .coderuler/actionable-instructions.rule.ts --ai --timeout 45s
 
 `validate` checks rule structure, not TypeScript semantics or policy behavior. Neither `validate` nor `check` executes inline tests.
 
-A selected rule set with no selected test cases is an error. If only `aiTests` exist, an ordinary `test` run tells you to include them with `--ai`. Do not use an empty dataset as a successful test run.
+A selected rule set with no test cases from enabled rules is an error. If only `aiTests` exist, an ordinary `test` run tells you to include them with `--ai`. Do not use an empty dataset as a successful test run.
 
 After tests pass, [inspect the rule](/docs/cli/#inspect) on representative project files. Fixtures cannot show whether your real project globs and data select the intended subjects.
 
