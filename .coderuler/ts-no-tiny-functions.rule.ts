@@ -55,17 +55,10 @@ export default class TsNoTinyFunctions extends Rule {
   });
 
   check = ai({
-    rule: `Named local one-expression helpers must add a meaningful contract or behavior, not merely rename an ordinary operation.
-
-A local helper is unnecessary wrapper indirection when its body only forwards a standard operation, property read, primitive conversion, or similarly trivial expression; its visible uses are direct local calls; and replacing those calls with the expression preserves evaluation and behavior. This combination is positive evidence of a violation, even with only one call. A descriptive synonym for the underlying operation is not a domain abstraction by itself.
-
-Apply exceptions to the helper being assessed, not to its enclosing function. A private helper inside an exported function or JSX component is still private: the enclosing export, async signature, or component contract does not turn that helper into a public API. Likewise, ordinary parameter annotations do not create a useful type-level boundary.
-
-Preserve helpers that express real domain concepts or non-obvious formulas, stable public/exported contracts, type predicates that preserve narrowing, callback identity, dependency-injection or test seams, framework/protocol methods, and meaningful repeated behavior that must change together. Preserve wrappers whose removal changes binding, evaluation timing, or another observable property.
-
-Assess each named helper independently. A valid enclosing function does not excuse a needless helper nested inside it. Conversely, a one-expression body or a single visible call alone is not enough: the implementation and uses must establish the redundant forwarding described above.
-Use the supplied file to assess local helpers; do not invent unseen callers or identity requirements to excuse a helper whose definition and direct uses are visible. When the file does not establish redundancy, preserve the helper.
-Anonymous inline callbacks and multi-statement functions are outside this policy.`,
+    instruction: `Keep named local one-expression helpers only when they add meaningful behavior or a useful contract beyond renaming a trivial operation.
+Use trivial standard operations, property reads, and primitive conversions directly when replacing the visible local calls preserves behavior.
+Type predicates that narrow types and public APIs are useful contracts, even with one-expression bodies. Keep domain formulas, callback identity, framework methods, test or dependency-injection seams, and behavior that must change together.
+Preserve binding and evaluation timing. Judge each helper from this file: enclosing exports and ordinary parameter annotations do not give private helpers a useful contract. Leave anonymous callbacks and multi-statement functions outside this policy.`,
     examples: {
       good: [
         `type Order = { total: number; paid: number };

@@ -55,6 +55,7 @@ export interface TestOptions {
   readonly concurrency: number;
   readonly ai?: boolean;
   readonly failuresOnly?: boolean;
+  readonly aiScores?: boolean;
 }
 
 export interface DependencyOptions {

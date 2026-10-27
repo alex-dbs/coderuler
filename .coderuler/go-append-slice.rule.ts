@@ -19,16 +19,9 @@ export default class GoAppendSlice extends Rule {
   });
 
   check = ai({
-    rule: `A slice freshly allocated for a loop whose final element count is exactly known must be allocated at that final length and filled by index or with copy;
-growing it with append is a violation even when capacity was preallocated with make([]T, 0, n)
-and even when it was first created with make([]T, n) and then reset to length zero.
-
-Append in a loop is valid only when the final count is not known before the loop,
-such as elements appended under a condition so the count varies within an upper bound that capacity merely reserves,
-or when the slice already holds a deliberately assigned prefix written before the loop.
-
-Appending after a length that was allocated but never assigned,
-or assigning elements by index and also appending them, is a violation.`,
+    instruction: `For a fresh slice allocated for a loop with a known output count, allocate its final length and fill it by index or copy.
+Keep append when the final count is unknown before the loop or when the slice has a deliberately assigned prefix.
+Do not allocate elements that the loop then appends instead of filling them.`,
     examples: {
       good: [
         `func copyItems(values []string) []string {

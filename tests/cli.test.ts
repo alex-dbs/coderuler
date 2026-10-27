@@ -1173,6 +1173,28 @@ test('check sends the default whole-file projection automatically', async () => 
     usage: { calls: 1, unreportedCalls: 0, inputTokens: 11, outputTokens: 1, inputCost: 11 * 0.042 / 1_000_000, outputCost: 0 },
   });
 });
+test('check uses the rule question with the instruction option', async () => {
+  const target = sandbox.isolated('check-ai-instruction');
+  writeFiles(target, { 'src/one.txt': 'SOURCE-TEXT-ONE' });
+  writeRule(target, 'instruction', `
+import { Rule, ai } from '@alex-dbs/coderuler';
+
+export default class InstructionCheck extends Rule {
+  files = ['src/**/*.txt'];
+  check = ai({ instruction: 'Files must be tidy.' });
+}
+`);
+  const fixture = await decisionFixture();
+  const result = await runCli(['check', '--json', '--output-all'], target, fixture.env);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fixture.requests.length, 1);
+  assert.deepEqual(requestInstructions(fixture.requests[0]!), {
+    rule: 'Files must be tidy.',
+    question: 'Is the rule respected?',
+  });
+  assert.equal(requestQuestion(fixture.requests[0]!)['type'], 'noul');
+});
 
 test('invalid environment prices are ignored by deterministic checks and rejected before an AI request', async () => {
   const target = sandbox.isolated('check-lazy-pricing');

@@ -46,7 +46,6 @@
   border-radius: 0 0 9px 9px;
   background: var(--background) !important;
   overflow: auto;
-  overscroll-behavior: contain;
   font: 12px/1.85 var(--mono);
   tab-size: 2;
   scrollbar-width: thin;
@@ -54,6 +53,22 @@
 .rule-code pre code { display: block; min-width: max-content; font: inherit; }
 .rule-code:has(> :last-child:not(pre)) pre { border-radius: 0; }
 .rule-code-copy:focus-visible, .rule-code pre:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.rule-source-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 48px;
+  padding: 10px 20px;
+  border-top: 1px solid var(--line);
+  color: var(--accent);
+  font-size: 14px;
+}
+.rule-source-link:hover { color: var(--foreground); }
+.rule-source-link > span { flex: 0 0 auto; }
+@media (max-width: 560px) {
+  .rule-source-link { padding-inline: 14px; }
+}
 @media (max-width: 760px) {
   .rule-code-header { min-height: 44px; padding-left: 12px; }
 }

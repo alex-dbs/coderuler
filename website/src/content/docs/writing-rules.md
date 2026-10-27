@@ -97,7 +97,7 @@ import { Rule, ai } from '@alex-dbs/coderuler';
 export default class ActionableInstructions extends Rule {
   files = ['guides/**/*.md'];
   check = ai({
-    rule: 'Instructions name a concrete action and its observable completion condition.',
+    instruction: 'Check that each instruction names a concrete action and an observable completion condition.',
     examples: {
       good: ['Run the migration until it exits successfully.'],
       bad: ['Handle the migration.'],

@@ -11,7 +11,11 @@ import type {
   Subject,
   ViolationLocation,
 } from './rule.js';
-import type { DecisionInstructions, DecisionObserver, DecisionRuntime } from './ports.js';
+import type {
+  DecisionInstructions,
+  DecisionObserver,
+  DecisionRuntime,
+} from './ports.js';
 import { isRecord, validateAiUsage, validateJsonValue } from './validate.js';
 
 const QUESTION = 'Is the rule respected?';
@@ -39,8 +43,11 @@ function assertExampleList(value: unknown, label: string): void {
 }
 
 function assertAiOptions<T>(options: AiOptions<T>): void {
-  if (typeof options.rule !== 'string' || options.rule === '') {
-    fail('ai rule must be a non-empty string');
+  if (options.rule !== undefined && options.instruction !== undefined) fail('ai rule and instruction are mutually exclusive');
+
+  const policy = options.instruction ?? options.rule;
+  if (typeof policy !== 'string' || policy === '') {
+    fail(`ai ${options.instruction === undefined ? 'rule' : 'instruction'} must be a non-empty string`);
   }
 
   const examples = options.examples;
@@ -98,8 +105,12 @@ function projectState<T>(subject: Subject<T>): JsonValue {
 function instructionsOf<T>(options: AiOptions<T>): DecisionInstructions {
   const good = options.examples?.good ?? [];
   const bad = options.examples?.bad ?? [];
-  if (good.length === 0 && bad.length === 0) return { rule: options.rule, question: QUESTION };
-  return { rule: options.rule, question: QUESTION, examples: { good, bad } };
+  const instructions = {
+    rule: options.instruction === undefined ? options.rule : options.instruction,
+    question: QUESTION,
+  };
+  if (good.length === 0 && bad.length === 0) return instructions;
+  return { ...instructions, examples: { good, bad } };
 }
 
 export async function evaluateAi<T = JsonValue>(

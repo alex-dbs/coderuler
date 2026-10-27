@@ -17,8 +17,9 @@ export default class HttpResponseSplitting extends Rule {
   });
 
   check = ai({
-    rule: `HTTP response splitting (CWE-113) must be prevented: attacker-controlled data must not inject carriage returns (CR) or newlines (LF) into HTTP response headers or the status line, including through writeHead()'s reason phrase or statusMessage, without validation that rejects those characters.
-Assess only the supplied function scope. Treat HTTP serialization entry-point arguments and statusMessage as potentially untrusted, even when their callers are not shown. Report a violation only when this scope visibly constructs or writes a response header or status line using such data without rejecting both CR and LF first. Constructing an unsafe status line and passing it to a storage or output helper is a visible unsafe path; do not assume unseen callers or helpers validate it. A call to a serialization helper alone, without visible unsafe construction, is not sufficient evidence. Fixed values and paths that reject both CR and LF before use comply. This local check is not a whole-program proof; do not invent behavior outside the supplied scope or assume protections in other versions of HTTP libraries.`,
+    instruction: `Reject CR and LF in untrusted values before inserting them into HTTP response headers or status lines.
+Check only construction or writing visible in the supplied function, including constructed status lines passed to output helpers. A helper call alone does not establish unsafe construction.
+Treat serialization arguments and statusMessage as potentially untrusted. Fixed values and values checked for both CR and LF meet this requirement. Keep fixed HTTP delimiters.`,
     input: subject => (subject as ScopeSubject).source,
     violationMessage: 'Reject CR and LF in attacker-controlled response headers and status messages before writing them.',
   });

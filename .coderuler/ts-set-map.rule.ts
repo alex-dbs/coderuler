@@ -20,12 +20,11 @@ export default class TsSetMap extends Rule {
   });
 
   check = ai({
-    rule: `Prefer a typed Record or object over a small, genuinely fixed string-keyed lookup built with the standard Set or Map, but only when the full file proves that the replacement is simpler and preserves all observable behavior.
-Judge each array-initialized constructor using its literal contents and all visible uses. An array literal alone is not evidence of a violation: it may contain dynamic values, spreads, non-string keys, or entries whose behavior requires a collection.
-
-Allow legitimate Set membership using .has, including fixed string memberships. Allow mutation (.add, .set, .delete), .size, .clear, iteration or insertion-order requirements, and key or collection identity requirements. Preserve Map .has semantics when missing keys differ from present undefined values. Allow non-string keys, custom or shadowed Set/Map constructors, and collections passed to unknown consumers or exported with unknown external usage. Do not assume unseen callers or external compatibility.
-
-A violation requires visible evidence of a small static string-to-value lookup used only for value retrieval that a Record or object can express without changing behavior. Consider missing-key behavior, duplicate keys, undefined values, prototype-sensitive keys such as __proto__, constructor, and toString, and any observable allocation or identity. Do not recommend a prototype-sensitive object lookup where Map provides safe arbitrary keys. If an equivalent safer and simpler object representation is not established from the file, pass. Never flag a collection merely because an object could theoretically implement it.`,
+    instruction: `Use a typed \`Record\` or object for a small, fixed, string-keyed \`Map\` lookup when it only retrieves values and the simpler form preserves behavior.
+Preserve membership checks, mutation, size, clearing, iteration order, and observable allocation or identity.
+Keep non-string keys, custom or shadowed constructors, and collections with unknown consumers or external callers.
+Before converting a \`Map\`, preserve missing- and duplicate-key behavior, distinguish absent keys from present \`undefined\`, and handle prototype-sensitive string keys safely.
+Keep \`Map\` for safe arbitrary-key behavior when no safe object equivalent is clear.`,
     examples: {
       good: [
         `const labels: Record<'ready' | 'busy', string> = { ready: 'Ready', busy: 'Busy' };

@@ -7,7 +7,7 @@ import { Worker } from 'node:worker_threads';
 import type { LoadedRule } from '../../app/ports.js';
 import type { RuleTestCase, RuleTestResult } from '../../app/rule-tests.js';
 import { isRecord, validateJsonValue } from '../../app/validate.js';
-import type { RuleTestWorkerMessage, RuleTestWorkerRequest } from './rule-test-worker.js';
+import type { RuleTestWorkerMessage, RuleTestWorkerOutcome, RuleTestWorkerRequest } from './rule-test-worker.js';
 import { getRuleDependencies } from './rule-resolution.js';
 
 // A JavaScript entry lets inherited tsx hooks resolve the source worker's .js import.
@@ -66,11 +66,11 @@ class RuleTestWorkerSession {
     request: Omit<RuleTestWorkerRequest, 'id'>,
     deadline: number,
     onFailure: (error: Error) => void,
-  ): Promise<TestActual> {
+  ): Promise<TestActual | RuleTestWorkerOutcome> {
     this.onFailure = onFailure;
     this.assertHealthy();
     const id = this.nextId++;
-    const result = Promise.withResolvers<TestActual>();
+    const result = Promise.withResolvers<TestActual | RuleTestWorkerOutcome>();
     let timer: NodeJS.Timeout | undefined;
     const expire = () => {
       const remaining = deadline - performance.now();
@@ -81,7 +81,7 @@ class RuleTestWorkerSession {
       if (message.id !== id) return;
       if (performance.now() >= deadline) result.resolve('timeout');
       else if ('error' in message) result.reject(new Error(message.error));
-      else result.resolve(message.actual);
+      else result.resolve(message.outcome);
     };
     this.rejectPending = error => {
       if (performance.now() >= deadline) result.resolve('timeout');
@@ -145,6 +145,7 @@ async function runCase(
   try {
     const root = await mkdtemp(join(await realpath(tmpdir()), 'coderuler-test-'));
     let actual: TestActual | undefined;
+    let aiScores: readonly number[] | undefined;
     let active: RuleTestWorkerSession | undefined;
     try {
       if (session.cancelled) throw new Error('Rule test run cancelled');
@@ -152,10 +153,15 @@ async function runCase(
       else {
         active = session.current ??= new RuleTestWorkerSession();
         const dependencies = getRuleDependencies(entry.ruleFile);
-        actual = await active.run({
+        const outcome = await active.run({
           root, ruleFile: entry.ruleFile, files: example.files, ai,
           ...(dependencies === undefined ? {} : { dependencies }),
         }, deadline, failCase);
+        if (typeof outcome === 'string') actual = outcome;
+        else {
+          actual = outcome.actual;
+          aiScores = outcome.aiScores;
+        }
       }
     } catch (error) {
       throw failCase(error);
@@ -173,6 +179,7 @@ async function runCase(
       expected: example.expected,
       actual,
       durationMs: performance.now() - started,
+      ...(aiScores === undefined ? {} : { aiScores }),
     };
   } catch (error) {
     const cause = failCase(error);

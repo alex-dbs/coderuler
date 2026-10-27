@@ -37,6 +37,7 @@ async function runTest(
         context.redact,
         color,
         index === failures.length - 1,
+        options.aiScores === true,
       ));
     }
     failures.length = 0;
@@ -62,7 +63,13 @@ async function runTest(
           context.write(renderRuleTestHeading(result.ruleName, context.redact, color));
           previousRuleName = result.ruleName;
         }
-        context.write(renderRuleTestResult(result, context.redact, color, lastInRule));
+        context.write(renderRuleTestResult(
+          result,
+          context.redact,
+          color,
+          lastInRule,
+          options.aiScores === true,
+        ));
       }
       progress?.message(`Running tests (${passed + failed} completed)`);
     }, options.timeout, options.concurrency, options.ai === true);

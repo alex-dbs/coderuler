@@ -56,6 +56,7 @@ export function renderRuleTestResult(
   redact: TextRedactor,
   color: boolean,
   lastInRule: boolean,
+  showAIScores = false,
 ): string {
   const safe = (text: string): string => escapeText(redact(text));
   const matches = result.expected === result.actual;
@@ -64,8 +65,11 @@ export function renderRuleTestResult(
   const detail = matches
     ? ''
     : safe(` (expected ${result.expected}, actual ${result.actual})`);
+  const aiScores = showAIScores && result.aiScores !== undefined && result.aiScores.length > 0
+    ? ` (${result.aiScores.length === 1 ? 'Jev score' : 'Jev scores'}: ${result.aiScores.join(', ')})`
+    : '';
   const duration = paint(safe(` (${formatDuration(result.durationMs)})`), 'dim', color);
-  return `${branch}${label} ${safe(result.name)}${detail}${duration}\n`;
+  return `${branch}${label} ${safe(result.name)}${detail}${aiScores}${duration}\n`;
 }
 
 export function renderRuleTestSummary(

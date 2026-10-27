@@ -41,12 +41,10 @@ export default class TsNoLocalIsRecord extends Rule {
   });
 
   check = ai({
-    rule: `Assess the locally defined isRecord functions in this complete TypeScript file, using their implementations, uses, exports, comments, and filepath as evidence.
-Report a violation only when visible evidence establishes redundant local recreation of an available equivalent guard, repeated partial validation in place of an established domain validator, or use of a generic Record guard as if it validated a real domain contract.
-An object/non-null/non-array check establishes only an object shape, not required properties, property types, or a generic value type. Checking a few fields and asserting the remaining domain contract without validation is also misuse.
-
-Permit one canonical shared or package guard, including an exported generic guard that actually validates its claimed value type. Permit legitimate staged object narrowing followed by the required property checks, and schema validation at a boundary. Do not demand a schema library when explicit property checks validate the contract. A local guard with no established duplication or validation misuse is valid, even if tiny or unexported.
-The name isRecord and candidate presence alone are never violations. Do not infer unseen callers, other files' implementations, available shared helpers, or external compatibility constraints. Pass when evidence of duplication or validation misuse is absent. Never recommend replacing validation with a type assertion on unknown input.`,
+    instruction: `Reuse an equivalent guard visible in this file, and use an established domain validator instead of repeating partial checks.
+Treat a non-null, non-array object check as proof of object shape only; validate every required property and value before claiming a domain contract or \`Record<string, DomainType>\`.
+Keep staged narrowing, explicit property checks, schema validation at boundaries, and one canonical \`Record<string, unknown>\` guard; export a generic guard only when it validates its claimed value type.
+Judge guards by their visible implementations and uses, not by name; do not infer helpers or callers from other files or replace validation with type assertions.`,
     examples: {
       good: [
         `// packages/guards/src/is-record.ts: the canonical shared object guard.

@@ -266,33 +266,47 @@ export const tests = [
   ]);
 });
 
-test('test --failures-only keeps AI authorization and provider decisions unchanged', async context => {
+test('AI tests require --ai and can show all Jev scores', async context => {
   const target = sandbox.isolated('failures-only-ai');
   const fixture = await startDecisionFixture();
   context.after(() => fixture.close());
-  fixture.answer = (_request, index) => ({ probability: index === 0 ? 0.1 : 0.9 });
-  const path = writeFile(join(target.cwd, '.coderuler/mixed.rule.ts'), `import { Rule, pass, test } from '@alex-dbs/coderuler';
+  fixture.answer = (_request, index) => ({ probability: index % 3 === 0 ? 0.1 : 0.9 });
+  const path = writeFile(join(target.cwd, '.coderuler/mixed.rule.ts'), `import { Rule, ai, test } from '@alex-dbs/coderuler';
 export default class Mixed extends Rule {
   files = ['inputs/*.txt'];
-  check = (subject, context) => subject.source === 'LOCAL' ? pass() : context.ai({ rule: 'The input must be good.' });
+  check = ai({ instruction: 'The input must be good.' });
 }
-export const tests = [test('hidden local pass').withFiles({ 'inputs/one.txt': 'LOCAL' }).passes()];
 export const aiTests = [
-  test('provider mismatch').withFiles({ 'inputs/one.txt': 'BAD' }).passes(),
-  test('hidden provider pass').withFiles({ 'inputs/one.txt': 'GOOD' }).passes(),
+  test('provider mismatch').withFiles({
+    'inputs/one.txt': 'BAD',
+    'inputs/two.txt': 'ALSO_BAD',
+  }).passes(),
+  test('provider pass').withFiles({ 'inputs/three.txt': 'GOOD' }).passes(),
 ];`);
-  const local = await runCli(['test', '--failures-only', path], target, fixture.env);
-  assert.equal(local.status, 0, local.stderr || local.stdout);
-  assert.equal(local.stderr, '');
-  assert.equal(withoutTimings(local.stdout), '1 passed, 0 failed  Time: <duration>\n');
+  const unauthorized = await runCli(['test', '--failures-only', '--ai-scores', path], target, fixture.env);
+  assert.equal(unauthorized.status, 2, unauthorized.stderr || unauthorized.stdout);
+  assert.match(unauthorized.stderr, /run with --ai to include aiTests/);
   assert.equal(fixture.requests.length, 0);
+
   const live = await runCli(['test', '--failures-only', '--ai', '--concurrency', '1', path], target, fixture.env);
   assert.equal(live.status, 1, live.stderr || live.stdout);
   assert.equal(live.stderr, '');
   assert.deepEqual(withoutTimings(live.stdout).split('\n').filter(Boolean), [
     'mixed',
     '└─ FAIL provider mismatch (expected pass, actual violation)',
-    '2 passed, 1 failed  Time: <duration>',
+    '1 passed, 1 failed  Time: <duration>',
   ]);
-  assert.equal(fixture.requests.length, 2);
+  assert.doesNotMatch(live.stdout, /Jev scores?:/);
+  assert.equal(fixture.requests.length, 3);
+
+  const scored = await runCli(['test', '--ai', '--ai-scores', '--concurrency', '1', path], target, fixture.env);
+  assert.equal(scored.status, 1, scored.stderr || scored.stdout);
+  assert.equal(scored.stderr, '');
+  assert.deepEqual(withoutTimings(scored.stdout).split('\n').filter(Boolean), [
+    'mixed',
+    '├─ FAIL provider mismatch (expected pass, actual violation) (Jev scores: 0.1, 0.9)',
+    '└─ PASS provider pass (Jev score: 0.9)',
+    '1 passed, 1 failed  Time: <duration>',
+  ]);
+  assert.equal(fixture.requests.length, 6);
 });

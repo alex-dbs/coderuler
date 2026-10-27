@@ -1,6 +1,6 @@
 ---
 import RuleCode from './RuleCode.astro';
-import goRuleSource from '../../../.coderuler/go-append-slice.rule.ts?raw';
+import goRuleSource from '../../../.coderuler/go-dereference-guard.rule.ts?raw';
 import serviceRuleSource from '../../../.coderuler/service-proto.rule.ts?raw';
 import Violation from './Violation.astro';
 import { sitePath } from '../lib/paths';
@@ -25,14 +25,13 @@ export default class HttpResponseSplitting extends Rule {
 
   check = ai({
     // Abridged prompt. Full policy and tests in the source.
-    rule: \`Assess only the supplied function scope.
-Treat HTTP serialization entry-point arguments and
-statusMessage as potentially untrusted. Report only visible
-construction or writing of response headers or a status
-line using such data without rejecting both CR and LF.
-Do not assume unseen callers or helpers validate it.
-A helper call alone is not evidence. Fixed values and
-paths that reject both CR and LF before use comply.\`,
+    instruction: \`Reject CR and LF in untrusted values before
+inserting them into HTTP response headers or status lines.
+This policy covers construction and writes visible in the selected
+function. Hidden helper behavior and unseen callers are outside its
+scope. Treat serialization arguments and statusMessage as untrusted.
+Fixed values and values checked for both CR and LF meet this
+requirement. Preserve fixed HTTP delimiters.\`,
     violationMessage: 'Reject CR and LF in attacker-controlled response headers and status messages before writing them.',
   });
 }`;
@@ -42,14 +41,21 @@ const vulnerableResponse = String.raw`export function respond(request, socket) {
   socket.write('HTTP/1.1 200 OK\r\nX-Name: ' + name + '\r\n\r\n');
 }`;
 
-const goRule = goRuleSource.split('\nexport const aiTests')[0].trim();
+const goRule = goRuleSource
+  .split('\nexport const aiTests')[0]
+  .replace(', test, type ScopeSubject', '')
+  .replace(/    examples: \{[\s\S]*?^    \},\n/m, '')
+  .replace(/    input: async \(subject, \{ project \}\) => \{[\s\S]*?^    \},\n/m, '')
+  .trim();
 const serviceRule = serviceRuleSource.split('\nfunction proto')[0].trim();
-const growScores = `func growScores(scores []int) []int {
-    out := make([]int, 0, len(scores))
-    for _, score := range scores {
-        out = append(out, score)
+const nestedPointer = `type Config struct { Child *Child }
+type Child struct { Value *int }
+
+func nestedValue(config *Config) int {
+    if config == nil {
+        return 0
     }
-    return out
+    return *(*config).Child.Value
 }`;
 const serviceProto = `syntax = "proto3";
 import "google/api/annotations.proto";
@@ -67,13 +73,18 @@ service BillingService {
 ---
 <section class="rule-examples page-shell" id="examples" aria-labelledby="rule-examples-title" data-rule-tabs>
   <header class="rule-examples-heading">
-    <h2 id="rule-examples-title">Some ideas for you…</h2>
+    <div>
+      <h2 id="rule-examples-title">Some ideas for you…</h2>
+      <div class="rule-example-links">
+        <a href={`${source}go-append-slice.rule.ts`} aria-label="Read the full Go slice source policy">Read the full source policy <span aria-hidden="true">↗</span></a>
+      </div>
+    </div>
     <p>See how these rules find unsafe code and enforce project conventions.</p>
   </header>
 
   <div class="rule-example-tabs" role="tablist" aria-label="Repository rule examples" data-rule-tablist hidden>
     <button id="rule-tab-http" type="button" role="tab" aria-selected="true" aria-controls="rule-panel-http" tabindex="0" data-rule-tab>Security</button>
-    <button id="rule-tab-go" type="button" role="tab" aria-selected="false" aria-controls="rule-panel-go" tabindex="-1" data-rule-tab>Go slices</button>
+    <button id="rule-tab-go" type="button" role="tab" aria-selected="false" aria-controls="rule-panel-go" tabindex="-1" data-rule-tab>Go pointers</button>
     <button id="rule-tab-service" type="button" role="tab" aria-selected="false" aria-controls="rule-panel-service" tabindex="-1" data-rule-tab>API conventions</button>
   </div>
 
@@ -89,31 +100,32 @@ service BillingService {
         highlightLine={3}
       />
       <div class="rule-example-links">
-        <a href={`${source}http-response-splitting.rule.ts`}>Full HTTP rule and tests <span aria-hidden="true">↗</span></a>
         <a href={sitePath('/docs/ai-checks/')}>How AI checks work <span aria-hidden="true">→</span></a>
       </div>
     </div>
-    <RuleCode code={httpRule} filename="http-response-splitting.rule.ts" class="rule-example-code" />
+    <RuleCode code={httpRule} filename="http-response-splitting.rule.ts" class="rule-example-code">
+      <a slot="footer" class="rule-source-link" href={`${source}http-response-splitting.rule.ts`}>Read the full source policy <span aria-hidden="true">↗</span></a>
+    </RuleCode>
   </article>
 
   <article id="rule-panel-go" class="rule-example" aria-labelledby="go-example-title" data-rule-example="go" data-rule-panel>
     <div class="rule-example-copy">
-      <h3 id="go-example-title">Allocate the known slice length.</h3>
-      <p>This function copies every score, so the final count is known. Reserving capacity still leaves the slice empty.</p>
-      <p>The rule reports <code>append</code> here. Allocate <code>len(scores)</code> elements and fill them by index instead.</p>
+      <h3 id="go-example-title">Go pointer dereferences need nil checks.</h3>
+      <p>The code checks <code>config</code> for nil, but it does not check nested pointers <code>Child</code> or <code>Value</code>.</p>
+      <p>The selector finds functions and methods with an explicit <code>*</code> operation. It does not check field access like <code>config.Field</code> by itself.</p>
+      <p>The code panel leaves out the AI examples and file input. The full rule reads the Go file to identify nested pointer types.</p>
       <Violation
-        rule="go-append-slice"
-        file="internal/store/scores.go"
-        message="Allocate the known final length and fill by index instead of appending."
-        source={growScores}
-        startLine={12}
-        highlightLine={15}
+        rule="go-dereference-guard"
+        file="internal/store/config.go"
+        message="Check each pointer for nil before using *."
+        source={nestedPointer}
+        startLine={1}
+        highlightLine={8}
       />
-      <div class="rule-example-links">
-        <a href={`${source}go-append-slice.rule.ts`}>Full Go rule and tests <span aria-hidden="true">↗</span></a>
-      </div>
     </div>
-    <RuleCode code={goRule} filename="go-append-slice.rule.ts" class="rule-example-code" />
+    <RuleCode code={goRule} filename="go-dereference-guard.rule.ts" class="rule-example-code" aria-label="Go dereference rule excerpt">
+      <a slot="footer" class="rule-source-link" href={`${source}go-dereference-guard.rule.ts`}>Read the full source policy <span aria-hidden="true">↗</span></a>
+    </RuleCode>
   </article>
 
   <article id="rule-panel-service" class="rule-example" aria-labelledby="service-example-title" data-rule-example="service" data-rule-panel>
@@ -128,11 +140,10 @@ service BillingService {
         source={serviceProto}
         highlightLine={9}
       />
-      <div class="rule-example-links">
-        <a href={`${source}service-proto.rule.ts`}>Full API rule and tests <span aria-hidden="true">↗</span></a>
-      </div>
     </div>
-    <RuleCode code={serviceRule} filename="service-proto.rule.ts" class="rule-example-code" />
+    <RuleCode code={serviceRule} filename="service-proto.rule.ts" class="rule-example-code">
+      <a slot="footer" class="rule-source-link" href={`${source}service-proto.rule.ts`}>Read the full source policy <span aria-hidden="true">↗</span></a>
+    </RuleCode>
   </article>
 </section>
 

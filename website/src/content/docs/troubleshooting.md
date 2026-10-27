@@ -64,7 +64,7 @@ Inspect `data` and `source` separately. Generic types describe your expectations
 
 ## Tests have no cases or time out
 
-Export a named `tests` array. If the module has only `aiTests`, ordinary `test` does not select them. Use `--ai` only when you intend to authorize live calls.
+For a deterministic rule, export a named `tests` array. For an AI rule, put every test case in `aiTests` and do not add a separate `tests` export. Run live cases with `--ai`; `--ai-scores` displays Jev probabilities but does not authorize calls. AI rules use only `instruction`.
 
 The errors `No rule test cases found in the selected rules` and `No ordinary rule test cases found in the selected rules; run with --ai to include aiTests` are not successful runs.
 
@@ -78,7 +78,7 @@ If you see `Inline rule tests must not call the decision backend`, move the live
 
 Inspect selected input before changing the prompt. Structured scopes send parsed data instead of source by default. Small scopes can omit necessary context, while broad groups can add unrelated material.
 
-A probability equal to the threshold violates. Only a strictly greater probability passes. CLI `--threshold` overrides the rule and environment. See [AI checks](/docs/ai-checks/) for model, pricing, precedence, and privacy details.
+A probability equal to the threshold violates. Only a strictly greater probability passes. During tuning, expected violations should score near `0` and passes near `1`. If scores are wrong or close to the threshold, refine the instruction or fixtures and rerun with `--ai --ai-scores`. CLI `--threshold` overrides the rule and environment. See [AI checks](/docs/ai-checks/) for instruction, model, pricing, precedence, and privacy details.
 
 ## An imported package cannot resolve
 

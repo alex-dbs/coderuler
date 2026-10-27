@@ -29,7 +29,9 @@ Start the name with its language or technology prefix, such as `go-`, `ts-`, or 
 
 Keep rules short, with only a few lines of policy code. Reuse built-in selectors, evaluators, and standard libraries before writing custom logic. Add helpers only for real reuse.
 
-Add a named `tests` export in the same file. Use `.passes()` and `.violates()` cases that exercise the policy. Omit `.skips()` assertions when creating a rule: skipped inputs never reach the check and provide no evidence of policy behavior.
+For a deterministic rule, add a named `tests` export with `.passes()` and `.violates()` cases. For an AI rule, put every test case in `aiTests` and do not add a separate `tests` export. Omit `.skips()` assertions when creating a rule: skipped inputs never reach the check and provide no evidence of policy behavior.
+
+For an AI rule, use `instruction` to state what compliant code does, beginning with a direct requirement. Add only applicability boundaries or real exceptions needed to define the policy; keep one policy per rule. Keep reporting language in `violationMessage`, examples in `examples`, and test cases in `aiTests`—not in the instruction. See [AI instruction style](reference.md#ai-instruction-style).
 
 Run the relevant cases before the policy change and require an assertion mismatch for the intended violation, not a loading error. Implement the policy, then require every case to pass.
 
@@ -97,10 +99,10 @@ Useful test options:
 ```sh
 coderuler test . --failures-only
 coderuler test . --concurrency 4 --timeout 30s
-coderuler test .coderuler/k8s-semantic-policy.rule.ts --ai --timeout 45s
+coderuler test .coderuler/semantic-policy.rule.ts --ai --ai-scores --timeout 45s
 ```
 
-Replace the semantic-policy filename with the actual AI rule. `--ai` authorizes live provider calls for `aiTests`, requires provider configuration, and may incur charges. Outcomes can vary; provider errors are errors, not passes.
+Replace the semantic-policy filename with the actual AI rule. `--ai` authorizes live provider calls for `aiTests`, requires provider configuration, and can incur charges. `--ai-scores` displays each Jev probability; use it with `--ai`. A test marked `PASS` means its expectation matched, not that its code is compliant. Expected violations need scores near `0`; compliant cases need scores near `1`. For wording changes, compare both groups on the same fixtures and configuration. Follow [the comparison procedure](reference.md#ai-instruction-style) rather than changing fixtures or thresholds to make a candidate pass.
 
 ## 4. Inspect the rule on the project
 

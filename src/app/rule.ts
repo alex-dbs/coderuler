@@ -93,12 +93,18 @@ export interface AiExamples {
   readonly bad?: readonly string[];
 }
 
-export interface AiOptions<T = JsonValue> {
-  readonly rule: string;
+export type AiOptions<T = JsonValue> = {
   readonly examples?: AiExamples;
   readonly violationMessage?: string;
   readonly input?: (subject: Subject<T>, context: ProjectContext) => Awaitable<JsonValue>;
-}
+} & (
+  | {
+      /** @deprecated Use `instruction` instead. */
+      readonly rule: string;
+      readonly instruction?: never;
+    }
+  | { readonly instruction: string; readonly rule?: never }
+);
 
 export type Evaluator<T = JsonValue> = (
   subject: Subject<T>,

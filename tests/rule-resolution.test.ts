@@ -733,7 +733,7 @@ for (const extension of ['mjs', 'cjs', 'js']) {
         id: 1, root: join(first, 'inline-fixture'), ruleFile: firstRule,
         files: { 'inputs/one.txt': 'input' }, ai: false, dependencies: firstDependencies,
       });
-      assert.deepEqual(firstResult, { id: 1, actual: 'pass' });
+      assert.deepEqual(firstResult, { id: 1, outcome: { actual: 'pass' } });
       const secondResult = await requestWorker(worker, {
         id: 2, root: join(second, 'inline-fixture'), ruleFile: secondRule,
         files: { 'inputs/one.txt': 'input' }, ai: false, dependencies: secondDependencies,
@@ -789,7 +789,7 @@ for (const mutation of ['lock', 'marker', 'locations', 'mutex'] as const) {
       files: { 'inputs/one.txt': 'input' }, ai: false, dependencies,
     };
     try {
-      assert.deepEqual(await requestWorker(worker, { ...request, id: 1 }), { id: 1, actual: 'pass' });
+      assert.deepEqual(await requestWorker(worker, { ...request, id: 1 }), { id: 1, outcome: { actual: 'pass' } });
       if (mutation === 'lock') {
         await put(join(owner, 'coderuler.lock'), locks.get(2)!);
       } else if (mutation === 'mutex') {

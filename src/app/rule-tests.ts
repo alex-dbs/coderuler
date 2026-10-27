@@ -11,6 +11,7 @@ export interface RuleTestResult {
   readonly name: string;
   readonly expected: RuleTestCase['expected'];
   readonly actual: RuleTestCase['expected'] | 'timeout';
+  readonly aiScores?: readonly number[];
   readonly durationMs: number;
 }
 

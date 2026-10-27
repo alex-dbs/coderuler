@@ -1,7 +1,7 @@
 export {};
 
 type Mode = 'ai' | 'regex' | 'code';
-type Example = Record<'label' | 'instruction' | 'file' | 'excluded' | 'outside' | 'source' | 'context' | 'kept' | 'dropped', string> & { pattern?: string };
+type Example = Record<'label' | 'instruction' | 'file' | 'excluded' | 'outside' | 'source' | 'context' | 'kept' | 'dropped', string> & { fileContext?: string; pattern?: string };
 let disposeWorkflow = () => {};
 
 function mountWorkflow() {
@@ -127,13 +127,10 @@ function mountWorkflow() {
       root.dataset.flowVerdict = 'pending';
       const outcome = get('[data-flow-outcome]');
       if (outcome) { outcome.hidden = true; outcome.dataset.flowVerdict = 'pending'; }
-      const response = get('[data-flow-ai-response]');
-      if (response) response.hidden = true;
       phase('ready');
       const evaluator = get('.workflow-evaluator');
       if (evaluator) evaluator.scrollTop = 0;
       if (announcement) announcement.textContent = '';
-      text('[data-flow-model-status]', 'Awaiting example request');
       text('[data-flow-line-count]', '0');
       text('[data-flow-code-comparison]', 'lineCount > 80');
       text('[data-flow-regex-comparison]', `pattern.test("${examples.regex.context}")`);
@@ -147,7 +144,7 @@ function mountWorkflow() {
       if (motion) animate(line ?? null, [{ backgroundColor: 'var(--accent)', opacity: .4 }, { backgroundColor: 'transparent', opacity: 1 }], 450);
     }
 
-    function comparison(motion = true) {
+    function comparison() {
       phase('comparison');
       if (selected === 'regex') {
         const matches = new RegExp(examples.regex.pattern!).test(examples.regex.context);
@@ -155,11 +152,6 @@ function mountWorkflow() {
       } else if (selected === 'code') {
         text('[data-flow-line-count]', String(lineCount()));
         text('[data-flow-code-comparison]', `${lineCount()} > 80 → ${lineCount() > 80}`);
-      } else {
-        text('[data-flow-model-status]', 'Example response received');
-        const response = get('[data-flow-ai-response]');
-        if (response) response.hidden = false;
-        if (motion) animate(response, [{ transform: 'translateY(-12px)', opacity: 0 }, { transform: 'translateY(0)', opacity: 1 }], 450);
       }
     }
 
@@ -175,7 +167,7 @@ function mountWorkflow() {
       text('[data-flow-verdict-label]', passes ? 'Pass' : 'Violation');
       text('[data-flow-decision]', passes ? 'pass()' : 'violation(…)');
       text('[data-flow-verdict-message]', selected === 'ai'
-        ? 'Allocate the known final length and fill by index instead of appending.'
+        ? 'Check each pointer for nil before dereferencing it.'
         : selected === 'regex' ? 'The retained URL matches the service URL pattern.'
         : `${lineCount()} lines ${passes ? 'is within' : 'exceeds'} the 80-line limit.`);
       phase('complete');
@@ -197,8 +189,7 @@ function mountWorkflow() {
       const steps = selected === 'ai' ? [
         event(400, () => {
           phase('request');
-          text('[data-flow-model-status]', 'Reading selected function + instruction');
-          travel(get('[data-flow-ai-request]')?.getBoundingClientRect(), get('[data-flow-model]'), 900, `${examples.ai.context} + rule instruction`);
+          travel(get('[data-flow-ai-request]')?.getBoundingClientRect(), get('[data-flow-model]'), 900, `${examples.ai.context} + containing file + rule instruction`);
           animate(get('[data-flow-model]'), [{ transform: 'scale(.96)', opacity: .4 }, { transform: 'scale(1)', opacity: 1 }], 650, 450);
         }),
       ] : selected === 'regex'
@@ -261,14 +252,6 @@ function mountWorkflow() {
           { transform: 'translateY(0)', opacity: 1 },
           { transform: 'translateY(45px) scale(.85)', opacity: .15 },
         ], 850);
-      }
-      if (index === 3) {
-        travel(origin ?? get('[data-flow-context-slot]')?.getBoundingClientRect(), get('[data-flow-context-slot]'), 700);
-        animate(get('[data-flow-context-slot]'), [
-          { opacity: .2, transform: 'scale(.92)' },
-          { opacity: 1, transform: 'scale(1)' },
-        ], 350, 600);
-        phase('retained');
       }
     }
 
