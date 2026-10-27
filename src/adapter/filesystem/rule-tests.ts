@@ -210,6 +210,7 @@ export async function runRuleTests(
   try {
     for (const rule of rules) {
       if (failureObserved) throw failure;
+      if (!rule.rule.enabled) continue;
       // Discovery selects the rule module path at runtime.
       const { tests, aiTests } = await import(pathToFileURL(rule.ruleFile).href) as {
         readonly tests?: unknown;

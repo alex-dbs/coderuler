@@ -81,6 +81,23 @@ test('test reports mismatches, continues to later cases, and does not run during
   }
 });
 
+test('test skips cases declared by disabled rules', async () => {
+  const target = sandbox.isolated('disabled');
+  writeFile(join(target.cwd, '.coderuler/disabled.rule.ts'), `import { Rule, test } from '@alex-dbs/coderuler';
+export default class Disabled extends Rule {
+  enabled = false;
+  check = () => { throw new Error('disabled rule test ran'); };
+}
+export const tests = [test('disabled case').withFiles({ 'inputs/one.txt': 'BAD' }).passes()];
+`);
+  writeRule(target, 'enabled', `test('enabled case').withFiles({ 'inputs/one.txt': 'GOOD' }).passes()`);
+
+  const result = await runCli(['test'], target);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.ok(result.stdout.includes('enabled case'), result.stdout);
+  assert.equal(result.stdout.includes('disabled case'), false, result.stdout);
+});
+
 test('test discovers local and home cases and explicit paths replace discovery', async () => {
   const target = sandbox.isolated('selection');
   const local = writeRule(target, 'local', `test('local case').withFiles({ 'inputs/a.txt': 'GOOD' }).passes()`);
