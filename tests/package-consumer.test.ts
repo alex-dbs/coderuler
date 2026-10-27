@@ -473,7 +473,7 @@ function isolatedEnv(home: string, extra: Readonly<NodeJS.ProcessEnv> = {}): Nod
   env.XDG_CONFIG_HOME = join(home, '.config');
   env.PATH = dirname(process.execPath);
   env.NO_COLOR = '1';
-  env.FORCE_COLOR = '0';
+  delete env.FORCE_COLOR;
   for (const [key, value] of Object.entries(extra)) env[key] = value;
   env.CLAUDE_CONFIG_DIR = join(home, '.claude');
   env.XDG_CONFIG_HOME = join(home, '.config');
