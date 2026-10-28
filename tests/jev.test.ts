@@ -332,6 +332,7 @@ test('reports a failing status and its raw body before raising', async () => {
     assert.equal(response.status, 401);
     assert.equal(JSON.parse(response.body), 'invalid key [REDACTED]', 'the received text must be reported as it arrived');
     assert.ok(!JSON.stringify(exchanges).includes(API_KEY), 'no exchange may carry the credential');
+    assert.equal(backend.sent.length, 1, 'a client error must not be retried');
   } finally {
     await backend.close();
   }
@@ -360,7 +361,7 @@ test('reports an unusable answer in full before rejecting', async () => {
   }
 });
 
-test('reports only the request when no response ever arrives', async () => {
+test('reports each request when the connection fails', async () => {
   const origin = await refuseConnections();
   const { exchanges, observer } = exchangesOf();
 
@@ -369,8 +370,8 @@ test('reports only the request when no response ever arrives', async () => {
   assert.match(error.message, /ECONNREFUSED/);
   assert.deepEqual(
     exchanges.map(exchange => exchange.type),
-    ['request'],
-    'a missing response must report no response',
+    ['request', 'request', 'request', 'request'],
+    'each failed attempt must report its request without a response',
   );
   const [request] = exchanges;
   assert.ok(request?.type === 'request');
@@ -521,15 +522,45 @@ test('does not follow a redirect', async () => {
   }
 });
 
-test('does not retry after an error status', async () => {
-  const backend = await startLoopback();
+test('retries a transient server error and succeeds', async () => {
+  let backend: Loopback;
+  let attempts = 0;
+  backend = await startLoopback(() => {
+    attempts += 1;
+    if (attempts === 3) backend.answer = { body: JSON.stringify(ANSWER) };
+  });
+  try {
+    backend.answer = { status: 503, body: JSON.stringify({ error: 'unavailable' }) };
+    const { exchanges, observer } = exchangesOf();
+
+    const result = await adapterFor(backend.origin).decide(REQUEST, observer);
+
+    assert.deepEqual(result, { probability: 0.9, model: 'jev-1.13.0' });
+    assert.equal(backend.sent.length, 3);
+    assert.deepEqual(
+      exchanges.map(exchange => exchange.type),
+      ['request', 'response', 'request', 'response', 'request', 'response'],
+    );
+  } finally {
+    await backend.close();
+  }
+});
+
+test('retries a server error three times with exponential backoff', async () => {
+  const requestTimes: bigint[] = [];
+  const backend = await startLoopback(() => requestTimes.push(process.hrtime.bigint()));
   try {
     backend.answer = { status: 500, body: JSON.stringify({ error: 'boom' }) };
 
     const error = await failed(() => adapterFor(backend.origin).decide(REQUEST));
 
     assert.match(error.message, /HTTP 500/);
-    assert.equal(backend.sent.length, 1, 'a failed request must not be re-sent');
+    assert.equal(backend.sent.length, 4, 'three retries must follow the initial request');
+    const intervals = requestTimes.slice(1).map((time, index) =>
+      Number(time - requestTimes[index]!) / 1_000_000);
+    assert.ok(intervals[0]! >= 50, `first retry delay was ${intervals[0]} ms`);
+    assert.ok(intervals[1]! >= 150, `second retry delay was ${intervals[1]} ms`);
+    assert.ok(intervals[2]! >= 350, `third retry delay was ${intervals[2]} ms`);
   } finally {
     await backend.close();
   }
@@ -545,9 +576,10 @@ test('maps a refused connection to a sanitized network error', async () => {
   assert.ok(!error.message.includes('127.0.0.1'), 'the diagnostic must not leak the endpoint');
 });
 
-test('times out a stalled response after the fixed 30-second bound', { timeout: 5_000 }, async context => {
-  const received = Promise.withResolvers<void>();
-  const backend = await startLoopback(received.resolve);
+test('retries a stalled response after each 30-second timeout', { timeout: 5_000 }, async context => {
+  const arrivals = Array.from({ length: 4 }, () => Promise.withResolvers<void>());
+  let attempts = 0;
+  const backend = await startLoopback(() => arrivals[attempts++]?.resolve());
   context.mock.timers.enable({ apis: ['setTimeout'] });
   try {
     backend.answer = { hang: true };
@@ -558,24 +590,29 @@ test('times out a stalled response after the fixed 30-second bound', { timeout: 
       () => { settled = true; },
       () => { settled = true; },
     );
-    await received.promise;
+    await arrivals[0]!.promise;
 
-    context.mock.timers.tick(29_999);
-    await setImmediate();
-    assert.equal(settled, false, 'the request must remain pending before the 30-second bound');
-    context.mock.timers.tick(1);
-    await setImmediate();
-    assert.equal(settled, true, 'the request must reject at the 30-second bound');
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      context.mock.timers.tick(29_999);
+      await setImmediate();
+      assert.equal(settled, false, 'each request must remain pending before the 30-second bound');
+      context.mock.timers.tick(1);
+      await setImmediate();
+      if (attempt < 3) {
+        context.mock.timers.tick(100 * 2 ** attempt);
+        await arrivals[attempt + 1]!.promise;
+      }
+    }
+
     const error = await failed(() => pending);
-
     assert.match(error.message, /timed out/);
     assert.ok(!error.message.includes(API_KEY), 'the diagnostic must not leak the credential');
     assert.ok(!error.message.includes('127.0.0.1'), 'the diagnostic must not leak the endpoint');
-    assert.equal(backend.sent.length, 1, 'a timed-out request must not be re-sent');
+    assert.equal(backend.sent.length, 4, 'a stalled request must receive three retries');
     assert.deepEqual(
       exchanges.map(exchange => exchange.type),
-      ['request'],
-      'a timed-out request reports no response',
+      ['request', 'request', 'request', 'request'],
+      'a timed-out request reports each request and no response',
     );
   } finally {
     context.mock.timers.reset();
