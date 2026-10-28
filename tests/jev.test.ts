@@ -18,6 +18,7 @@ const STATE: JsonValue = {
 };
 const INSTRUCTIONS = { rule: RULE, question: QUESTION };
 const ANSWER = { model: 'jev-1.13.0', answers: { follows_instructions: { type: 'noul', noul: 0.9 } } };
+const RETRY_DELAYS_MS = [3_000, 10_000, 30_000] as const;
 
 function clearProxyVariables(): () => void {
   const saved = new Map<string, string | undefined>();
@@ -361,21 +362,45 @@ test('reports an unusable answer in full before rejecting', async () => {
   }
 });
 
-test('reports each request when the connection fails', async () => {
+test('reports each request when the connection fails', { timeout: 5_000 }, async context => {
   const origin = await refuseConnections();
-  const { exchanges, observer } = exchangesOf();
+  const requests = Array.from({ length: 4 }, () => Promise.withResolvers<void>());
+  const exchanges: DecisionExchange[] = [];
+  let requestCount = 0;
+  const observer: DecisionObserver = exchange => {
+    exchanges.push(exchange);
+    if (exchange.type === 'request') requests[requestCount++]?.resolve();
+  };
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    const pending = adapterFor(origin).decide(REQUEST, observer);
+    await requests[0]!.promise;
 
-  const error = await failed(() => adapterFor(origin).decide(REQUEST, observer));
+    for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt += 1) {
+      for (let step = 0; requestCount === attempt + 1 && step < 8; step += 1) {
+        await setImmediate();
+        context.mock.timers.tick(RETRY_DELAYS_MS[attempt]!);
+        await setImmediate();
+      }
+      assert.equal(requestCount, attempt + 2, `connection failure retry ${attempt + 1} must be reported`);
+      await requests[attempt + 1]!.promise;
+    }
+    const error = await failed(() => pending);
 
-  assert.match(error.message, /ECONNREFUSED/);
-  assert.deepEqual(
-    exchanges.map(exchange => exchange.type),
-    ['request', 'request', 'request', 'request'],
-    'each failed attempt must report its request without a response',
-  );
-  const [request] = exchanges;
-  assert.ok(request?.type === 'request');
-  assert.ok(request.body.includes(RULE), 'the reported request must still be the payload that was attempted');
+    assert.match(error.message, /ECONNREFUSED/);
+    assert.ok(!error.message.includes(API_KEY), 'the diagnostic must not leak the credential');
+    assert.ok(!error.message.includes(origin), 'the diagnostic must not leak the endpoint');
+    assert.deepEqual(
+      exchanges.map(exchange => exchange.type),
+      ['request', 'request', 'request', 'request'],
+      'each failed attempt must report its request without a response',
+    );
+    const [request] = exchanges;
+    assert.ok(request?.type === 'request');
+    assert.ok(request.body.includes(RULE), 'the reported request must still be the payload that was attempted');
+  } finally {
+    context.mock.timers.reset();
+  }
 });
 
 const MALFORMED: readonly { readonly label: string; readonly body: string }[] = [
@@ -522,18 +547,30 @@ test('does not follow a redirect', async () => {
   }
 });
 
-test('retries a transient server error and succeeds', async () => {
+test('retries a transient server error and succeeds', { timeout: 5_000 }, async context => {
   let backend: Loopback;
   let attempts = 0;
+  const responses = Array.from({ length: 3 }, () => Promise.withResolvers<void>());
+  let responseCount = 0;
   backend = await startLoopback(() => {
     attempts += 1;
     if (attempts === 3) backend.answer = { body: JSON.stringify(ANSWER) };
   });
+  context.mock.timers.enable({ apis: ['setTimeout'] });
   try {
     backend.answer = { status: 503, body: JSON.stringify({ error: 'unavailable' }) };
-    const { exchanges, observer } = exchangesOf();
+    const exchanges: DecisionExchange[] = [];
+    const observer: DecisionObserver = exchange => {
+      exchanges.push(exchange);
+      if (exchange.type === 'response') responses[responseCount++]?.resolve();
+    };
 
-    const result = await adapterFor(backend.origin).decide(REQUEST, observer);
+    const pending = adapterFor(backend.origin).decide(REQUEST, observer);
+    await responses[0]!.promise;
+    context.mock.timers.tick(RETRY_DELAYS_MS[0]);
+    await responses[1]!.promise;
+    context.mock.timers.tick(RETRY_DELAYS_MS[1]);
+    const result = await pending;
 
     assert.deepEqual(result, { probability: 0.9, model: 'jev-1.13.0' });
     assert.equal(backend.sent.length, 3);
@@ -542,39 +579,47 @@ test('retries a transient server error and succeeds', async () => {
       ['request', 'response', 'request', 'response', 'request', 'response'],
     );
   } finally {
+    context.mock.timers.reset();
     await backend.close();
   }
 });
 
-test('retries a server error three times with exponential backoff', async () => {
-  const requestTimes: bigint[] = [];
-  const backend = await startLoopback(() => requestTimes.push(process.hrtime.bigint()));
+test('retries a server error after 3, 10, and 30 seconds', { timeout: 5_000 }, async context => {
+  const responses = Array.from({ length: 4 }, () => Promise.withResolvers<void>());
+  let requestCount = 0;
+  let responseCount = 0;
+  const backend = await startLoopback();
+  context.mock.timers.enable({ apis: ['setTimeout'] });
   try {
     backend.answer = { status: 500, body: JSON.stringify({ error: 'boom' }) };
+    const exchanges: DecisionExchange[] = [];
+    const observer: DecisionObserver = exchange => {
+      exchanges.push(exchange);
+      if (exchange.type === 'request') requestCount += 1;
+      if (exchange.type === 'response') responses[responseCount++]?.resolve();
+    };
 
-    const error = await failed(() => adapterFor(backend.origin).decide(REQUEST));
+    const pending = adapterFor(backend.origin).decide(REQUEST, observer);
+    await responses[0]!.promise;
+    for (let retry = 0; retry < RETRY_DELAYS_MS.length; retry += 1) {
+      const delay = RETRY_DELAYS_MS[retry]!;
+      context.mock.timers.tick(delay - 1);
+      await setImmediate();
+      assert.equal(requestCount, retry + 1, `retry ${retry + 1} must wait the full ${delay} ms`);
+      context.mock.timers.tick(1);
+      await responses[retry + 1]!.promise;
+    }
+    const error = await failed(() => pending);
 
     assert.match(error.message, /HTTP 500/);
     assert.equal(backend.sent.length, 4, 'three retries must follow the initial request');
-    const intervals = requestTimes.slice(1).map((time, index) =>
-      Number(time - requestTimes[index]!) / 1_000_000);
-    assert.ok(intervals[0]! >= 50, `first retry delay was ${intervals[0]} ms`);
-    assert.ok(intervals[1]! >= 150, `second retry delay was ${intervals[1]} ms`);
-    assert.ok(intervals[2]! >= 350, `third retry delay was ${intervals[2]} ms`);
   } finally {
+    context.mock.timers.reset();
     await backend.close();
   }
 });
 
-test('maps a refused connection to a sanitized network error', async () => {
-  const origin = await refuseConnections();
 
-  const error = await failed(() => adapterFor(origin).decide(REQUEST));
-
-  assert.match(error.message, /ECONNREFUSED/);
-  assert.ok(!error.message.includes(API_KEY), 'the diagnostic must not leak the credential');
-  assert.ok(!error.message.includes('127.0.0.1'), 'the diagnostic must not leak the endpoint');
-});
 
 test('retries a stalled response after each 30-second timeout', { timeout: 5_000 }, async context => {
   const arrivals = Array.from({ length: 4 }, () => Promise.withResolvers<void>());
@@ -599,7 +644,7 @@ test('retries a stalled response after each 30-second timeout', { timeout: 5_000
       context.mock.timers.tick(1);
       await setImmediate();
       if (attempt < 3) {
-        context.mock.timers.tick(100 * 2 ** attempt);
+        context.mock.timers.tick(RETRY_DELAYS_MS[attempt]!);
         await arrivals[attempt + 1]!.promise;
       }
     }
