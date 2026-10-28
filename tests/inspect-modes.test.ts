@@ -222,6 +222,138 @@ test('inspect machine HTTP exchanges remain correlated strings with real thresho
   }
 });
 
+test('inspect OpenAI JSON redacts credentials and preserves decision results', async () => {
+  const secret = 'loop"back\\key';
+  const escapedSecret = JSON.stringify(secret).slice(1, -1);
+  const backend = await fixture({ apiKey: secret });
+  const rule = `import { Rule, ai } from '@alex-dbs/coderuler';
+export default class Example extends Rule {
+  files = ['src/*.txt'];
+  check = ai({
+    instruction: ${JSON.stringify(`All source should be tidy; credential marker ${secret} must stay private.`)},
+    examples: {
+      good: [${JSON.stringify(`clean sample ${secret}`)}],
+      bad: [${JSON.stringify(`messy sample ${secret}`)}],
+    },
+  });
+}
+`;
+  const target = project('openai-redaction', rule, `source ${secret}`);
+  const overrides = {
+    RK_BACKEND: 'openai',
+    OPENAI_API_KEY: secret,
+    OPENAI_BASE_URL: `${backend.baseUrl}/v1`,
+  };
+  backend.answer = () => ({
+    body: JSON.stringify({
+      model: 'gpt-6-luna',
+      usage: { input_tokens: 11, output_tokens: 4 },
+      answers: [{ type: 'predicate', name: 'follows_instructions', probability: 0.9 }],
+    }),
+  });
+
+  const result = await runProgramCaptured(['inspect', 'example', '--json'], target, overrides);
+  assert.equal(result.status, 0, result.stderr);
+  const document = inspection(result, '--json');
+  const request = document.events.find(event => event.type === 'request');
+  const response = document.events.find(event => event.type === 'response');
+  assert.ok(request?.type === 'request');
+  assert.ok(response?.type === 'response');
+  assert.equal(response.status, 200);
+
+  const wire = asMapping(backend.requests.at(-1)?.body, 'OpenAI wire request');
+  assert.equal(wire['model'], 'gpt-6-luna');
+  const wireInput = wire['input'];
+  assert.ok(typeof wireInput === 'string');
+  assert.ok(wireInput.includes(escapedSecret));
+  const wireQuestions = wire['questions'];
+  assert.ok(Array.isArray(wireQuestions));
+  const wireQuestion = asMapping(wireQuestions[0], 'OpenAI wire question');
+  const wireInstructions = wireQuestion['instructions'];
+  assert.ok(typeof wireInstructions === 'string');
+  assert.ok(wireInstructions.includes(secret));
+  assert.ok(wireInstructions.includes(JSON.stringify([`clean sample ${secret}`])));
+  assert.ok(wireInstructions.includes(JSON.stringify([`messy sample ${secret}`])));
+
+  const observedRequest = asMapping(JSON.parse(request.body), 'observed OpenAI request');
+  const observedInput = observedRequest['input'];
+  assert.ok(typeof observedInput === 'string');
+  const observedState = JSON.parse(observedInput) as unknown;
+  const serializedState = JSON.stringify(observedState);
+  assert.ok(serializedState.includes('[REDACTED]'));
+  assert.equal(serializedState.includes(secret), false);
+  assert.equal(serializedState.includes(escapedSecret), false);
+  const observedQuestions = observedRequest['questions'];
+  assert.ok(Array.isArray(observedQuestions));
+  const observedQuestion = asMapping(observedQuestions[0], 'observed OpenAI question');
+  const observedInstructions = observedQuestion['instructions'];
+  assert.ok(typeof observedInstructions === 'string');
+  assert.ok(observedInstructions.includes('All source should be tidy'));
+  assert.ok(observedInstructions.includes('clean sample [REDACTED]'));
+  assert.ok(observedInstructions.includes('messy sample [REDACTED]'));
+
+  const observedResponse = JSON.parse(response.body) as Record<string, unknown>;
+  assert.equal(observedResponse['model'], 'gpt-6-luna');
+  for (const body of document.events.flatMap(event =>
+    event.type === 'request' || event.type === 'response' ? [event.body] : [])) {
+    assert.equal(body.includes(secret), false);
+    assert.equal(body.includes(escapedSecret), false);
+  }
+  for (const output of [result.stdout, result.stderr]) {
+    assert.equal(output.includes(secret), false);
+    assert.equal(output.includes(escapedSecret), false);
+  }
+  assert.ok(result.stdout.includes('[REDACTED]'));
+
+  const report = document.reports[0]!;
+  assert.equal(report.status, 'pass');
+  const decision = report.evaluations[0]!.result;
+  assert.equal(decision.status, 'pass');
+  assert.equal(decision.model, 'gpt-6-luna');
+  assert.deepEqual(decision.usage, {
+    calls: 1, unreportedCalls: 0,
+    inputTokens: 11, outputTokens: 4,
+    inputCost: 11 * 0.10 / 1e6, outputCost: 0,
+  });
+});
+
+test('inspect OpenAI HTTP diagnostics do not expose credentials', async () => {
+  const secret = 'loop"back\\key';
+  const escapedSecret = JSON.stringify(secret).slice(1, -1);
+  const backend = await fixture({ apiKey: secret });
+  const rule = `import { Rule, ai } from '@alex-dbs/coderuler';
+export default class Example extends Rule {
+  files = ['src/*.txt'];
+  check = ai({ instruction: ${JSON.stringify(`Keep this credential private: ${secret}`)} });
+}
+`;
+  const target = project('openai-http-diagnostic', rule, `source ${secret}`);
+  const overrides = {
+    RK_BACKEND: 'openai',
+    OPENAI_API_KEY: secret,
+    OPENAI_BASE_URL: `${backend.baseUrl}/v1`,
+  };
+  backend.answer = () => ({
+    status: 503,
+    body: JSON.stringify({ error: { message: `upstream echoed ${secret}`, type: 'server_error' } }),
+  });
+
+  const result = await runProgramCaptured(['inspect', 'example', '--json'], target, overrides);
+  assert.equal(result.status, 2, result.stderr);
+  const document = inspection(result, '--json');
+  assert.match(document.error ?? '', /HTTP 503/);
+  const response = document.events.find(event => event.type === 'response');
+  assert.ok(response?.type === 'response');
+  assert.equal(response.status, 503);
+  assert.ok(response.body.includes('[REDACTED]'));
+  for (const output of [document.error ?? '', result.stdout, result.stderr, response.body]) {
+    assert.equal(output.includes(secret), false);
+    assert.equal(output.includes(escapedSecret), false);
+  }
+  assert.deepEqual(document.reports, []);
+});
+
+
 test('inspect JSONL streams request events before the backend responds', { timeout: 30_000 }, async context => {
   const backend = await fixture({ hold: true });
   const target = project('streaming', AI_RULE);
@@ -523,7 +655,7 @@ test('inspect rejects invalid prices before loading and does not expose price fl
 test('inspect recaps multiple actual calls and earlier verifications after a later backend failure', async () => {
   const backend = await fixture();
   let calls = 0;
-  backend.answer = () => ++calls === 3 ? { status: 503, body: 'stopped' } : {};
+  backend.answer = () => ++calls === 3 ? { status: 401, body: 'stopped' } : {};
   const target = project('multi-partial', `import { Rule, pass } from '@alex-dbs/coderuler';
 export default class Example extends Rule {
   files = ['src/*.txt'];

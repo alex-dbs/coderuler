@@ -361,12 +361,12 @@ Default input is `String(data)` for scalar/null data, otherwise source text. `in
 `ai<T = JsonValue>(options: AiOptions<T>): Evaluator<T>` accepts exactly one of `rule` or `instruction`:
 
 - `rule: string`: nonempty policy text. This option is deprecated; use `instruction` for new rules.
-- `instruction: string`: nonempty text describing the expected behavior of the selected code. Write a direct requirement that Jev can judge as respected or broken.
+- `instruction: string`: nonempty text describing the expected behavior of the selected code. Write a direct requirement that the selected provider can judge as respected or broken.
 - `examples?: { readonly good?: readonly string[]; readonly bad?: readonly string[] }`: conditioning examples, dense arrays of nonempty strings; omitted/empty lists are valid.
 - `violationMessage?: string`: nonempty reporting-only message, not sent as instructions.
 - `input?: (subject: Subject<T>, context: ProjectContext) => Awaitable<JsonValue>`: replace the default projection; output validates as JSON-compatible.
 
-Jev uses the fixed question "Is the rule respected?" Yes/true means no problems. No/false means at least one violation. The configured threshold decides pass or violation.
+Jev and OpenAI use the fixed question "Is the rule respected?" A higher probability means the rule is respected. The configured threshold decides pass or violation.
 
 ### AI instruction style
 
@@ -376,7 +376,7 @@ Weak: "Report a violation when a Go pointer is dereferenced without a nil check.
 
 Better: "Check each Go pointer for nil before dereferencing it." For nested fields, add the needed boundary: "Check every pointer in the field path before dereferencing the field."
 
-Keep reporting language in `violationMessage`, conditioning examples in `examples`, and test fixtures in `aiTests`; they do not belong in the instruction. Use selectors and filters for deterministic applicability. Keep Jev's input to the smallest scope that still supports a correct decision. For function-local code policies, use `scopes.astGrep` to select one function or method per scope, then filter for relevant syntax such as pointer dereferences. Include surrounding context only when it is needed for the decision.
+Keep reporting language in `violationMessage`, conditioning examples in `examples`, and test fixtures in `aiTests`; they do not belong in the instruction. Use selectors and filters for deterministic applicability. Keep provider input to the smallest scope that still supports a correct decision. For function-local code policies, use `scopes.astGrep` to select one function or method per scope, then filter for relevant syntax such as pointer dereferences. Include surrounding context only when needed to judge the policy.
 
 Compare wording with the policy and dataset held fixed:
 
@@ -386,7 +386,7 @@ Compare wording with the policy and dataset held fixed:
 4. Compare compliant scores toward `1` and violation scores toward `0` separately. Inspect individual regressions and the weakest score in each group, not just averages.
 5. Keep wording that improves separation without changing the policy or introducing wrong decisions. Repeat a close comparison before treating a small gain as reliable.
 
-`PASS` in test output means the expected result matched. A passing violation test still needs a low Jev score. Do not lower the threshold, relabel fixtures, or copy test cases into the instruction to improve the comparison. Results on a tuning dataset do not prove performance on unseen code.
+`PASS` in test output means the expected result matched. A passing violation test still needs a low AI score. Do not lower the threshold, relabel fixtures, or copy test cases into the instruction to improve the comparison. Results on a tuning dataset do not prove performance on unseen code.
 
 
 This rule checks Go pointer dereferences, including nested fields:
@@ -486,9 +486,9 @@ Default AI input is `{ filepath, scope: { id, data, captures? } }` when data exi
 
 Inside a custom check, `return context.ai({ instruction: '...' })` evaluates its current subject with effective settings and preserves AI result metadata. The deprecated `rule` option remains accepted for existing rules. Replacing that result requires intentionally preserving probability/model/threshold metadata; token accounting is automatic across all `context.ai` calls, even when returning a different result. `ai(...)` validates options when constructed but performs no loading-time network I/O.
 
-`RuleSettings` supports backend `'jev'`, model (default `'jev-latest'`), finite threshold in `[0, 1]` (default `0.4`), and finite nonnegative `inputCostPerMillion` / `outputCostPerMillion` prices (USD per million tokens; defaults `0.042` / `0`). Threshold precedence is CLI override → rule setting → `RK_THRESHOLD` → default; backend/model use rule setting → environment (`RK_BACKEND` / `TYPESAFE_DEFAULT_MODEL`) → default. AI passes only when probability is **strictly greater** than threshold; equality violates. Results include the effective threshold. Provider environment/key resolution is lazy at the first AI call; deterministic/skipped/filtered paths need no key. Live calls require `TYPESAFE_API_KEY`; use release configuration guidance for transport setup.
+`RuleSettings.backend` supports `'jev'` and `'openai'`; Jev is the default. Set `model`, threshold, `inputCostPerMillion`, or `outputCostPerMillion` in `settings` to override defaults. Both providers use a threshold of `0.4`; AI passes only when probability is **strictly greater** than threshold, and equality violates. Threshold precedence is CLI override → rule setting → `RK_THRESHOLD` → `0.4`. Backend precedence is rule setting → `RK_BACKEND` → `jev`. Model precedence is rule setting → selected provider's model variable → provider default. Jev uses `TYPESAFE_DEFAULT_MODEL` (default `jev-latest`) and `TYPESAFE_API_KEY`; OpenAI uses `OPENAI_DEFAULT_MODEL` (default `gpt-6-luna`) and `OPENAI_API_KEY`. The base URL variables are `TYPESAFE_BASE_URL` and `OPENAI_BASE_URL`, defaulting to `https://api.typesafe.ai` and `https://api.openai.com/v1`. Provider configuration and credentials are read only when an AI call selects that backend. Deterministic, skipped, and filtered paths need no key.
 
-Inspection reports per-verification `usage: AiUsage` and a final recap: `calls`, `unreportedCalls`, `inputTokens`, `outputTokens`, `inputCost`, and `outputCost` (USD). Counts come from provider responses; missing counts remain unreported and totals cover reported calls only. Configure prices through rule settings or `RK_INPUT_COST_PER_MILLION` / `RK_OUTPUT_COST_PER_MILLION`; inspect flags `--input-cost-per-million` / `--output-cost-per-million` override both. Prices change estimates, not decisions.
+Inspection reports per-verification `usage: AiUsage` and a final recap: `calls`, `unreportedCalls`, `inputTokens`, `outputTokens`, `inputCost`, and `outputCost` (USD). Counts come from provider responses; missing counts remain unreported and totals cover reported calls only. Default input prices are `$0.042` per million tokens for Jev and `$0.10` for OpenAI; both output prices default to `$0`. Price precedence is inspection override → rule setting → `RK_INPUT_COST_PER_MILLION` / `RK_OUTPUT_COST_PER_MILLION` → selected provider default. Prices change estimates, not decisions.
 
 
 ## Project readers

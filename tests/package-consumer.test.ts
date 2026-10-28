@@ -451,7 +451,7 @@ function runNpm(args: readonly string[], cwd: string, timeout?: number): RunResu
   return run(process.platform === 'win32' ? 'npm.cmd' : 'npm', args, options);
 }
 
-const CREDENTIAL_PREFIXES = ['RK_', 'TYPESAFE_'];
+const CREDENTIAL_PREFIXES = ['RK_', 'TYPESAFE_', 'OPENAI_'];
 const PROXY_KEYS: Readonly<Record<string, true>> = {
   http_proxy: true,
   https_proxy: true,

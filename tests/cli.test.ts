@@ -1325,6 +1325,77 @@ test('check carries examples, model settings and hides the violation message', a
   });
 });
 
+test('check selects OpenAI from a rule setting and reports OpenAI outcomes', async () => {
+  const target = sandbox.isolated('check-ai-openai');
+  writeFiles(target, { 'src/one.txt': 'SOURCE-TEXT-ONE' });
+  writeRule(target, 'openai', `
+import { Rule, ai } from '@alex-dbs/coderuler';
+
+export default class OpenAI extends Rule {
+  files = ['src/**/*.txt'];
+  settings = { backend: 'openai' as const };
+  check = ai({ rule: 'Files must be tidy.' });
+}
+`);
+  const fixture = await decisionFixture();
+  const env = {
+    RK_BACKEND: 'jev',
+    OPENAI_API_KEY: fixture.apiKey,
+    OPENAI_BASE_URL: `${fixture.baseUrl}/v1`,
+    OPENAI_CUSTOM_HEADERS: 'Authorization: Bearer other-key',
+  };
+  const reply = (probability: number) => ({
+    body: JSON.stringify({
+      model: 'gpt-6-luna',
+      usage: { input_tokens: 11, output_tokens: 0 },
+      answers: [{ type: 'predicate', name: 'follows_instructions', probability }],
+    }),
+  });
+
+  fixture.answer = () => reply(0.9);
+  const passing = await runCli(['check', '--json', '--output-all'], target, env);
+  assert.equal(passing.status, 0, passing.stderr);
+  const passingReport = reportNamed(parseCheckOutput(passing, 'OpenAI pass'), 'openai', 'OpenAI pass');
+  assert.deepEqual(passingReport.evaluations[0]!.result, {
+    status: 'pass',
+    probability: 0.9,
+    threshold: 0.4,
+    model: 'gpt-6-luna',
+    usage: {
+      calls: 1,
+      unreportedCalls: 0,
+      inputTokens: 11,
+      outputTokens: 0,
+      inputCost: 11 * 0.10 / 1_000_000,
+      outputCost: 0,
+    },
+  });
+  assert.equal(fixture.requests.length, 1);
+  assert.equal(fixture.requests[0]!.path, '/v1/decisions');
+  assert.equal(fixture.requests[0]!.authorization, `Bearer ${fixture.apiKey}`);
+
+  fixture.answer = () => reply(0.4);
+  const violating = await runCli(['check', '--json', '--output-all'], target, env);
+  assert.equal(violating.status, 1, violating.stderr);
+  const violatingReport = reportNamed(parseCheckOutput(violating, 'OpenAI equality'), 'openai', 'OpenAI equality');
+  assert.equal(violatingReport.evaluations[0]!.result.status, 'violation');
+  assert.equal(violatingReport.evaluations[0]!.result.probability, 0.4);
+  assert.equal(fixture.requests.length, 2);
+  assert.equal(fixture.requests[1]!.authorization, `Bearer ${fixture.apiKey}`);
+
+  fixture.answer = () => ({
+    body: JSON.stringify({
+      model: 'gpt-6-luna',
+      answers: [{ type: 'refusal', name: 'follows_instructions' }],
+    }),
+  });
+  const refused = await runCli(['check', '--json'], target, env);
+  assert.equal(refused.status, 2, refused.stderr);
+  assert.equal(refused.stdout, '');
+  assert.match(refused.stderr, /refus/i);
+  assert.equal(fixture.requests.length, 3);
+});
+
 test('check and inspect report the effective flag, rule, environment and default AI thresholds', async () => {
   const target = sandbox.isolated('check-thresholds');
   writeFiles(target, { 'src/one.txt': 'SOURCE-TEXT-ONE' });
@@ -1789,7 +1860,7 @@ test('inspect keeps non-JSON backend failures readable and streams the exchange 
   writeFiles(target, { 'src/one.txt': 'SOURCE-TEXT-ONE' });
   writeRule(target, 'basic', AI_WHOLE_FILE);
   const fixture = await decisionFixture();
-  fixture.answer = () => ({ status: 503, body: 'upstream refused\ntry later' });
+  fixture.answer = () => ({ status: 401, body: 'upstream refused\ntry later' });
   const result = await runCli(['inspect', 'basic'], target, fixture.env);
   expectStreamingFailure(result, 'inspect HTTP failure');
   const cards = evaluationCards(result.stdout);
@@ -1800,10 +1871,10 @@ test('inspect keeps non-JSON backend failures readable and streams the exchange 
     .map(line => /^  (Request|Response|Error)(?: ─+)?$/.exec(line)?.[1])
     .filter(title => title !== undefined);
   assert.deepEqual(sections, ['Request', 'Response', 'Error'], card);
-  assert.match(cardSection(card, 'Response'), /^\s+status: HTTP 503$/m);
+  assert.match(cardSection(card, 'Response'), /^\s+status: HTTP 401$/m);
   assertWirePayload(cardSection(card, 'Response'), 'upstream refused\ntry later');
   assert.match(cardSection(card, 'Error'), /^\s+stage: check$/m);
-  assert.match(result.stderr, /503/);
+  assert.match(result.stderr, /401/);
   assert.equal(fixture.requests.length, 1);
 });
 

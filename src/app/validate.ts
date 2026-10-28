@@ -36,7 +36,9 @@ function isStringList(value: unknown, allowEmpty: boolean): boolean {
 
 function validateSettings(settings: Record<string, unknown>, at: string): void {
   const backend = settings['backend'];
-  if (backend !== undefined && backend !== 'jev') invalid(at, 'settings.backend must be "jev"');
+  if (backend !== undefined && backend !== 'jev' && backend !== 'openai') {
+    invalid(at, 'settings.backend must be "jev" or "openai"');
+  }
 
   const model = settings['model'];
   if (model !== undefined && (typeof model !== 'string' || model.trim() === '')) {
