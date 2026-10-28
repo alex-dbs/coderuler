@@ -16,6 +16,8 @@ export interface JevOptions {
 const ENDPOINT = 'v1/systemone';
 const QUESTION_ID = 'follows_instructions';
 const TIMEOUT_MS = 30_000;
+const MAX_RETRIES = 3;
+const RETRY_BASE_DELAY_MS = 100;
 const REDACTED = '[REDACTED]';
 const URL_LABEL = 'Decision base URL (TYPESAFE_BASE_URL)';
 
@@ -69,6 +71,14 @@ function requestFailure(error: unknown, axios: AxiosStatic): Error {
       : new Error(`Decision request failed: ${code}`);
   }
   return new Error(`Decision request failed: ${error instanceof Error ? error.message : String(error)}`);
+}
+
+function shouldRetry(error: unknown, axios: AxiosStatic): boolean {
+  if (!axios.isAxiosError(error)) return false;
+  const status = error.response?.status;
+  return status === undefined
+    ? error.request !== undefined
+    : status === 408 || status === 429 || (status >= 500 && status < 600);
 }
 
 function readDecision(data: unknown): DecisionOutcome {
@@ -134,26 +144,31 @@ export class JevAdapter implements DecisionBackend {
         [QUESTION_ID]: { type: 'noul', instructions: request.instructions },
       },
     };
-
     const wire = JSON.stringify(body);
-    observer?.({ type: 'request', body: redact(wire, this.#needles) });
 
     let data: unknown;
-    try {
-      const response = await client.post<unknown>(ENDPOINT, wire, {
-        headers: { 'Content-Type': 'application/json' },
-      });
-      data = response.data;
-      observer?.({ type: 'response', status: response.status, body: redact(JSON.stringify(data) ?? '', this.#needles) });
-    } catch (error) {
-      if (axios.isAxiosError(error) && error.response !== undefined) {
-        observer?.({
-          type: 'response',
-          status: error.response.status,
-          body: redact(JSON.stringify(error.response.data) ?? '', this.#needles),
+    for (let retry = 0; ; retry += 1) {
+      observer?.({ type: 'request', body: redact(wire, this.#needles) });
+      try {
+        const response = await client.post<unknown>(ENDPOINT, wire, {
+          headers: { 'Content-Type': 'application/json' },
         });
+        data = response.data;
+        observer?.({ type: 'response', status: response.status, body: redact(JSON.stringify(data) ?? '', this.#needles) });
+        break;
+      } catch (error) {
+        if (axios.isAxiosError(error) && error.response !== undefined) {
+          observer?.({
+            type: 'response',
+            status: error.response.status,
+            body: redact(JSON.stringify(error.response.data) ?? '', this.#needles),
+          });
+        }
+        if (retry >= MAX_RETRIES || !shouldRetry(error, axios)) throw requestFailure(error, axios);
+        const delay = Promise.withResolvers<void>();
+        setTimeout(delay.resolve, RETRY_BASE_DELAY_MS * 2 ** retry);
+        await delay.promise;
       }
-      throw requestFailure(error, axios);
     }
 
     return readDecision(data);
