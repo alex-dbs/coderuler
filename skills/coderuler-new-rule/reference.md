@@ -173,18 +173,23 @@ The rule name is `proto-route-version`, saved as `.coderuler/proto-route-version
 The public shapes are:
 
 ```ts
-import type { Awaitable, JsonValue, SourceFile, ScopeMatch } from '@alex-dbs/coderuler';
+import type { Awaitable, JsonValue, LineRange, ProjectContext, SourceFile, ScopeMatch } from '@alex-dbs/coderuler';
 
 type ScopeSelector<T = JsonValue> =
-  (file: SourceFile) => Awaitable<readonly ScopeMatch<T>[]>;
+  (file: SourceFile, context?: ProjectContext) => Awaitable<readonly ScopeMatch<T>[]>;
 // SourceFile: { readonly filepath: string; readonly source: string }
 // ScopeMatch<T>: { readonly id: string; readonly source: string;
 //   readonly data?: T;
 //   readonly captures?: Readonly<Record<string, string | readonly string[]>>;
-//   readonly lines?: { readonly start: number; readonly end: number } }
+//   readonly lines?: LineRange }
 ```
 
-Return a dense array; `[]` means no matches. Use stable nonempty IDs and actual source text; line spans are 1-based inclusive. `data` must be finite, acyclic, JSON-compatible (including `null`, `false`, `0`, and `''`); captures contain only strings/string arrays.
+For `--diff` and `--pr`, CodeRuler selects changed files for the rule. It does not narrow custom scopes to changed lines. Your custom selector must use `changedLines` if it needs line-level filtering. A selector that ignores line ranges still checks every selected scope in each changed file.
+
+The engine passes `ProjectContext`; direct calls can omit it. Use stable nonempty IDs and actual source text. Line spans are 1-based and inclusive. `data` must be finite, acyclic, JSON-compatible (including `null`, `false`, `0`, and `''`); captures contain only strings/string arrays.
+When a selector reads diff fields, annotate its `context` parameter as `ProjectContext`. This lets direct callers omit the optional parameter.
+
+`changedFiles` and `changedLines` are `undefined` outside diff/PR checks. In those checks, an empty `changedFiles` set means no files changed. An empty `changedLines` map means there are no entries with line data. `changedLines.get(filepath)` returns added or replaced lines in that file. The ranges are 1-based and inclusive. A missing entry means line data is unavailable, for example for binary or conversion-attributed files. An entry with `[]` means the file changed but has no added lines.
 
 `Selection<T>` is `{ readonly files: readonly string[]; readonly exclude?: readonly string[]; readonly scope?: ScopeSelector<T> }`. `context.select<T>(selection)` returns `Promise<readonly ScopeSubject<T>[]>`. A scope subject adds `kind: 'scope'` and `filepath` to its match. Custom `select` returns flattened scope subjects, not group subjects.
 
@@ -197,14 +202,21 @@ import type {
   ScopeSubject, SelectionContext,
 } from '@alex-dbs/coderuler';
 
-const owners: ScopeSelector<string> = ({ source }) =>
-  source.split('\n').flatMap((line, index) => {
+const owners: ScopeSelector<string> = ({ filepath, source }, context: ProjectContext) => {
+  const candidates = source.split('\n').flatMap((line, index) => {
     const owner = /^# owner: (\S+)\s*$/.exec(line)?.[1];
     return owner === undefined ? [] : [{
       id: `owner:${index + 1}`, source: line, data: owner,
       lines: { start: index + 1, end: index + 1 },
     }];
   });
+  if (context.changedFiles === undefined) return candidates;
+  if (!context.changedFiles.has(filepath)) return [];
+  const ranges = context.changedLines?.get(filepath);
+  if (ranges === undefined) return candidates;
+  return candidates.filter(scope => scope.lines !== undefined && ranges.some(range =>
+    range.start <= scope.lines.end && scope.lines.start <= range.end));
+};
 
 export default class AssignedOwner extends Rule<string> {
   files = ['src/**/*.txt'];
@@ -316,9 +328,11 @@ Results validate; supplied messages survive reporting. Violations without a mess
 
 | Context                                                | Available members                                                                 |
 | ------------------------------------------------------ | --------------------------------------------------------------------------------- |
-| `ProjectContext`                                       | `readonly project: Project`; `trace(message: string, details?: JsonValue): void`. |
+| `ProjectContext`                                       | `project`; optional `changedFiles: ReadonlySet<string>` and `changedLines: ReadonlyMap<string, readonly LineRange[]>`; `trace(message, details?)`. |
 | `SelectionContext extends ProjectContext`              | `select<T>(selection: Selection<T>): Promise<readonly ScopeSubject<T>[]>`.        |
 | `CheckContext<T = JsonValue> extends SelectionContext` | `readonly ruleName: string`; `ai(options: AiOptions<T>): Promise<CheckResult>`. |
+
+`changedFiles` contains paths that changed in the project. `changedLines` maps changed paths to added or replaced lines. These values are absent outside `--diff` and `--pr` runs. In those runs, an empty set means no changed files. An empty map means no exact line ranges are available. A missing entry for a path means line data is unavailable, for example for binary or conversion-attributed files. An entry with `[]` means the file changed but has no added lines.
 
 
 Use `trace` for decision evidence visible during inspection; keep normal execution free of ad-hoc console output. AI/regex projection callbacks receive only `ProjectContext`, not the full check context.

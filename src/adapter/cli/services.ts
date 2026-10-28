@@ -1,4 +1,5 @@
 import type {
+  DiffChanges,
   LoadedRule,
   Project,
   RuleReport,
@@ -98,7 +99,7 @@ export interface ExecutionServices extends RuleServices {
 }
 
 export interface CheckServices extends ExecutionServices {
-  readonly changedFiles: (root: string, base: string) => Promise<ReadonlySet<string>>;
+  readonly collectChanges: (root: string, base: string) => Promise<DiffChanges>;
   readonly checkoutPullRequest: (selector: string, baseBranch?: string) => Promise<PullRequestCheckout>;
   readonly commentOnPullRequest: (
     root: string,

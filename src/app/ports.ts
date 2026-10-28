@@ -3,6 +3,7 @@ import type {
   CheckResult,
   GroupSubject,
   JsonValue,
+  LineRange,
   Rule,
   RuleSettings,
   ScopeSubject,
@@ -10,6 +11,11 @@ import type {
   TokenPricing,
   TokenUsage,
 } from './rule.js';
+
+export interface DiffChanges {
+  readonly changedFiles: ReadonlySet<string>;
+  readonly changedLines: ReadonlyMap<string, readonly LineRange[]>;
+}
 
 export interface Project {
   readonly root: string;
@@ -85,6 +91,7 @@ export interface RunContext {
   readonly project: Project;
   readonly isTarget: (filepath: string) => boolean;
   readonly changedFiles?: ReadonlySet<string>;
+  readonly changedLines?: ReadonlyMap<string, readonly LineRange[]>;
   readonly concurrency: number;
   readonly resolveDecision: (settings: RuleSettings) => DecisionRuntime;
   readonly emit?: (event: RunEvent) => void;

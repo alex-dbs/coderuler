@@ -79,6 +79,7 @@ export async function executeRules(
     context.emit?.(event);
   };
   const changedFiles = context.changedFiles;
+  const changedLines = context.changedLines;
   const changedPaths = changedFiles === undefined
     ? undefined
     : [...changedFiles].filter(filepath => isEligibleRelativePath(filepath) && context.isTarget(filepath));
@@ -95,9 +96,11 @@ export async function executeRules(
       });
     };
 
-  const projectContextFor = (name: string): ProjectContext => ({
+  const projectContextFor = (name: string, evaluationId?: number): ProjectContext => ({
     project: context.project,
-    trace: traceFor(name),
+    ...(changedFiles === undefined ? {} : { changedFiles }),
+    ...(changedLines === undefined ? {} : { changedLines }),
+    trace: traceFor(name, evaluationId),
   });
 
   const fail = (name: string | undefined, stage: string, error: unknown, evaluationId?: number): Error => {
@@ -170,7 +173,7 @@ export async function executeRules(
       const matches: readonly ScopeMatch<JsonValue>[] =
         scope === undefined
           ? wholeFileScope({ filepath, source })
-          : ((await scope({ filepath, source })) as readonly ScopeMatch<JsonValue>[]);
+          : ((await scope({ filepath, source }, projectContextFor(name, evaluationId))) as readonly ScopeMatch<JsonValue>[]);
       if (!Array.isArray(matches)) {
         throw new Error(`Rule "${name}" scope selector must return an array of scopes`);
       }
@@ -188,8 +191,7 @@ export async function executeRules(
   };
 
   const selectionContextFor = (name: string, changedOnly: boolean): SelectionContext => ({
-    project: context.project,
-    trace: traceFor(name),
+    ...projectContextFor(name),
     select: selection => selectFromRule(name, selection, undefined, changedOnly),
   });
 
@@ -211,7 +213,6 @@ export async function executeRules(
     plan.evaluationStartedAt ??= performance.now();
     const { name, rule } = plan;
     emit({ type: 'evaluation', evaluationId, name, subject });
-    const trace = traceFor(name, evaluationId);
     let trackedUsage: AiUsage | undefined;
     let pendingAi: Set<Promise<CheckResult>> | undefined;
     let accountingFailure: { readonly error: Error } | undefined;
@@ -246,13 +247,12 @@ export async function executeRules(
       }
     };
     const checkContext: CheckContext<JsonValue> = {
-      project: context.project,
+      ...projectContextFor(name, evaluationId),
       ruleName: name,
-      trace,
       select: selection => selectFromRule(name, selection, evaluationId),
       ai: options => {
         const call = evaluateAi(
-          subject, options, { project: context.project, ruleName: name, trace }, runtimeOf(plan), observer,
+          subject, options, { ...projectContextFor(name, evaluationId), ruleName: name }, runtimeOf(plan), observer,
         );
         const pending = pendingAi ??= new Set<Promise<CheckResult>>();
         pending.add(call);

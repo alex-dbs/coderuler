@@ -152,6 +152,68 @@ test('--pr uses current committed base and global policy only on PR changes', as
   assertClean(target);
 });
 
+test('--pr applies base policy to current-head changed-line coordinates', async context => {
+  let target = fixture(context, 'changed-lines');
+  cleanCaller(target);
+  writeFile(join(target.home, '.coderuler/global.rule.ts'), policy('() => pass()'));
+
+  git(target, 'checkout', 'main');
+  writeFile(join(target.cwd, 'src/changed.txt'), 'BAD unchanged\nclean\n');
+  writeFile(join(target.cwd, '.coderuler/base.rule.ts'), policy(
+    `subject => subject.source.includes('BAD') ? violation('Changed bad line', [{ filepath: subject.filepath, lines: subject.lines }]) : pass()`,
+    '',
+    `scope = (file, context) => {
+    if (context.changedFiles?.has('.coderuler/base.rule.ts')) {
+      throw new Error('Loaded base rule files must not be in changedFiles');
+    }
+    if (context.changedLines?.has('.coderuler/base.rule.ts')) {
+      throw new Error('Loaded base rule files must not be in changedLines');
+    }
+    const candidates = file.source.split('\\n').flatMap((line, index) => line.includes('BAD') ? [{
+      id: String(index + 1), source: line, lines: { start: index + 1, end: index + 1 },
+    }] : []);
+    if (context.changedFiles === undefined) return candidates;
+    if (!context.changedFiles.has(file.filepath)) return [];
+    const ranges = context.changedLines?.get(file.filepath);
+    if (ranges === undefined) return candidates;
+    return candidates.filter(scope => ranges.some(range => range.start <= scope.lines.end && scope.lines.start <= range.end));
+  };`,
+  ));
+  const basePolicy = commit(target, 'add diff-aware base policy');
+  git(target, 'push', target.remote, 'main:refs/heads/main');
+
+  git(target, 'checkout', '-B', 'feature/pr-fixture', basePolicy);
+  writeFile(join(target.cwd, 'src/changed.txt'), 'BAD unchanged\nBAD changed by the PR\n');
+  writeFile(join(target.cwd, '.coderuler/base.rule.ts'), `throw new Error('PR-head policy must not execute');\n`);
+  const head = commit(target, 'change the second current-head line');
+  git(target, 'push', '--force', target.remote, `${head}:refs/pull/${PR_NUMBER}/head`);
+  target = { ...target, head };
+  const requests = await interceptGithub(context, target);
+  const result = await check(target, ['--pr', '42']);
+  assert.equal(result.status, 1, result.stderr);
+  const reports = parseCheckOutput(result, 'changed-line PR');
+  const baseReport = reports.find(report => report.name === 'base');
+  assert.ok(baseReport);
+  assert.match(baseReport.ruleFile, /[/\\]coderuler-pr-[^/\\]+[/\\]base[/\\]\.coderuler[/\\]base\.rule\.ts$/);
+  assert.equal(reports.flatMap(report => report.evaluations).filter(({ result: finding }) => finding.status === 'violation').length, 1);
+  assert.deepEqual(baseReport.evaluations.map(({ subject, result: finding }) => ({
+    filepath: subject.kind === 'scope' ? subject.filepath : '',
+    source: subject.kind === 'scope' ? subject.source : '',
+    status: finding.status,
+    message: finding.message,
+    locations: finding.locations,
+  })), [{
+    filepath: 'src/changed.txt',
+    source: 'BAD changed by the PR',
+    status: 'violation',
+    message: 'Changed bad line',
+    locations: [{ filepath: 'src/changed.txt', lines: { start: 2, end: 2 } }],
+  }]);
+  assert.deepEqual(requests.map(({ method, url }) => ({ method, url })), [
+    { method: 'GET', url: `/repos/${PR_REPOSITORY}/pulls/${PR_NUMBER}` },
+  ]);
+});
+
 test('--base release selects distinct committed policy and the release merge-base', async context => {
   let target = fixture(context, 'release');
   cleanCaller(target);

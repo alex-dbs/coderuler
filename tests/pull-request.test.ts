@@ -83,6 +83,10 @@ test('numeric SSH origin materializes complete committed trees and only merge-ba
   assert.equal(existsSync(join(result.rulesRoot, '.coderuler/head-only.rule.ts')), false);
   assert.equal(existsSync(join(result.rulesRoot, '.coderuler/caller-only.rule.ts')), false);
   assert.deepEqual([...result.changedFiles].sort(), ['policy/helper.ts', 'src/changed.txt']);
+  assert.deepEqual([...result.changedLines], [
+    ['policy/helper.ts', [{ start: 1, end: 1 }]],
+    ['src/changed.txt', [{ start: 1, end: 1 }]],
+  ]);
   assert.deepEqual(requests.map(request => [request.method, request.url, request.authorization]), [
     ['GET', `/repos/${PR_REPOSITORY}/pulls/42`, `Bearer ${PR_TOKEN}`],
   ]);
@@ -135,6 +139,15 @@ test('explicit base selects the branch tip policy and its distinct merge-base, n
   assert.match(readFileSync(join(selected.rulesRoot, '.coderuler/base.rule.ts'), 'utf8'), /Committed release policy/);
   assert.deepEqual([...main.changedFiles].sort(), ['policy/helper.ts', 'src/changed.txt', 'src/release-shared.txt']);
   assert.deepEqual([...selected.changedFiles].sort(), ['policy/helper.ts', 'src/changed.txt']);
+  assert.deepEqual([...main.changedLines], [
+    ['policy/helper.ts', [{ start: 1, end: 1 }]],
+    ['src/changed.txt', [{ start: 1, end: 1 }]],
+    ['src/release-shared.txt', [{ start: 1, end: 1 }]],
+  ]);
+  assert.deepEqual([...selected.changedLines], [
+    ['policy/helper.ts', [{ start: 1, end: 1 }]],
+    ['src/changed.txt', [{ start: 1, end: 1 }]],
+  ]);
 });
 
 test('missing or malformed default metadata fails, but explicit branch does not depend on base.ref', async context => {

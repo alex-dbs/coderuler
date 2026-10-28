@@ -126,6 +126,25 @@ A custom function receives the selected subject and a context object. Return `pa
 
 The hooks receive `project` readers and `trace(message, details?)`. `select` also receives `context.select(...)`. Checks also receive `ruleName` and `context.ai(...)`.
 
+In `--diff` and `--pr` checks, the context also exposes:
+
+```ts
+context.changedFiles // ReadonlySet<string> of changed project-relative paths
+context.changedLines // ReadonlyMap<string, readonly { start: number; end: number }[]>
+```
+
+Both values are `undefined` when no diff was collected. In diff mode, empty collections mean no changes. Ranges are 1-based, inclusive added or replaced lines in the current file. A known changed path can have `[]` when it has no added lines. If a path is missing from `changedLines`, its line information is unavailable, for example for binary or conversion-attributed files; it is not unchanged.
+
+For example, select only scopes whose line spans overlap a changed range:
+
+```ts
+const ranges = context.changedLines?.get(filepath);
+const overlaps = scope.lines !== undefined && ranges?.some(range =>
+  range.start <= scope.lines.end && scope.lines.start <= range.end) === true;
+```
+
+When diff data is absent, a selector can keep its full-scan behavior. In diff mode, use `changedFiles` to distinguish changed paths from unchanged paths and map presence to distinguish unavailable line information from an empty range list.
+
 | Project reader | Result |
 | --- | --- |
 | `project.glob(patterns)` | Eligible paths in lexical order |

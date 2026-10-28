@@ -85,9 +85,9 @@ export function createServices(
           runRules: execution.executeRules,
           decisionResolver: (thresholdOverride?: number, pricingOverrides?: Partial<TokenPricing>) =>
             settings.createDecisionResolver(env, thresholdOverride, pricingOverrides),
-          async changedFiles(root: string, base: string) {
-            const { changedFiles } = await import('../adapter/git/changes.js');
-            return changedFiles(root, base);
+          async collectChanges(root: string, base: string) {
+            const { collectChanges } = await import('../adapter/git/changes.js');
+            return collectChanges(root, base);
           },
           async checkoutPullRequest(selector: string, baseBranch?: string) {
             const { createPullRequestCheckout } = await import('../adapter/github/pull-request.js');

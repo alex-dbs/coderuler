@@ -25,6 +25,7 @@ import type {
   RuleSettings,
   RunContext,
   RunEvent,
+  LineRange,
   ScopeMatch,
   ScopeSelector,
   ScopeSubject,
@@ -119,6 +120,8 @@ interface HarnessOptions {
   readonly concurrency?: number;
   readonly isTarget?: (filepath: string) => boolean;
   readonly threshold?: number;
+  readonly changedFiles?: ReadonlySet<string>;
+  readonly changedLines?: ReadonlyMap<string, readonly LineRange[]>;
 }
 
 class Harness {
@@ -134,6 +137,8 @@ class Harness {
       project,
       isTarget: options.isTarget ?? (() => true),
       concurrency: options.concurrency ?? 8,
+      ...(options.changedFiles === undefined ? {} : { changedFiles: options.changedFiles }),
+      ...(options.changedLines === undefined ? {} : { changedLines: options.changedLines }),
       resolveDecision: (settings: RuleSettings): DecisionRuntime => {
         this.resolveCalls += 1;
         return {
@@ -204,6 +209,16 @@ class TestRule extends Rule {
     return this.#behavior.select === undefined ? super.select(context) : this.#behavior.select(context);
   }
 }
+const changedLineScope: ScopeSelector = (file, context) => {
+  const ranges = context?.changedLines?.get(file.filepath);
+  return file.source.split('\n').flatMap((source, index) => {
+    const line = index + 1;
+    return ranges === undefined || ranges.some(range => line >= range.start && line <= range.end)
+      ? [{ id: `line-${line}`, source, lines: { start: line, end: line } }]
+      : [];
+  });
+};
+
 
 function loaded(name: string, rule: TestRule, ruleFile = `${RULE_DIR}/${name}.rule.ts`): LoadedRule {
   return { name, ruleFile, rule: rule as unknown as Rule<unknown> };
@@ -811,6 +826,56 @@ test('an empty selection produces no groups and no evaluations', async () => {
   assert.equal(report.reason, 'no matching subjects');
   assert.deepEqual(report.evaluations, []);
   assert.equal(eventsOfType(harness.events, 'group').length, 0);
+});
+
+test('AI input receives only changed-line source through the rule callback', async () => {
+  const rule = new TestRule({
+    files: ['a.txt'],
+    scope: changedLineScope,
+    check: ai({ rule: 'Review changed content', input: subject => subject.kind === 'scope' ? subject.source : '' }),
+  });
+  const { report, harness } = await runRule(rule, new MemoryProject('/repo', {
+    'a.txt': 'BAD unchanged\nBAD changed\nclean',
+  }), {
+    changedFiles: new Set(['a.txt']),
+    changedLines: new Map([['a.txt', [{ start: 2, end: 2 }]]]),
+  }, 'changed-ai-input');
+  assert.equal(report.status, 'pass');
+  assert.equal(harness.backend.requests.length, 1);
+  assert.equal(harness.backend.requests[0]?.state, 'BAD changed');
+});
+
+test('regex input tests only changed-line source and produces its violation', async () => {
+  const rule = new TestRule({
+    files: ['a.txt'],
+    check: regex({
+      pattern: /^GOOD/,
+      violationMessage: 'Changed line is bad',
+      input: (subject, context) => {
+        const ranges = context.changedLines?.get(subject.filepath);
+        if (ranges === undefined) return subject.source;
+        return subject.source.split('\n').filter((_line, index) => ranges.some(range =>
+          index + 1 >= range.start && index + 1 <= range.end)).join('\n');
+      },
+    }),
+  });
+  const { report, harness } = await runRule(rule, new MemoryProject('/repo', {
+    'a.txt': 'clean unchanged\nBAD changed\nclean after',
+  }), {
+    changedFiles: new Set(['a.txt']),
+    changedLines: new Map([['a.txt', [{ start: 2, end: 2 }]]]),
+  }, 'changed-regex-input');
+  assert.equal(report.status, 'violation');
+  assert.equal(harness.resolveCalls, 0);
+  const regexTrace = harness.events.find(event => event.type === 'trace' && event.message === 'regex');
+  assert.deepEqual(regexTrace?.type === 'trace' ? regexTrace.details : undefined, {
+    pattern: '^GOOD',
+    flags: '',
+    evaluations: [{ filepath: 'a.txt', scopeId: '$', input: 'BAD changed', matched: false }],
+  });
+  assert.deepEqual(report.evaluations[0]?.result.locations, [{
+    filepath: 'a.txt', scopeId: '$', lines: { start: 1, end: 3 },
+  }]);
 });
 
 test('ai projects the current subject and resolves one runtime per rule', async () => {

@@ -178,13 +178,13 @@ Omitted or `undefined` options keep defaults. Explicit `null` is invalid for str
 
 ## Custom selectors
 
-Use a custom selector when the built-in factories cannot select the required region:
+Use a custom selector when built-in factories cannot select the required region. The engine passes the file and a `ProjectContext` with optional diff data. The context is optional when you call a selector directly.
 
 ```ts
-import type { ScopeSelector } from '@alex-dbs/coderuler';
+import type { ProjectContext, ScopeSelector } from '@alex-dbs/coderuler';
 
-const owners: ScopeSelector<string> = ({ source }) =>
-  source.split('\n').flatMap((line, index) => {
+const owners: ScopeSelector<string> = ({ filepath, source }, context: ProjectContext) => {
+  const candidates = source.split('\n').flatMap((line, index) => {
     const owner = /^# owner: (\S+)\s*$/.exec(line)?.[1];
     return owner === undefined ? [] : [{
       id: `owner:${index + 1}`,
@@ -193,13 +193,22 @@ const owners: ScopeSelector<string> = ({ source }) =>
       lines: { start: index + 1, end: index + 1 },
     }];
   });
+  if (context === undefined) return candidates;
+  const ranges = context.changedLines?.get(filepath);
+  if (context.changedFiles === undefined) return candidates;
+  if (!context.changedFiles.has(filepath)) return [];
+  if (ranges === undefined) return candidates; // changed, but line information is unavailable
+  return candidates.filter(scope => scope.lines !== undefined && ranges.some(range =>
+    range.start <= scope.lines.end && scope.lines.start <= range.end));
+};
 ```
+When you read diff fields from a custom selector, annotate `context` as `ProjectContext`. This keeps the context optional for callers that invoke the selector directly.
 
 The public signature is:
 
 ```ts
 type ScopeSelector<T> =
-  (file: SourceFile) => Awaitable<readonly ScopeMatch<T>[]>;
+  (file: SourceFile, context?: ProjectContext) => Awaitable<readonly ScopeMatch<T>[]>;
 
 interface SourceFile {
   readonly filepath: string;
@@ -214,6 +223,8 @@ interface ScopeMatch<T> {
   readonly lines?: { readonly start: number; readonly end: number };
 }
 ```
+
+Without diff data, return all candidate scopes. With exact ranges, return only overlapping scopes. A missing range entry for a changed file means line information is unavailable (for example, for binary or conversion-attributed files), so this example returns all candidate scopes in that file. An empty range list selects no scopes.
 
 Return a dense array. `[]` means no matches. IDs must be nonempty and unique per filepath within the rule. Use actual source text and 1-based inclusive line spans. Data must be finite, acyclic, and JSON-compatible. `null`, `false`, `0`, and an empty string are valid data.
 

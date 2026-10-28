@@ -17,12 +17,17 @@ export interface SourceFile {
   readonly source: string;
 }
 
+export interface LineRange {
+  readonly start: number;
+  readonly end: number;
+}
+
 export interface ScopeMatch<T = JsonValue> {
   readonly id: string;
   readonly source: string;
   readonly data?: T;
   readonly captures?: Readonly<Record<string, string | readonly string[]>>;
-  readonly lines?: { readonly start: number; readonly end: number };
+  readonly lines?: LineRange;
 }
 
 export interface ScopeSubject<T = JsonValue> extends ScopeMatch<T> {
@@ -38,7 +43,9 @@ export interface GroupSubject<T = JsonValue> {
 
 export type Subject<T = JsonValue> = ScopeSubject<T> | GroupSubject<T>;
 
-export type ScopeSelector<T = JsonValue> = (file: SourceFile) => Awaitable<readonly ScopeMatch<T>[]>;
+export type ScopeSelector<T = JsonValue> = {
+  bivarianceHack(file: SourceFile, context?: ProjectContext): Awaitable<readonly ScopeMatch<T>[]>;
+}['bivarianceHack'];
 
 export type Grouping =
   | 'scope'
@@ -75,7 +82,7 @@ export interface AiUsage extends TokenUsage {
 export interface ViolationLocation {
   readonly filepath: string;
   readonly scopeId?: string;
-  readonly lines?: { readonly start: number; readonly end: number };
+  readonly lines?: LineRange;
 }
 
 export interface CheckResult {
@@ -113,6 +120,8 @@ export type Evaluator<T = JsonValue> = (
 
 export interface ProjectContext {
   readonly project: Project;
+  readonly changedFiles?: ReadonlySet<string>;
+  readonly changedLines?: ReadonlyMap<string, readonly LineRange[]>;
   trace(message: string, details?: JsonValue): void;
 }
 
