@@ -16,8 +16,7 @@ export interface JevOptions {
 const ENDPOINT = 'v1/systemone';
 const QUESTION_ID = 'follows_instructions';
 const TIMEOUT_MS = 30_000;
-const MAX_RETRIES = 3;
-const RETRY_BASE_DELAY_MS = 100;
+const RETRY_DELAYS_MS = [3_000, 10_000, 30_000] as const;
 const REDACTED = '[REDACTED]';
 const URL_LABEL = 'Decision base URL (TYPESAFE_BASE_URL)';
 
@@ -164,9 +163,10 @@ export class JevAdapter implements DecisionBackend {
             body: redact(JSON.stringify(error.response.data) ?? '', this.#needles),
           });
         }
-        if (retry >= MAX_RETRIES || !shouldRetry(error, axios)) throw requestFailure(error, axios);
+        const delayMs = RETRY_DELAYS_MS[retry];
+        if (delayMs === undefined || !shouldRetry(error, axios)) throw requestFailure(error, axios);
         const delay = Promise.withResolvers<void>();
-        setTimeout(delay.resolve, RETRY_BASE_DELAY_MS * 2 ** retry);
+        setTimeout(delay.resolve, delayMs);
         await delay.promise;
       }
     }
