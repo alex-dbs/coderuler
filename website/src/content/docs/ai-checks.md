@@ -84,7 +84,7 @@ Compare instruction styles on the same fixtures, model version, examples, input,
 
 ## Advanced: customize the input
 
-By default, AI receives the selected scopes, including their path and scope metadata, plus the rule instruction and examples. It does not receive the whole repository. Scope selection keeps the review context focused.
+By default, AI receives the selected scopes, including their path and scope metadata, plus the rule instruction and examples. It does not receive the whole repository. Keep Jev's input to the smallest scope that still supports a correct decision. For function-local code policies, use `scopes.astGrep` to select one function or method per scope and filter for relevant syntax, such as pointer dereferences.
 
 Use the `input` option to reduce the context further. This example sends only the selected source text:
 

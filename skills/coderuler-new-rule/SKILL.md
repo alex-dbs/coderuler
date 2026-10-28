@@ -33,6 +33,8 @@ For a deterministic rule, add a named `tests` export with `.passes()` and `.viol
 
 For an AI rule, use `instruction` to state what compliant code does, beginning with a direct requirement. Add only applicability boundaries or real exceptions needed to define the policy; keep one policy per rule. Keep reporting language in `violationMessage`, examples in `examples`, and test cases in `aiTests`—not in the instruction. See [AI instruction style](reference.md#ai-instruction-style).
 
+Keep Jev's input to the smallest scope that still supports a correct decision. For function-local code rules, use `scopes.astGrep` to select one function or method per scope and filter for relevant syntax, such as pointer dereferences.
+
 Run the relevant cases before the policy change and require an assertion mismatch for the intended violation, not a loading error. Implement the policy, then require every case to pass.
 
 This complete example requires at least two replicas whenever `spec.replicas` is an integer:
