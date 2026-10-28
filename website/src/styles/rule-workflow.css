@@ -75,6 +75,8 @@
 .workflow-ai-instruction p { margin: 0; color: var(--foreground); font-size: 14px; line-height: 1.5; }
 .workflow-model { display: grid; gap: 4px; padding: 10px; border: 1px solid var(--accent); border-radius: 4px; background: var(--background); }
 .workflow-model > span { color: var(--accent); font-size: 14px; }
+.rule-workflow[data-flow-enhanced] .workflow-model:not([data-flow-visible]) { opacity: 0; visibility: hidden; }
+.rule-workflow[data-flow-enhanced] .workflow-model[data-flow-visible] { opacity: 1; visibility: visible; }
 .workflow-pattern { display: block; padding: 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--background); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px !important; line-height: 1.8; }
 .workflow-url { display: flex; flex-wrap: wrap; padding-block: 16px; font-size: 14px !important; }
 .workflow-url > span { padding-block: 4px; border-bottom: 2px solid var(--line); }
@@ -97,6 +99,7 @@
 .workflow-outcome p { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .workflow-announcement { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .rule-workflow [hidden] { display: none; }
+.rule-workflow[data-flow-enhanced] .workflow-outcome[data-flow-verdict='pending'] { visibility: hidden; }
 .rule-workflow button:focus-visible, .workflow-code pre:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 @media (max-width: 760px) {

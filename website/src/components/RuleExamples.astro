@@ -3,11 +3,13 @@ import RuleCode from './RuleCode.astro';
 import goRuleSource from '../../../.coderuler/go-dereference-guard.rule.ts?raw';
 import goAppRuleSource from '../../../.coderuler/go-app-no-infrastructure.rule.ts?raw';
 import serviceRuleSource from '../../../.coderuler/service-proto.rule.ts?raw';
+import jsonSchemaRuleSource from '../../../.coderuler/json-schema-config.rule.ts?raw';
 import Violation from './Violation.astro';
 import { sitePath } from '../lib/paths';
 import '../styles/rule-examples.css';
 
 const source = 'https://github.com/alex-dbs/coderuler/blob/main/.coderuler/';
+const sourceDirectory = 'https://github.com/alex-dbs/coderuler/tree/main/.coderuler/';
 const httpRule = `import { Rule, ai, scopes } from '@alex-dbs/coderuler';
 
 export default class HttpResponseSplitting extends Rule {
@@ -57,6 +59,10 @@ const goAppRule = goAppRuleSource
   .trim();
 
 const serviceRule = serviceRuleSource.split('\nfunction proto')[0].trim();
+const jsonSchemaRule = jsonSchemaRuleSource.split('\nexport const tests')[0].trim();
+const invalidConfig = `{
+  "port": "8080"
+}`;
 const nestedPointer = `type Config struct { Child *Child }
 type Child struct { Value *int }
 
@@ -100,23 +106,24 @@ func Find(ctx context.Context, db *sql.DB, id string) (Account, error) {
     <div>
       <h2 id="rule-examples-title">Some ideas for you…</h2>
       <div class="rule-example-links">
-        <a href={`${source}go-append-slice.rule.ts`} aria-label="Read the full Go slice source policy">Read the full source policy <span aria-hidden="true">↗</span></a>
+        <a href={sourceDirectory} aria-label="Read all examples">Read all examples <span aria-hidden="true">↗</span></a>
       </div>
     </div>
-    <p>See how these rules find unsafe code and enforce project conventions.</p>
+    <p>See how rules enforce policies in code and configuration.</p>
   </header>
 
   <div class="rule-example-tabs" role="tablist" aria-label="Repository rule examples" data-rule-tablist hidden>
     <button id="rule-tab-http" type="button" role="tab" aria-selected="true" aria-controls="rule-panel-http" tabindex="0" data-rule-tab>Security</button>
     <button id="rule-tab-go-app" type="button" role="tab" aria-selected="false" aria-controls="rule-panel-go-app" tabindex="-1" data-rule-tab>Architecture</button>
-    <button id="rule-tab-go" type="button" role="tab" aria-selected="false" aria-controls="rule-panel-go" tabindex="-1" data-rule-tab>Go pointers</button>
-    <button id="rule-tab-service" type="button" role="tab" aria-selected="false" aria-controls="rule-panel-service" tabindex="-1" data-rule-tab>API conventions</button>
+    <button id="rule-tab-go" type="button" role="tab" aria-selected="false" aria-controls="rule-panel-go" tabindex="-1" data-rule-tab>Bug finding</button>
+    <button id="rule-tab-service" type="button" role="tab" aria-selected="false" aria-controls="rule-panel-service" tabindex="-1" data-rule-tab>Conventions</button>
+    <button id="rule-tab-json-schema" type="button" role="tab" aria-selected="false" aria-controls="rule-panel-json-schema" tabindex="-1" data-rule-tab>Configuration</button>
   </div>
 
   <article id="rule-panel-http" class="rule-example" aria-labelledby="http-example-title" data-rule-example="http" data-rule-panel>
     <div class="rule-example-copy">
       <h3 id="http-example-title">Prevent unsafe HTTP responses.</h3>
-      <p class="rule-example-timing"><strong>131<span>ms</span></strong><span>to catch a security issue<br />at a cost of $0.0002</span></p>
+      <p class="rule-example-timing"><strong>131<span>ms</span></strong><span>to catch CWE-113: HTTP response splitting<br />at a cost of $0.0002</span></p>
       <Violation
         rule="http-response-splitting"
         file="tests/manual/vulnerable_code.js"
@@ -171,7 +178,7 @@ func Find(ctx context.Context, db *sql.DB, id string) (Account, error) {
 
   <article id="rule-panel-service" class="rule-example" aria-labelledby="service-example-title" data-rule-example="service" data-rule-panel>
     <div class="rule-example-copy">
-      <h3 id="service-example-title">Keep the service prefix.</h3>
+      <h3 id="service-example-title">Ensure conventions are followed.</h3>
       <p>This rule selects HTTP option values in internal Protobuf files. Each URL must use the <code>/service/vN/</code> prefix. Optional subpaths are allowed.</p>
       <p>The selected URL, <code>/v1/invoices</code>, is missing <code>/service</code>.</p>
       <Violation
@@ -184,6 +191,26 @@ func Find(ctx context.Context, db *sql.DB, id string) (Account, error) {
     </div>
     <RuleCode code={serviceRule} filename="service-proto.rule.ts" class="rule-example-code">
       <a slot="footer" class="rule-source-link" href={`${source}service-proto.rule.ts`}>Read the full source policy <span aria-hidden="true">↗</span></a>
+    </RuleCode>
+  </article>
+  <article id="rule-panel-json-schema" class="rule-example" aria-labelledby="json-schema-example-title" data-rule-example="json-schema" data-rule-panel>
+    <div class="rule-example-copy">
+      <h3 id="json-schema-example-title">Validate JSON against a schema.</h3>
+      <p>This rule uses plain code and the Ajv dependency to check each config file against a JSON Schema.</p>
+      <p>The value <code>"8080"</code> is a string, so it does not match the schema's integer requirement.</p>
+      <Violation
+        rule="json-schema-config"
+        file="config/app.json"
+        message="/port: must be integer"
+        source={invalidConfig}
+        highlightLine={2}
+      />
+      <div class="rule-example-links">
+        <a href={sitePath('/docs/dependencies/')}>Manage rule dependencies <span aria-hidden="true">→</span></a>
+      </div>
+    </div>
+    <RuleCode code={jsonSchemaRule} filename="json-schema-config.rule.ts" class="rule-example-code">
+      <a slot="footer" class="rule-source-link" href={`${source}json-schema-config.rule.ts`}>Read the full source policy <span aria-hidden="true">↗</span></a>
     </RuleCode>
   </article>
 </section>
