@@ -376,7 +376,7 @@ Weak: "Report a violation when a Go pointer is dereferenced without a nil check.
 
 Better: "Check each Go pointer for nil before dereferencing it." For nested fields, add the needed boundary: "Check every pointer in the field path before dereferencing the field."
 
-Keep reporting language in `violationMessage`, conditioning examples in `examples`, and test fixtures in `aiTests`; they do not belong in the instruction. Use selectors and filters for deterministic applicability, and include enough input for the semantic decision.
+Keep reporting language in `violationMessage`, conditioning examples in `examples`, and test fixtures in `aiTests`; they do not belong in the instruction. Use selectors and filters for deterministic applicability. Keep Jev's input to the smallest scope that still supports a correct decision. For function-local code policies, use `scopes.astGrep` to select one function or method per scope, then filter for relevant syntax such as pointer dereferences. Include surrounding context only when it is needed for the decision.
 
 Compare wording with the policy and dataset held fixed:
 
