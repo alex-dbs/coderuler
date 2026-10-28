@@ -3,6 +3,7 @@ type Particle = {
   px: number; py: number; depth: number;
   radius: number; size: number; alpha: number; brightness: number;
   tone: number; spark: boolean;
+  orbit: number;
 };
 
 let disposeHero: (() => void) | undefined;
@@ -44,8 +45,8 @@ function initializeHero() {
     return (seed - 1) / 2147483646;
   };
   const particles: Particle[] = [];
-  function addParticle(x: number, y: number, z: number, radius: number, tone: number, brightness: number) {
-    particles.push({ x, y, z, px: 0, py: 0, depth: 0, radius, size: 0, alpha: 0, tone, brightness, spark: random() > .975 });
+  function addParticle(x: number, y: number, z: number, radius: number, tone: number, brightness: number, orbit = 0) {
+    particles.push({ x, y, z, px: 0, py: 0, depth: 0, radius, size: 0, alpha: 0, tone, brightness, spark: random() > .975, orbit });
   }
   const compact = matchMedia('(max-width: 600px)').matches;
   const count = compact ? 2500 : 3900;
@@ -63,18 +64,30 @@ function initializeHero() {
     addParticle(x * .85 + tiltedY * .52, -x * .52 + tiltedY * .85, tiltedZ,
       .65 + random() * .9, random() > .84 ? 1 : random() > .83 ? 2 : 0, .65 + random() * .35);
   }
-  for (let ring = 0; ring < 2; ring++) {
+  const rings = [
+    { tilt: .31, turn: -.6, radius: 241, tone: 1, speed: 4 },
+    { tilt: 1.12, turn: .83, radius: 229, tone: 2, speed: -5 },
+  ].map(ring => ({
+    ...ring,
+    sinTilt: Math.sin(ring.tilt),
+    cosTilt: Math.cos(ring.tilt),
+    sinTurn: Math.sin(ring.turn),
+    cosTurn: Math.cos(ring.turn),
+    sinX: 0,
+    cosX: 1,
+    sinY: 0,
+    cosY: 1,
+    sinZ: 0,
+    cosZ: 1,
+  }));
+  for (let ringIndex = 0; ringIndex < rings.length; ringIndex++) {
+    const ring = rings[ringIndex]!;
     const count = compact ? 360 : 560;
-    const tilt = ring ? 1.12 : .31;
-    const turn = ring ? .83 : -.6;
     for (let index = 0; index < count; index++) {
       const u = index / count * Math.PI * 2;
-      const radius = (ring ? 229 : 241) + (random() - .5) * 3;
-      const x = radius * Math.cos(u);
-      const y = radius * Math.sin(u) * Math.cos(tilt);
-      const z = radius * Math.sin(u) * Math.sin(tilt);
-      addParticle(x * Math.cos(turn) - y * Math.sin(turn), x * Math.sin(turn) + y * Math.cos(turn), z,
-        .55 + random() * .65, ring ? 2 : 1, .55 + random() * .4);
+      const radius = ring.radius + (random() - .5) * 3;
+      addParticle(radius * Math.cos(u), radius * Math.sin(u), 0,
+        .55 + random() * .65, ring.tone, .55 + random() * .4, ringIndex + 1);
     }
   }
   for (let index = 0; index < 400; index++) {
@@ -111,11 +124,38 @@ function initializeHero() {
     const sinX = Math.sin(ax), cosX = Math.cos(ax);
     const sinY = Math.sin(ay), cosY = Math.cos(ay);
     const sinZ = Math.sin(az), cosZ = Math.cos(az);
+    for (const ring of rings) {
+      const angle = phase * ring.speed;
+      const yAngle = angle * .72;
+      const zAngle = angle * .41;
+      ring.sinX = Math.sin(angle);
+      ring.cosX = Math.cos(angle);
+      ring.sinY = Math.sin(yAngle);
+      ring.cosY = Math.cos(yAngle);
+      ring.sinZ = Math.sin(zAngle);
+      ring.cosZ = Math.cos(zAngle);
+    }
     for (const particle of particles) {
-      const y = particle.y * cosX - particle.z * sinX;
-      const z = particle.y * sinX + particle.z * cosX;
-      const x = particle.x * cosY + z * sinY;
-      particle.depth = -particle.x * sinY + z * cosY;
+      let sourceX = particle.x;
+      let sourceY = particle.y;
+      let sourceZ = particle.z;
+      if (particle.orbit) {
+        const ring = rings[particle.orbit - 1]!;
+        const ringX = particle.x * ring.cosTurn - particle.y * ring.cosTilt * ring.sinTurn;
+        const ringY = particle.x * ring.sinTurn + particle.y * ring.cosTilt * ring.cosTurn;
+        const ringZ = particle.y * ring.sinTilt;
+        const y = ringY * ring.cosX - ringZ * ring.sinX;
+        const z = ringY * ring.sinX + ringZ * ring.cosX;
+        const x = ringX * ring.cosY + z * ring.sinY;
+        const depth = -ringX * ring.sinY + z * ring.cosY;
+        sourceX = x * ring.cosZ - y * ring.sinZ;
+        sourceY = x * ring.sinZ + y * ring.cosZ;
+        sourceZ = depth;
+      }
+      const y = sourceY * cosX - sourceZ * sinX;
+      const z = sourceY * sinX + sourceZ * cosX;
+      const x = sourceX * cosY + z * sinY;
+      particle.depth = -sourceX * sinY + z * cosY;
       const perspective = 760 / (760 - particle.depth);
       let px = (x * cosZ - y * sinZ) * perspective * scale + width / 2;
       let py = (x * sinZ + y * cosZ) * perspective * scale + height / 2;

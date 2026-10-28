@@ -728,9 +728,20 @@ test('validateCheckResult rejects malformed custom usage and inconsistent call c
   }
 });
 
-test('ai validates its options eagerly', () => {
-  assert.throws(() => ai({ rule: '' }));
+test('ai validates rule and instruction options eagerly', () => {
+  assert.throws(() => ai({ rule: '' }), /ai rule must be a non-empty string/);
   assert.throws(() => ai({ rule: 42 as unknown as string }));
+  assert.throws(() => ai({ instruction: '' }), /ai instruction must be a non-empty string/);
+  assert.throws(() => ai({ instruction: 42 as unknown as string }));
+  assert.throws(() => ai({} as unknown as AiOptions));
+  void (() => {
+    // @ts-expect-error one of rule or instruction is required
+    ai({});
+  });
+  assert.throws(() => {
+    // @ts-expect-error rule and instruction are mutually exclusive
+    ai({ rule: 'r', instruction: 'i' });
+  }, /ai rule and instruction are mutually exclusive/);
   assert.throws(() => ai({ rule: 'r', examples: { good: [1 as unknown as string] } }));
   assert.throws(() => ai({ rule: 'r', examples: { good: 'x' as unknown as readonly string[] } }));
   assert.throws(() => ai({ rule: 'r', examples: { bad: [null as unknown as string] } }));
@@ -809,6 +820,37 @@ test('the public ai evaluator forwards examples, a lazy input override, and the 
     examples: { good: ['a'], bad: [] },
   });
   assert.equal(JSON.stringify(requestAt(backend)).includes('Must do the thing'), false);
+});
+
+test('the public ai evaluator sends the same request for rule and instruction options', async () => {
+  const subject = scopeSubject({ filepath: 'a.json', id: '$', source: '{}' });
+  const policy = 'Return an error for invalid input.';
+  const examples = { good: ['valid response'], bad: ['silently accepts invalid input'] };
+  const ruleBackend = new RecordingBackend(0.9);
+  const ruleContext = new TestContext({ subject, runtime: runtimeFor(ruleBackend) });
+  await ai({ rule: policy, examples })(subject, ruleContext);
+  const ruleInstructions = requestAt(ruleBackend).instructions;
+  assert.deepStrictEqual(ruleInstructions, {
+    rule: policy,
+    question: 'Is the rule respected?',
+    examples,
+  });
+  const cases = [
+    [policy, 0.9, 'pass'],
+    ['Reject invalid input before saving.', 0.1, 'violation'],
+  ] as const;
+
+  for (const [instruction, probability, status] of cases) {
+    const backend = new RecordingBackend(probability);
+    const context = new TestContext({ subject, runtime: runtimeFor(backend) });
+    const result = await ai({ instruction, examples })(subject, context);
+
+    assert.equal(result.status, status);
+    assert.deepStrictEqual(requestAt(backend).instructions, {
+      ...ruleInstructions,
+      rule: instruction,
+    });
+  }
 });
 
 test('the ai evaluator runs through the bound context', async () => {

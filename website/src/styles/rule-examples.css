@@ -1,5 +1,6 @@
 .rule-examples {
   padding-block: clamp(72px, 9vw, 136px) 80px;
+  border-top: 1px solid var(--line);
 }
 
 .rule-examples-heading {

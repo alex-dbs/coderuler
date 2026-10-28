@@ -56,7 +56,7 @@ Ordinary `tests` cannot use CodeRuler's AI decision backend. If a check calls it
 
 This guard still applies to ordinary cases when the command also includes `--ai`. It is not a network sandbox: rule modules are trusted Node.js code and can call external APIs directly. Keep those calls out of offline tests.
 
-Test deterministic selection and applicability with fixtures. Keep live semantic expectations in the separate `aiTests` export.
+Keep live semantic cases in `aiTests`. For an AI rule, put every test case there and do not add a separate `tests` export. AI rules use only `instruction`; see [AI checks](/docs/ai-checks/) for writing it.
 
 ## Run live AI cases explicitly
 
@@ -72,10 +72,10 @@ Use these cases with a matching AI rule, such as the example in [AI checks](/doc
 
 ```sh
 export TYPESAFE_API_KEY='your-api-key'
-coderuler test .coderuler/actionable-instructions.rule.ts --ai --timeout 45s
+coderuler test .coderuler/actionable-instructions.rule.ts --ai --ai-scores --timeout 45s
 ```
 
-`--ai` adds `aiTests` to the ordinary test cases. It authorizes live provider calls for those cases. The requests send selected fixture content to the configured service and can incur charges. Results can vary. Provider errors are errors, not passes.
+`--ai` adds `aiTests` to the test cases and authorizes live provider calls. The requests send selected fixture content to the configured service and can incur charges. Results can vary. Provider errors are errors, not passes. `--ai-scores` displays each Jev probability; it does not authorize calls without `--ai`.
 
 ## What validation does not test
 

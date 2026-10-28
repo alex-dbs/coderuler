@@ -1,4 +1,4 @@
-# Rule API reference
+ # Rule API reference
 
 Read the branch needed for the rule; use [SKILL.md](SKILL.md) for the authoring, test, and inspection workflow. All imports below use the public `@alex-dbs/coderuler` SDK.
 
@@ -318,7 +318,7 @@ Results validate; supplied messages survive reporting. Violations without a mess
 | ------------------------------------------------------ | --------------------------------------------------------------------------------- |
 | `ProjectContext`                                       | `readonly project: Project`; `trace(message: string, details?: JsonValue): void`. |
 | `SelectionContext extends ProjectContext`              | `select<T>(selection: Selection<T>): Promise<readonly ScopeSubject<T>[]>`.        |
-| `CheckContext<T = JsonValue> extends SelectionContext` | `readonly ruleName: string`; `ai(options: AiOptions<T>): Promise<CheckResult>`.   |
+| `CheckContext<T = JsonValue> extends SelectionContext` | `readonly ruleName: string`; `ai(options: AiOptions<T>): Promise<CheckResult>`. |
 
 
 Use `trace` for decision evidence visible during inspection; keep normal execution free of ad-hoc console output. AI/regex projection callbacks receive only `ProjectContext`, not the full check context.
@@ -344,84 +344,138 @@ Default input is `String(data)` for scalar/null data, otherwise source text. `in
 
 ## AI options, examples, and settings
 
-`ai<T = JsonValue>(options: AiOptions<T>): Evaluator<T>` accepts:
+`ai<T = JsonValue>(options: AiOptions<T>): Evaluator<T>` accepts exactly one of `rule` or `instruction`:
 
-- `rule: string`: nonempty semantic policy; include exceptions and what visible evidence permits a violation.
+- `rule: string`: nonempty policy text. This option is deprecated; use `instruction` for new rules.
+- `instruction: string`: nonempty text describing the expected behavior of the selected code. Write a direct requirement that Jev can judge as respected or broken.
 - `examples?: { readonly good?: readonly string[]; readonly bad?: readonly string[] }`: conditioning examples, dense arrays of nonempty strings; omitted/empty lists are valid.
 - `violationMessage?: string`: nonempty reporting-only message, not sent as instructions.
 - `input?: (subject: Subject<T>, context: ProjectContext) => Awaitable<JsonValue>`: replace the default projection; output validates as JSON-compatible.
 
+Jev uses the fixed question "Is the rule respected?" Yes/true means no problems. No/false means at least one violation. The configured threshold decides pass or violation.
+
+### AI instruction style
+
+Write the instruction as a requirement for the code, not directions for the reviewer. A direct requirement names the behavior compliant code must have. Add a boundary only when it says where the policy applies; include exceptions only when they are genuinely allowed. Keep each rule to one policy.
+
+Weak: "Report a violation when a Go pointer is dereferenced without a nil check."
+
+Better: "Check each Go pointer for nil before dereferencing it." For nested fields, add the needed boundary: "Check every pointer in the field path before dereferencing the field."
+
+Keep reporting language in `violationMessage`, conditioning examples in `examples`, and test fixtures in `aiTests`; they do not belong in the instruction. Use selectors and filters for deterministic applicability, and include enough input for the semantic decision.
+
+Compare wording with the policy and dataset held fixed:
+
+1. Save the current instruction and its scores as the baseline.
+2. Change only the instruction. Keep the model version, examples, input, fixtures, and threshold unchanged.
+3. Run every affected `aiTests` case with `--ai --ai-scores`. Include compliant cases and violations, especially policy boundaries.
+4. Compare compliant scores toward `1` and violation scores toward `0` separately. Inspect individual regressions and the weakest score in each group, not just averages.
+5. Keep wording that improves separation without changing the policy or introducing wrong decisions. Repeat a close comparison before treating a small gain as reliable.
+
+`PASS` in test output means the expected result matched. A passing violation test still needs a low Jev score. Do not lower the threshold, relabel fixtures, or copy test cases into the instruction to improve the comparison. Results on a tuning dataset do not prove performance on unseen code.
+
+
+This rule checks Go pointer dereferences, including nested fields:
+
 ```ts
-import { Rule, ai, test } from '@alex-dbs/coderuler';
-import type { RuleSettings } from '@alex-dbs/coderuler';
+import { Rule, ai, scopes, test, type ScopeSubject } from '@alex-dbs/coderuler';
 
-export default class ActionableInstructions extends Rule {
-  files = ['guides/**/*.md'];
-  settings: RuleSettings = { model: 'jev-latest', threshold: 0.5 };
-  check = ai({
-    rule: 'Instructions name a concrete action and its observable completion condition.',
-    examples: { good: ['Run the migration until it exits successfully.'], bad: ['Handle the migration.'] },
-    violationMessage: 'Name the action and how to recognize completion',
-  });
-}
-export const aiTests = [
-  test('an independent concrete instruction passes').withFiles({
-    'guides/cache.md': 'Delete the cache directory; finish when it no longer exists.',
-  }).passes(),
-];
-```
-
-`examples` condition the model; `aiTests` assert outcomes on independent datasets. Ordinary `tests` are offline; live `aiTests` require explicit AI opt-in as described in [SKILL.md](SKILL.md). Keep deterministic applicability out of the prompt.
-
-Default AI input is `{ filepath, scope: { id, data, captures? } }` when data exists, or `{ filepath, scope: { id, source, captures? } }` otherwise. Data presence includes `null`, `false`, `0`, and `''`. Groups become `{ files: [{ filepath, scopes: [...] }] }`. Good: select enough context to judge meaning, or project a deliberate JSON input. Bad: expect source text alongside structured data without providing it via `input`.
-
-Inside a custom check, `return context.ai({ rule: '...' })` evaluates its current subject with effective settings and preserves AI result metadata. Replacing that result requires intentionally preserving probability/model/threshold metadata; token accounting is automatic across all `context.ai` calls, even when returning a different result. `ai(...)` validates options when constructed but performs no loading-time network I/O.
-
-`RuleSettings` supports backend `'jev'`, model (default `'jev-latest'`), finite threshold in `[0, 1]` (default `0.4`), and finite nonnegative `inputCostPerMillion` / `outputCostPerMillion` prices (USD per million tokens; defaults `0.042` / `0`). Threshold precedence is CLI override → rule setting → `RK_THRESHOLD` → default; backend/model use rule setting → environment (`RK_BACKEND` / `TYPESAFE_DEFAULT_MODEL`) → default. AI passes only when probability is **strictly greater** than threshold; equality violates. Results include the effective threshold. Provider environment/key resolution is lazy at the first AI call; deterministic/skipped/filtered paths need no key. Live calls require `TYPESAFE_API_KEY`; use release configuration guidance for transport setup.
-
-Inspection reports per-verification `usage: AiUsage` and a final recap: `calls`, `unreportedCalls`, `inputTokens`, `outputTokens`, `inputCost`, and `outputCost` (USD). Counts come from provider responses; missing counts remain unreported and totals cover reported calls only. Configure prices through rule settings or `RK_INPUT_COST_PER_MILLION` / `RK_OUTPUT_COST_PER_MILLION`; inspect flags `--input-cost-per-million` / `--output-cost-per-million` override both. Prices change estimates, not decisions.
-
-AI rules, under the hood, are using TypeSafe Jev model and `noul` question (yes/no probabilistc answer). The rule must clearly explain what is checked. A global/generic rule won't match. A dedicated rule will perform better. The example bellow will check a particular usage of go slice `append` function.
-
-```
-import { Rule, ai, scopes, test } from '@alex-dbs/coderuler';
-
-export default class GoAppendSlice extends Rule {
+export default class GoDereferenceGuard extends Rule {
   files = ['**/*.go'];
+  settings = { threshold: 0.7 };
 
   scope = scopes.astGrep({
     language: 'go',
     rule: {
       any: [{ kind: 'function_declaration' }, { kind: 'method_declaration' }],
       has: {
-        kind: 'for_statement',
+        kind: 'unary_expression',
         stopBy: 'end',
         has: {
-          pattern: 'append($SLICE,$$$ARGS)',
-          stopBy: 'end',
+          field: 'operator',
+          regex: '^\\*$',
         },
       },
     },
   });
 
   check = ai({
-    rule: `A slice freshly allocated for a loop whose final element count is exactly known must be allocated at that final length and filled by index or with copy;
-growing it with append is a violation even when capacity was preallocated with make([]T, 0, n)
-and even when it was first created with make([]T, n) and then reset to length zero.
-
-Append in a loop is valid only when the final count is not known before the loop,
-such as elements appended under a condition so the count varies within an upper bound that capacity merely reserves,
-or when the slice already holds a deliberately assigned prefix written before the loop.
-
-Appending after a length that was allocated but never assigned,
-or assigning elements by index and also appending them, is a violation.`,
+    instruction: `Check each Go pointer for nil before dereferencing it. For nested fields, check every pointer in the field path.`,
     examples: {
-      good: [/* Some examples, not shown here to keep it short*/],
-      bad: [/* Some examples, not shown here to keep it short*/],
+      good: [
+        `func configName(config *Config) string {
+    if config != nil {
+        return (*config).Name
+    }
+    return ""
+}`,
+        `func (config *Config) name() string {
+    if config == nil {
+        return ""
+    }
+    return (*config).Name
+}`
+      ],
+      bad: [
+        `func configName(config *Config) string {
+    return (*config).Name
+}`,
+        `func configName(config *Config) string {
+    if config == nil {
+        logMissingConfig()
+    }
+    return (*config).Name
+}`
+      ],
     },
+    input: async (subject, { project }) => {
+      const scope = subject as ScopeSubject;
+      return {
+        function: scope.source,
+        file: await project.readText(scope.filepath),
+      };
+    },
+    violationMessage: 'Check each pointer for nil before using *.',
   });
 }
+
+export const aiTests = [
+  test('an early return guards a pointer parameter').withFiles({
+    'quota.go': `package example
+
+func remainingQuota(quota *int, used int) int {
+    if quota == nil {
+        return 0
+    }
+    return *quota - used
+}`,
+  }).passes(),
+  test('a root nil check does not guard a nested pointer field').withFiles({
+    'config.go': `package example
+
+type Config struct { Child *Child }
+type Child struct { Value *int }
+
+func nestedValue(config *Config) int {
+    if config == nil {
+        return 0
+    }
+    return *config.Child.Value
+}`,
+  }).violates(),
+] as const;
 ```
+
+`examples` condition the model; `aiTests` assert outcomes on independent datasets. Put every test case for an AI rule in `aiTests`, without a separate `tests` export. Ordinary `tests` are offline; live `aiTests` require `--ai`. Use `instruction` and follow [AI instruction style](#ai-instruction-style). Add `--ai-scores` to inspect probabilities, not just test outcomes.
+
+Default AI input is `{ filepath, scope: { id, data, captures? } }` when data exists, or `{ filepath, scope: { id, source, captures? } }` otherwise. Data presence includes `null`, `false`, `0`, and `''`. Groups become `{ files: [{ filepath, scopes: [...] }] }`. Good: select enough context to judge meaning, or project a deliberate JSON input. Bad: expect source text alongside structured data without providing it via `input`.
+
+Inside a custom check, `return context.ai({ instruction: '...' })` evaluates its current subject with effective settings and preserves AI result metadata. The deprecated `rule` option remains accepted for existing rules. Replacing that result requires intentionally preserving probability/model/threshold metadata; token accounting is automatic across all `context.ai` calls, even when returning a different result. `ai(...)` validates options when constructed but performs no loading-time network I/O.
+
+`RuleSettings` supports backend `'jev'`, model (default `'jev-latest'`), finite threshold in `[0, 1]` (default `0.4`), and finite nonnegative `inputCostPerMillion` / `outputCostPerMillion` prices (USD per million tokens; defaults `0.042` / `0`). Threshold precedence is CLI override → rule setting → `RK_THRESHOLD` → default; backend/model use rule setting → environment (`RK_BACKEND` / `TYPESAFE_DEFAULT_MODEL`) → default. AI passes only when probability is **strictly greater** than threshold; equality violates. Results include the effective threshold. Provider environment/key resolution is lazy at the first AI call; deterministic/skipped/filtered paths need no key. Live calls require `TYPESAFE_API_KEY`; use release configuration guidance for transport setup.
+
+Inspection reports per-verification `usage: AiUsage` and a final recap: `calls`, `unreportedCalls`, `inputTokens`, `outputTokens`, `inputCost`, and `outputCost` (USD). Counts come from provider responses; missing counts remain unreported and totals cover reported calls only. Configure prices through rule settings or `RK_INPUT_COST_PER_MILLION` / `RK_OUTPUT_COST_PER_MILLION`; inspect flags `--input-cost-per-million` / `--output-cost-per-million` override both. Prices change estimates, not decisions.
+
 
 ## Project readers
 

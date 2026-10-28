@@ -109,18 +109,6 @@
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
-.walkthrough-source-link {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  min-height: 48px;
-  padding: 10px 20px;
-  border-top: 1px solid var(--line);
-  color: var(--accent);
-  font-size: 14px;
-}
-.walkthrough-source-link:hover { color: var(--foreground); }
 .walkthrough-example > .violation { margin-top: 28px; }
 @media (max-width: 900px) {
   .walkthrough-layout { grid-template-columns: minmax(0, 1fr); gap: 40px; }
@@ -133,5 +121,4 @@
   .walkthrough-intent blockquote { padding-left: 16px; }
   .walkthrough-policy-code pre { padding-inline: 14px; }
   .policy-walkthrough .walkthrough-command pre { padding-left: 14px; }
-  .walkthrough-source-link { padding-inline: 14px; }
 }

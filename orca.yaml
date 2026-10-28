@@ -1,0 +1,6 @@
+scripts:
+  setup: |
+    set -e
+    cd "$ORCA_WORKTREE_PATH"
+    npm ci
+    npm ci --prefix website

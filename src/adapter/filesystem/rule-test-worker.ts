@@ -18,8 +18,12 @@ export interface RuleTestWorkerRequest {
   readonly dependencies?: PreparedRuleDependencies;
 }
 
+export interface RuleTestWorkerOutcome {
+  readonly actual: RuleTestCase['expected'];
+  readonly aiScores?: readonly number[];
+}
 export type RuleTestWorkerMessage =
-  | { readonly id: number; readonly actual: RuleTestCase['expected'] }
+  | { readonly id: number; readonly outcome: RuleTestWorkerOutcome }
   | { readonly id: number; readonly error: string };
 
 function fixturePath(root: string, filepath: string): string {
@@ -30,7 +34,7 @@ function fixturePath(root: string, filepath: string): string {
   return target;
 }
 
-async function runCase({ root, ruleFile, files, ai, dependencies }: RuleTestWorkerRequest): Promise<RuleTestCase['expected']> {
+async function runCase({ root, ruleFile, files, ai, dependencies }: RuleTestWorkerRequest): Promise<RuleTestWorkerOutcome> {
   for (const [filepath, source] of Object.entries(files)) {
     const target = fixturePath(root, filepath);
     await mkdir(dirname(target), { recursive: true });
@@ -50,7 +54,14 @@ async function runCase({ root, ruleFile, files, ai, dependencies }: RuleTestWork
   });
   const report = reports[0];
   if (reports.length !== 1 || report === undefined) throw new Error('Expected exactly one rule report');
-  return report.status;
+  let aiScores: number[] | undefined;
+  if (ai) {
+    for (const evaluation of report.evaluations) {
+      const score = evaluation.result.probability;
+      if (score !== undefined) (aiScores ??= []).push(score);
+    }
+  }
+  return { actual: report.status, ...(aiScores === undefined ? {} : { aiScores }) };
 }
 
 const port = parentPort;
@@ -59,7 +70,7 @@ port.start();
 port.ref();
 port.on('message', (request: RuleTestWorkerRequest) => {
   void runCase(request).then(
-    actual => port.postMessage({ id: request.id, actual } satisfies RuleTestWorkerMessage),
+    outcome => port.postMessage({ id: request.id, outcome } satisfies RuleTestWorkerMessage),
     error => port.postMessage({
       id: request.id,
       error: error instanceof Error ? error.message : String(error),

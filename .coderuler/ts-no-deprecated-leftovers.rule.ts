@@ -20,12 +20,9 @@ export default class TsNoDeprecatedLeftovers extends Rule {
   });
 
   check = ai({
-    rule: `Report an actual JSDoc @deprecated alias or wrapper only when this file establishes that it preserves an obsolete internal API instead of completing a refactor to its replacement.
-Use the full supplied file, comments, local uses, exports, and filepath as evidence. A tag alone is not a violation: establish both the obsolete internal-shim role and the absence of an intentional supported transition before reporting it.
-
-Allow public migration windows with concrete compatibility rationale, externally owned declarations, and intentional transition or compatibility tests. Also allow deprecated APIs whose role as obsolete internal shims is not established here.
-Do not infer callers or migration status in other files. An export with no callers in this file is not proof it is unused or internal; never recommend deleting a public symbol on that basis. When the necessary evidence is missing or ambiguous, pass rather than inventing it.
-For an established leftover, recommend completing the internal migration and removing the obsolete alias or wrapper, not merely removing its tag.`,
+    instruction: `Remove obsolete unexported deprecated aliases and forwarding wrappers after completing the internal migration, even when no local callers remain.
+Use comments, definitions, and replacement uses in this file to establish that the migration is complete; do not infer callers or migration status from other files.
+Keep public symbols during a supported migration window, third-party declarations, and deprecated symbols that still contain their implementation.`,
     examples: {
       good: [
         `export function parseConfig(text: string) { return JSON.parse(text); }

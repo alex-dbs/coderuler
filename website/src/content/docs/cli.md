@@ -53,12 +53,13 @@ coderuler test [rule] [options]
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--ai` | Off | Include live `aiTests` |
+| `--ai` | Off | Include live `aiTests` and authorize provider calls |
+| `--ai-scores` | Off | Display each Jev probability; does not authorize AI calls |
 | `--failures-only` | Off | Hide successful case details |
 | `--timeout <duration>` | `10s` | Per-case limit, using `ms`, `s`, or `m` |
 | `--concurrency <number>` | `1` | Maximum in-flight test cases |
 
-The optional rule is a rule name, module path, or directory. Ordinary `tests` remain offline, including when `--ai` also selects live cases. See [testing](/docs/testing/) for fixtures and timeout behavior.
+The optional rule is a rule name, module path, or directory. Ordinary `tests` remain offline, including when `--ai` also selects live cases. For an AI rule, put every case in `aiTests` and do not add a separate `tests` export. `--ai-scores` only displays scores when AI cases run with `--ai`. See [testing](/docs/testing/) for fixtures and timeout behavior.
 
 ## Check
 

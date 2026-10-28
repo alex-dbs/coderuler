@@ -1,7 +1,7 @@
 export {};
 
 type Mode = 'ai' | 'regex' | 'code';
-type Example = Record<'label' | 'instruction' | 'file' | 'excluded' | 'outside' | 'source' | 'context' | 'kept' | 'dropped', string> & { pattern?: string };
+type Example = Record<'label' | 'instruction' | 'file' | 'excluded' | 'outside' | 'source' | 'context' | 'kept' | 'dropped', string> & { fileContext?: string; pattern?: string };
 let disposeWorkflow = () => {};
 
 function mountWorkflow() {
@@ -51,6 +51,13 @@ function mountWorkflow() {
       paused = false;
     }
 
+    function complete() {
+      clearTimers();
+      root.dataset.flowRunning = 'false';
+      running = false;
+      paused = false;
+    }
+
     function stop() {
       pending = null;
       autoplayAvailable = false;
@@ -64,8 +71,8 @@ function mountWorkflow() {
       return animation;
     }
 
-    function travel(origin: DOMRect | undefined, to: HTMLElement | null, duration: number, label = examples[selected].context) {
-      if (!origin || !to || !origin.width || !origin.height || typeof to.animate !== 'function') return;
+    function travel(origin: DOMRect | undefined, to: HTMLElement | null, duration: number, label = examples[selected].context, arrived = () => {}) {
+      if (!origin || !to || !origin.width || !origin.height || typeof to.animate !== 'function') { arrived(); return; }
       const bounds = root.getBoundingClientRect();
       const target = to.getBoundingClientRect();
       const traveler = document.createElement('span');
@@ -84,7 +91,7 @@ function mountWorkflow() {
         { transform: `translate(${x}px, ${y}px) scale(1)`, opacity: 1, offset: .85 },
         { transform: `translate(${x}px, ${y}px) scale(.9)`, opacity: 0 },
       ], duration);
-      animation?.finished.then(() => traveler.remove(), () => {});
+      animation?.finished.then(() => { traveler.remove(); arrived(); }, () => {});
     }
 
     function highlightSource(scroll = true) {
@@ -117,6 +124,13 @@ function mountWorkflow() {
       const evaluator = get('.workflow-evaluator');
       if (evaluator) evaluator.dataset.flowCheckPhase = value;
     }
+    function showModel(motion = true) {
+      const model = get('[data-flow-model]');
+      if (!model) return;
+      model.dataset.flowVisible = '';
+      model.removeAttribute('aria-hidden');
+      if (motion) animate(model, [{ transform: 'scale(.96)', opacity: .4 }, { transform: 'scale(1)', opacity: 1 }], 650);
+    }
 
     function lineCount() {
       const source = examples.code.source;
@@ -126,14 +140,16 @@ function mountWorkflow() {
     function resetCheck() {
       root.dataset.flowVerdict = 'pending';
       const outcome = get('[data-flow-outcome]');
-      if (outcome) { outcome.hidden = true; outcome.dataset.flowVerdict = 'pending'; }
-      const response = get('[data-flow-ai-response]');
-      if (response) response.hidden = true;
+      if (outcome) { outcome.dataset.flowVerdict = 'pending'; outcome.setAttribute('aria-hidden', 'true'); }
       phase('ready');
+      const model = get('[data-flow-model]');
+      if (model) {
+        model.removeAttribute('data-flow-visible');
+        model.setAttribute('aria-hidden', 'true');
+      }
       const evaluator = get('.workflow-evaluator');
       if (evaluator) evaluator.scrollTop = 0;
       if (announcement) announcement.textContent = '';
-      text('[data-flow-model-status]', 'Awaiting example request');
       text('[data-flow-line-count]', '0');
       text('[data-flow-code-comparison]', 'lineCount > 80');
       text('[data-flow-regex-comparison]', `pattern.test("${examples.regex.context}")`);
@@ -147,7 +163,7 @@ function mountWorkflow() {
       if (motion) animate(line ?? null, [{ backgroundColor: 'var(--accent)', opacity: .4 }, { backgroundColor: 'transparent', opacity: 1 }], 450);
     }
 
-    function comparison(motion = true) {
+    function comparison() {
       phase('comparison');
       if (selected === 'regex') {
         const matches = new RegExp(examples.regex.pattern!).test(examples.regex.context);
@@ -155,11 +171,6 @@ function mountWorkflow() {
       } else if (selected === 'code') {
         text('[data-flow-line-count]', String(lineCount()));
         text('[data-flow-code-comparison]', `${lineCount()} > 80 → ${lineCount() > 80}`);
-      } else {
-        text('[data-flow-model-status]', 'Example response received');
-        const response = get('[data-flow-ai-response]');
-        if (response) response.hidden = false;
-        if (motion) animate(response, [{ transform: 'translateY(-12px)', opacity: 0 }, { transform: 'translateY(0)', opacity: 1 }], 450);
       }
     }
 
@@ -170,12 +181,12 @@ function mountWorkflow() {
       const value = passes ? 'pass' : 'violation';
       root.dataset.flowVerdict = value;
       const outcome = get('[data-flow-outcome]');
-      if (outcome) { outcome.hidden = false; outcome.dataset.flowVerdict = value; }
+      if (outcome) { outcome.dataset.flowVerdict = value; outcome.removeAttribute('aria-hidden'); }
       text('[data-flow-verdict-icon]', passes ? '✓' : '!');
       text('[data-flow-verdict-label]', passes ? 'Pass' : 'Violation');
       text('[data-flow-decision]', passes ? 'pass()' : 'violation(…)');
       text('[data-flow-verdict-message]', selected === 'ai'
-        ? 'Allocate the known final length and fill by index instead of appending.'
+        ? 'Check each pointer for nil before dereferencing it.'
         : selected === 'regex' ? 'The retained URL matches the service URL pattern.'
         : `${lineCount()} lines ${passes ? 'is within' : 'exceeds'} the 80-line limit.`);
       phase('complete');
@@ -188,7 +199,8 @@ function mountWorkflow() {
     function finalCheck() {
       if (selected === 'code') scanLine(lineCount(), false);
       if (selected === 'regex') root.querySelectorAll('[data-flow-url-part]').forEach(part => part.setAttribute('data-flow-scanned', ''));
-      comparison(false);
+      if (selected === 'ai') showModel(false);
+      comparison();
       verdict(false);
     }
 
@@ -197,9 +209,9 @@ function mountWorkflow() {
       const steps = selected === 'ai' ? [
         event(400, () => {
           phase('request');
-          text('[data-flow-model-status]', 'Reading selected function + instruction');
-          travel(get('[data-flow-ai-request]')?.getBoundingClientRect(), get('[data-flow-model]'), 900, `${examples.ai.context} + rule instruction`);
-          animate(get('[data-flow-model]'), [{ transform: 'scale(.96)', opacity: .4 }, { transform: 'scale(1)', opacity: 1 }], 650, 450);
+          travel(get('[data-flow-ai-request]')?.getBoundingClientRect(), get('[data-flow-model]'), 900, `${examples.ai.context} + containing file + rule instruction`, () => {
+            if (currentStage === 3) showModel();
+          });
         }),
       ] : selected === 'regex'
         ? [...root.querySelectorAll<HTMLElement>('[data-flow-url-part]')].map((part, index) => event(400 + index * 550, () => {
@@ -211,11 +223,11 @@ function mountWorkflow() {
           phase('counting');
           scanLine(index + 1);
         }));
-      return [...steps, event(2100, () => comparison()), event(2800, () => verdict()), event(3900, finish)];
+      return [...steps, event(2100, () => comparison()), event(2800, () => verdict()), event(3900, complete)];
     }
 
     function stage(index: number, motion = true, showResult = !motion) {
-      const prior = currentStage === 1 ? get('[data-flow-selected]') : currentStage === 2 ? get('[data-flow-kept]') : null;
+      const prior = index === 2 && currentStage === 1 ? get('[data-flow-extract]') : null;
       const origin = prior?.getBoundingClientRect();
       currentStage = index;
       root.dataset.flowStage = String(index);
@@ -241,34 +253,37 @@ function mountWorkflow() {
       }
       if (index === 1) {
         animate(get('[data-flow-outside]'), [{ opacity: 1 }, { opacity: .3 }], 450);
-        animate(get('[data-flow-selected]'), [
+        const extract = get('[data-flow-extract]');
+        const hidden = animate(extract, [{ opacity: 0 }, { opacity: 0 }], 1800);
+        const selection = animate(get('[data-flow-selected]'), [
           { clipPath: 'inset(0 100% 0 0)', backgroundColor: 'transparent' },
           { clipPath: 'inset(0 0 0 0)', backgroundColor: 'var(--surface)' },
         ], 500);
-        animate(get('[data-flow-extract]'), [
-          { transform: 'translateY(-45px) scale(.9)', opacity: 0 },
-          { transform: 'translateY(0) scale(1)', opacity: 1 },
-        ], 500, 400);
-        travel(get('[data-flow-selected]')?.getBoundingClientRect(), get('[data-flow-extract]'), 950);
+        selection?.finished.then(() => {
+          if (currentStage !== 1) return;
+          travel(get('[data-flow-selected]')?.getBoundingClientRect(), extract, 950, examples[selected].context, () => {
+            if (currentStage !== 1) return;
+            hidden?.cancel();
+            animate(extract, [{ opacity: 0 }, { opacity: 1 }], 200);
+          });
+        }, () => {});
       }
       if (index === 2) {
-        travel(origin, get('[data-flow-kept]'), 750);
-        animate(get('[data-flow-kept]'), [
-          { transform: 'translateX(-35px)', opacity: .35 },
-          { transform: 'translateX(0)', opacity: 1 },
-        ], 650);
+        const kept = get('[data-flow-kept]');
+        if (origin?.width) {
+          const hidden = animate(kept, [{ opacity: 0 }, { opacity: 0 }], 1800);
+          travel(origin, kept, 750, examples[selected].context, () => {
+            if (currentStage !== 2) return;
+            hidden?.cancel();
+            animate(kept, [{ opacity: 0 }, { opacity: 1 }], 200);
+          });
+        } else {
+          animate(kept, [{ opacity: 0 }, { opacity: 1 }], 400);
+        }
         animate(get('[data-flow-dropped]'), [
           { transform: 'translateY(0)', opacity: 1 },
           { transform: 'translateY(45px) scale(.85)', opacity: .15 },
         ], 850);
-      }
-      if (index === 3) {
-        travel(origin ?? get('[data-flow-context-slot]')?.getBoundingClientRect(), get('[data-flow-context-slot]'), 700);
-        animate(get('[data-flow-context-slot]'), [
-          { opacity: .2, transform: 'scale(.92)' },
-          { opacity: 1, transform: 'scale(1)' },
-        ], 350, 600);
-        phase('retained');
       }
     }
 
@@ -313,7 +328,7 @@ function mountWorkflow() {
         ? [0, 1, 2, 3].map(index => ({ at: index * 1800, run: () => stage(index) }))
         : [{ at: 0, run: () => stage(request) }];
       if (request === 'all' || request === 3) events.push(...checkEvents(request === 'all' ? 5400 : 0));
-      else events.push({ at: 1500, run: finish });
+      else events.push({ at: 1800, run: complete });
       root.dataset.flowRunning = 'true';
       schedule();
     }

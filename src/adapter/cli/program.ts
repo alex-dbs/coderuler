@@ -149,6 +149,7 @@ export function createProgram(services: CliServices): Command {
     .description('Run the declared test cases for the selected rules')
     .argument('[rule]', 'rule name, module path, or directory')
     .option('--ai', 'include aiTests that use the configured decision backend')
+    .option('--ai-scores', 'show Jev scores for aiTests')
     .option('--failures-only', 'show only failed test cases')
     .addOption(
       new Option('--timeout <duration>', 'per-test timeout (ms, s, or m)')

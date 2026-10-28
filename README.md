@@ -114,14 +114,17 @@ export default class SafeResponseHeaders extends Rule {
   });
 
   check = ai({
-    rule: 'Report a violation only when this function writes request data into an HTTP response header without rejecting CR and LF first. Judge only this function. Do not assume unseen callers or helpers validate the data.',
+    instruction: `Reject CR and LF in untrusted values before inserting them into
+HTTP response headers or status lines.
+This policy covers response construction and writes visible in the selected function. Hidden helper behavior and unseen callers are outside its scope.
+Treat serialization arguments and statusMessage as untrusted. Fixed values and values checked for both CR and LF meet the requirement. Preserve fixed HTTP delimiters.`,
     input: subject => (subject as ScopeSubject).source,
     violationMessage: 'Reject CR and LF in request data before writing a response header.',
   });
 }
 ```
 
-This example shows an AI check for CWE-113. 
+This example shows an AI check for CWE-113.
 
 AI rules require a configured service and can incur charges.
 

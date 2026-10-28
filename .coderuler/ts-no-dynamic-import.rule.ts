@@ -36,19 +36,11 @@ export default class TsNoDynamicImport extends Rule {
   });
 
   check = ai({
-    rule: `Use top-level static imports for known module dependencies unless dynamic loading preserves a meaningful loading or initialization boundary visible in the file.
-Assess only directly awaited imports, possibly through parentheses, whose first argument is a string literal or a template literal without substitutions.
-
-First distinguish type dependencies from runtime loading. TypeScript's import type declarations do not execute the imported module. If the only existing import of a dependency is type-only, its awaited import is still the first runtime load. A feature flag or early return that avoids this first load, especially to avoid initialization side effects, is a legitimate loading boundary and respects this rule. Repeating a module path in a type import and a runtime import is not redundant loading.
-
-An awaited import that merely retrieves exports from the same module specifier already loaded by a runtime static import in this file is redundant and violates this rule. The dependency is already eagerly loaded, even if the static and dynamic imports retrieve different exports. An enclosing exported or async function does not make that dependency lazy. Keep public async signatures; replacing the redundant import does not require making the function synchronous.
-An existing runtime import is concrete evidence, not an unknown loading requirement: do not excuse redundancy by speculating about unseen callers or hypothetical initialization effects. A feature flag around a second import cannot make an already runtime-loaded dependency lazy.
-
-Preserve intentional lazy loading or code splitting of dependencies that have not already been eagerly loaded, optional dependencies with failure handling, platform-specific modules, initialization-order or cycle constraints, and tests genuinely exercising fresh module initialization or mocking boundaries. A visible fresh-loading boundary or different import attributes can justify a dynamic import even when another import exists.
-Apply an exception only when the supplied file supports that loading behavior. Merely putting a literal import inside a function, retaining an async API, or fetching another export from an already loaded dependency is not such an exception.
-
-For other literal imports, report a violation when visible evidence establishes unnecessary deferred loading and an equivalent static import preserves intended behavior. If that evidence is absent, preserve the import rather than inventing module side effects or a loading contract.
-Ignore import types, static imports themselves, computed specifiers, and imports not directly awaited.`,
+    instruction: `Use static imports for known dependencies unless dynamic loading serves a visible loading or initialization boundary.
+Reuse a dependency already loaded by a runtime static import, even when another export is needed or a feature flag guards its use.
+Keep first runtime loads behind feature flags or early returns when they defer initialization or side effects. Type-only imports do not load a module.
+Keep optional and platform-specific loading, code splitting, cycle constraints, fresh initialization, distinct import attributes, and test mocking boundaries when the file supports them.
+Assess directly awaited literal imports using this file, preserve public async signatures, and leave imports unchanged when equivalent static loading is not established.`,
     examples: {
       good: [
         `// Load the editor's large dependency only after the user opens it.
