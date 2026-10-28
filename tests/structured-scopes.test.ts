@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import { createProject } from '../dist/adapter/filesystem/project.js';
 import { csv, parseCsv } from '../dist/adapter/scope/csv.js';
 import { file } from '../dist/adapter/scope/file.js';
 import { json, parseJson } from '../dist/adapter/scope/json.js';
 import { yaml, parseYaml } from '../dist/adapter/scope/yaml.js';
 import { wholeFileScope } from '../dist/app/selection.js';
-import type { ScopeMatch, ScopeSelector, SourceFile } from '../dist/index.js';
+import type { ProjectContext, ScopeMatch, ScopeSelector, SourceFile } from '../dist/index.js';
+import { ROOT } from './support.ts';
 
 interface LineSpan {
   readonly start: number;
@@ -54,12 +56,13 @@ function scope(id: string, source: string, lines: LineSpan, data?: unknown): Rec
   return { id, source, data, lines };
 }
 
+const projectContext: ProjectContext = { project: createProject(ROOT), trace: () => {} };
 function collect<T>(
   selector: ScopeSelector<T>,
   source: string,
   filepath = 'input.txt',
 ): Promise<readonly ScopeMatch<T>[]> {
-  return Promise.resolve().then(() => selector({ filepath, source }));
+  return Promise.resolve().then(() => selector({ filepath, source }, projectContext));
 }
 
 function normalizeRow(data: unknown): unknown {
@@ -71,6 +74,13 @@ function normalizeRow(data: unknown): unknown {
 function csvSighting(match: Observed): Record<string, unknown> {
   return { id: match.id, source: match.source, data: normalizeRow(match.data), lines: match.lines };
 }
+
+
+test('built-in selectors keep supporting direct calls without a project context', async () => {
+  assert.deepStrictEqual(await file()({ filepath: 'input.txt', source: 'text' }), [
+    { id: '$', source: 'text', lines: { start: 1, end: 1 } },
+  ]);
+});
 
 test('the file selector produces one scope holding the complete text', async () => {
   const selector = file();

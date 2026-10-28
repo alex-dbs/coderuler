@@ -13,6 +13,7 @@ export type {
   GroupSubject,
   JsonValue,
   PredicateResult,
+  LineRange,
   ProjectContext,
   RuleSettings,
   ScopeMatch,
@@ -32,6 +33,7 @@ export type { RegexOptions } from './app/evaluators.js';
 
 export type {
   CsvOptions,
+  DiffChanges,
   CsvRow,
   DecisionBackend,
   DecisionExchange,

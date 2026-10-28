@@ -10,8 +10,10 @@ import {
   resolveAstGrepLanguage,
 } from '../dist/adapter/scope/astgrep-languages.js';
 import { SourceLines, textLineSpan } from '../dist/adapter/scope/lines.js';
+import { createProject } from '../dist/adapter/filesystem/project.js';
 import { protobuf } from '../dist/adapter/scope/protobuf.js';
-import type { JsonValue, ScopeMatch, ScopeSelector } from '../dist/index.js';
+import type { JsonValue, ProjectContext, ScopeMatch, ScopeSelector } from '../dist/index.js';
+import { ROOT } from './support.ts';
 
 type LineSpan = NonNullable<ScopeMatch['lines']>;
 
@@ -29,12 +31,13 @@ function astGrepWith(options: Record<string, unknown>): ScopeSelector<JsonValue>
   return astGrep(options as unknown as AstGrepOptions);
 }
 
+const projectContext: ProjectContext = { project: createProject(ROOT), trace: () => {} };
 async function select(
   selector: ScopeSelector<JsonValue>,
   filepath: string,
   source: string,
 ): Promise<readonly MatchProjection[]> {
-  const matches = await selector({ filepath, source });
+  const matches = await selector({ filepath, source }, projectContext);
   return matches.map((match) => {
     const projection: {
       id: string;
@@ -56,7 +59,7 @@ async function selectionError(
   source: string,
 ): Promise<string> {
   try {
-    await selector({ filepath, source });
+    await selector({ filepath, source }, projectContext);
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }

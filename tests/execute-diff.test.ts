@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 
-import { Rule, pass } from '../dist/index.js';
-import type { CheckContext, Grouping, RunContext, RunEvent, ScopeSubject, SelectionContext, Subject } from '../dist/index.js';
+import { Rule, pass, violation } from '../dist/index.js';
+import type { CheckContext, Grouping, JsonValue, LineRange, ProjectContext, RunContext, RunEvent, ScopeMatch, ScopeSubject, SelectionContext, Subject } from '../dist/index.js';
 import { createProject } from '../dist/adapter/filesystem/project.js';
 import { executeRules } from '../dist/app/execute.js';
 import { createSandbox, writeFile } from './support.ts';
@@ -40,6 +40,7 @@ async function run(
   project: RunContext['project'],
   changedFiles?: readonly string[],
   isTarget: RunContext['isTarget'] = () => true,
+  changedLines?: ReadonlyMap<string, readonly LineRange[]>,
 ) {
   const events: RunEvent[] = [];
   const reports = await executeRules([{ name: 'diff', ruleFile: '.coderuler/diff.rule.ts', rule: rule as unknown as Rule<unknown> }], {
@@ -47,10 +48,93 @@ async function run(
     isTarget,
     concurrency: 2,
     ...(changedFiles === undefined ? {} : { changedFiles: new Set(changedFiles) }),
+    ...(changedLines === undefined ? {} : { changedLines }),
     resolveDecision: () => { throw new Error('Local checks must not resolve AI'); },
     emit: event => events.push(event),
   });
   return { report: reports[0]!, events };
+}
+
+function rangesFor(context: ProjectContext, filepath: string): readonly LineRange[] | undefined {
+  return context.changedLines?.get(filepath);
+}
+
+function overlaps(line: number, ranges: readonly LineRange[] | undefined): boolean {
+  return ranges === undefined || ranges.some(range => line >= range.start && line <= range.end);
+}
+
+function lineScopes(source: string, ranges: readonly LineRange[] | undefined): readonly ScopeMatch<JsonValue>[] {
+  return source.split('\n').flatMap((line, index) => {
+    const number = index + 1;
+    return overlaps(number, ranges)
+      ? [{ id: `line-${number}`, source: line, lines: { start: number, end: number } }]
+      : [];
+  });
+}
+
+class RangeAwareRule extends Rule {
+  files = ['**/*.txt'];
+  readonly selected: ScopeSubject[] = [];
+  readonly filtered: string[] = [];
+  readonly whenResults: boolean[] = [];
+  nestedSources: string[] = [];
+  filterWithoutSelectionNarrowing = false;
+
+  when(context: ProjectContext): boolean {
+    const ranges = rangesFor(context, 'src/a.txt');
+    const changed = context.changedFiles;
+    const applies = changed === undefined
+      ? true
+      : changed.has('src/a.txt') && (ranges === undefined || ranges.length > 0);
+
+    this.whenResults.push(applies);
+    return applies;
+  }
+
+  async select(context: SelectionContext): Promise<readonly ScopeSubject[]> {
+    const candidates = await context.select<JsonValue>({ files: this.files, scope: (file, nestedContext) =>
+      lineScopes(file.source, this.filterWithoutSelectionNarrowing
+        ? undefined
+        : rangesFor(nestedContext ?? context, file.filepath)) });
+
+    return this.filterWithoutSelectionNarrowing
+      ? candidates.filter(candidate => overlaps(candidate.lines?.start ?? 1, rangesFor(context, candidate.filepath)))
+      : candidates;
+  }
+
+  filter(subject: ScopeSubject, context: ProjectContext): boolean {
+    this.filtered.push(`${subject.filepath}:${subject.lines?.start}`);
+    const ranges = rangesFor(context, subject.filepath);
+    return ranges === undefined || overlaps(subject.lines?.start ?? 1, ranges);
+  }
+
+  check = async (subject: Subject, context: CheckContext) => {
+    this.selected.push(...(subject.kind === 'group' ? subject.members : [subject]));
+    const nested = await context.select<JsonValue>({ files: this.files, scope: (file, nestedContext) =>
+      lineScopes(file.source, rangesFor(nestedContext ?? context, file.filepath)) });
+    this.nestedSources = nested.map(candidate => candidate.source);
+    const ranges = rangesFor(context, 'src/a.txt');
+    const candidates = subject.kind === 'group' ? subject.members : [subject];
+    const changedBad = candidates.find(candidate => candidate.source.startsWith('BAD')
+      && (context.changedFiles === undefined || ranges === undefined || overlaps(candidate.lines?.start ?? 1, ranges)));
+    if (changedBad !== undefined) {
+      const lines = changedBad.lines;
+      return violation('Changed bad line', [{ filepath: changedBad.filepath, ...(lines === undefined ? {} : { lines }) }]);
+    }
+    return pass();
+  };
+}
+
+class RangeIgnoringRule extends Rule {
+  files = ['**/*.txt'];
+  readonly checked: ScopeSubject[] = [];
+
+  scope = ({ source }: { filepath: string; source: string }) => lineScopes(source, undefined);
+
+  check = async (subject: Subject) => {
+    this.checked.push(...(subject.kind === 'group' ? subject.members : [subject]));
+    return pass();
+  };
 }
 
 for (const group of ['scope', 'file'] as const) {
@@ -217,3 +301,95 @@ test('normal execution keeps unchanged subjects when no changed-file set is supp
   assert.deepEqual(rule.filtered, ['a.txt', 'b.txt']);
   assert.equal(rule.checked.length, 2);
 });
+
+test('range-aware scope selection reports only the changed line while nested contexts retain its range', async () => {
+  const project = fixture({ 'src/a.txt': 'BAD unchanged\nBAD changed\nclean' });
+  const rule = new RangeAwareRule();
+  const { report } = await run(rule, project, ['src/a.txt'], () => true, new Map([
+    ['src/a.txt', [{ start: 2, end: 2 }]],
+  ]));
+
+  assert.equal(report.status, 'violation');
+  assert.equal(report.evaluations.length, 1);
+  assert.deepEqual(report.evaluations[0]?.result, {
+    status: 'violation',
+    message: 'Changed bad line',
+    locations: [{ filepath: 'src/a.txt', lines: { start: 2, end: 2 } }],
+  });
+  assert.deepEqual(rule.whenResults, [true]);
+  assert.deepEqual(rule.filtered, ['src/a.txt:2']);
+  assert.deepEqual(rule.selected.map(subject => subject.source), ['BAD changed']);
+  assert.deepEqual(rule.nestedSources, ['BAD changed']);
+});
+
+test('range-ignoring selectors still evaluate every scope in a changed file', async () => {
+  const project = fixture({ 'src/a.txt': 'BAD unchanged\nBAD changed\nclean' });
+  const rule = new RangeIgnoringRule();
+
+  const { report } = await run(rule, project, ['src/a.txt'], () => true, new Map([
+    ['src/a.txt', [{ start: 2, end: 2 }]],
+  ]));
+
+  assert.equal(report.status, 'pass');
+  assert.deepEqual(rule.checked.map(subject => subject.source), ['BAD unchanged', 'BAD changed', 'clean']);
+});
+
+test('missing diff data takes the range-aware full-scan branch and empty diff has no subjects', async () => {
+  const project = fixture({ 'src/a.txt': 'BAD unchanged\nBAD changed\nclean' });
+  const fullScan = new RangeAwareRule();
+
+  const withoutDiff = await run(fullScan, project);
+
+  assert.equal(withoutDiff.report.status, 'violation');
+  assert.deepEqual(fullScan.whenResults, [true]);
+  assert.deepEqual(fullScan.selected.map(subject => subject.source), ['BAD unchanged', 'BAD changed', 'clean']);
+
+  const emptyDiff = new RangeAwareRule();
+  const noChanges = await run(emptyDiff, project, []);
+
+  assert.equal(noChanges.report.status, 'skipped');
+  assert.deepEqual(emptyDiff.whenResults, [false]);
+  assert.deepEqual(emptyDiff.selected, []);
+});
+
+test('range-aware overridden selection and filter use line ranges to choose subjects', async () => {
+  const project = fixture({ 'src/a.txt': 'BAD unchanged\nBAD changed\nclean' });
+  const rule = new RangeAwareRule();
+  rule.group = 'file';
+
+  const { report } = await run(rule, project, ['src/a.txt'], () => true, new Map([
+    ['src/a.txt', [{ start: 2, end: 2 }]],
+  ]));
+
+  assert.equal(report.status, 'violation');
+  assert.deepEqual(rule.filtered, ['src/a.txt:2']);
+  assert.deepEqual(rule.selected.map(subject => subject.source), ['BAD changed']);
+});
+
+test('range-aware filter drops unchanged scopes returned by the overridden selector', async () => {
+  const project = fixture({ 'src/a.txt': 'BAD unchanged\nBAD changed\nclean' });
+  const rule = new RangeAwareRule();
+  rule.filterWithoutSelectionNarrowing = true;
+
+  await run(rule, project, ['src/a.txt'], () => true, new Map([
+    ['src/a.txt', [{ start: 2, end: 2 }]],
+  ]));
+
+  assert.deepEqual(rule.filtered, ['src/a.txt:2']);
+  assert.deepEqual(rule.selected.map(subject => subject.source), ['BAD changed']);
+});
+
+test('when can skip an otherwise changed file with no changed-line ranges', async () => {
+  const project = fixture({ 'src/a.txt': 'BAD unchanged\nBAD changed\nclean' });
+  const rule = new RangeAwareRule();
+
+  const { report } = await run(rule, project, ['src/a.txt'], () => true, new Map([
+    ['src/a.txt', []],
+  ]));
+
+  assert.equal(report.status, 'skipped');
+  assert.deepEqual(rule.whenResults, [false]);
+  assert.deepEqual(rule.filtered, []);
+  assert.deepEqual(rule.selected, []);
+});
+

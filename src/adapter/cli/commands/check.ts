@@ -1,6 +1,6 @@
 import { relative, resolve, sep } from 'node:path';
 
-import type { LoadedRule, RuleReport, RunContext } from '../../../app/ports.js';
+import type { DiffChanges, LoadedRule, RuleReport, RunContext } from '../../../app/ports.js';
 import type { PullRequestCheckout } from '../../github/pull-request.js';
 import { CliExit, EXIT_VIOLATION } from '../exit.js';
 import { createProgress } from '../progress.js';
@@ -44,9 +44,9 @@ async function runCheck(
       }
       const area = await services.resolveTarget(checkout?.root ?? context.cwd, target);
       root = area.root;
-      let changedFiles = checkout?.changedFiles ?? (diffOnly
-        ? await services.changedFiles(area.root, options.base ?? 'HEAD')
-        : undefined);
+      let changes: DiffChanges | undefined = checkout === undefined
+        ? (diffOnly ? await services.collectChanges(area.root, options.base ?? 'HEAD') : undefined)
+        : { changedFiles: checkout.changedFiles, changedLines: checkout.changedLines };
       const choice = options.rules === undefined
         ? {}
         : await services.resolveRuleSelector(options.rules, context.cwd, true);
@@ -65,9 +65,12 @@ async function runCheck(
             rule.tags?.some(tag => options.tags.includes(tag)) === true) &&
           !rule.tags?.some(tag => options.excludeTags.includes(tag)),
         );
-      if (changedFiles !== undefined) {
+      if (changes !== undefined) {
         const ruleFiles = new Set(prepared.rules.map(entry => relative(area.root, resolve(entry.ruleFile)).split(sep).join('/')));
-        changedFiles = new Set([...changedFiles].filter(path => !ruleFiles.has(path)));
+        changes = {
+          changedFiles: new Set([...changes.changedFiles].filter(path => !ruleFiles.has(path))),
+          changedLines: new Map([...changes.changedLines].filter(([path]) => !ruleFiles.has(path))),
+        };
       }
       const concurrency = debug ? 1 : options.concurrency;
       walkthrough = verbose
@@ -88,7 +91,10 @@ async function runCheck(
         concurrency,
         resolveDecision: services.decisionResolver(options.threshold),
         ...(emit === undefined ? {} : { emit }),
-        ...(changedFiles === undefined ? {} : { changedFiles }),
+        ...(changes === undefined ? {} : {
+          changedFiles: changes.changedFiles,
+          changedLines: changes.changedLines,
+        }),
       };
       const startedAt = performance.now();
       reports = await services.runRules(rules, runContext);

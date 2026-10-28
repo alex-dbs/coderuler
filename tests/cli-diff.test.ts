@@ -105,6 +105,65 @@ test('normal checks include unchanged violations while diff checks evaluate only
   ]);
 });
 
+test('diff selects only changed lines, preserves full scans without diff, and excludes loaded rule files', async () => {
+  const target = repository('changed-lines');
+  const rulePath = '.coderuler/local.rule.ts';
+  const source = `import { Rule, pass, violation } from '@alex-dbs/coderuler';
+export default class Local extends Rule {
+  files = ['src/*.txt'];
+  scope = (file, context) => {
+    if (context.changedFiles?.has(${JSON.stringify(rulePath)})) {
+      throw new Error('Loaded rule files must not be in changedFiles');
+    }
+    if (context.changedLines?.has(${JSON.stringify(rulePath)})) {
+      throw new Error('Loaded rule files must not be in changedLines');
+    }
+    const ranges = context.changedLines?.get(file.filepath);
+    const candidates = file.source.split('\\n').flatMap((line, index) => line.includes('BAD') ? [{
+      id: String(index + 1), source: line, lines: { start: index + 1, end: index + 1 },
+    }] : []);
+    if (context.changedFiles === undefined) return candidates;
+    if (!context.changedFiles.has(file.filepath)) return [];
+    if (ranges === undefined) return candidates;
+    return candidates.filter(scope => ranges.some(range => range.start <= scope.lines.end && scope.lines.start <= range.end));
+  };
+  check = subject => subject.kind === 'scope' && subject.source.includes('BAD')
+    ? violation('Changed bad line', [{ filepath: subject.filepath, lines: subject.lines }])
+    : pass();
+}
+`;
+  writeFile(join(target.cwd, rulePath), source);
+  files(target, { 'src/a.txt': 'BAD unchanged\nclean\n' });
+  const base = commit(target);
+  files(target, { 'src/a.txt': 'BAD unchanged\nBAD changed\n' });
+  writeFile(join(target.cwd, rulePath), `${source}\n// Rule module changed too.\n`);
+
+  const diff = await runCli(['check', '.', '--diff-only', '--base', base, '--json', '--output-all'], target);
+  assert.equal(diff.status, 1, diff.stderr);
+  const diffReport = parseCheckOutput(diff, 'changed-line diff')[0]!;
+  assert.deepEqual(diffReport.evaluations.map(({ subject, result }) => ({
+    filepath: subject.kind === 'scope' ? subject.filepath : '',
+    source: subject.kind === 'scope' ? subject.source : '',
+    status: result.status,
+    message: result.message,
+    locations: result.locations,
+  })), [{
+    filepath: 'src/a.txt',
+    source: 'BAD changed',
+    status: 'violation',
+    message: 'Changed bad line',
+    locations: [{ filepath: 'src/a.txt', lines: { start: 2, end: 2 } }],
+  }]);
+
+  const full = await runCli(['check', '.', '--json', '--output-all'], target);
+  assert.equal(full.status, 1, full.stderr);
+  assert.deepEqual(parseCheckOutput(full, 'full scan')[0]!.evaluations.filter(({ result }) => result.status === 'violation').map(({ subject }) =>
+    subject.kind === 'scope' ? { filepath: subject.filepath, source: subject.source, lines: subject.lines } : null), [
+    { filepath: 'src/a.txt', source: 'BAD unchanged', lines: { start: 1, end: 1 } },
+    { filepath: 'src/a.txt', source: 'BAD changed', lines: { start: 2, end: 2 } },
+  ]);
+});
+
 test('diff compares the explicit base directly with committed, staged, unstaged and untracked current files', async () => {
   const target = repository('states');
   rule(target, 'local');

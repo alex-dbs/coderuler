@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process';
+import type { LineRange } from '../../app/rule.js';
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { changedFiles } from '../git/changes.js';
+import { collectChanges } from '../git/changes.js';
 import { isolatedGitEnvironment } from '../git/environment.js';
 import { createGithubApi, mapping } from './api.js';
 
@@ -17,6 +18,7 @@ export interface PullRequestCheckout {
   readonly root: string;
   readonly rulesRoot: string;
   readonly changedFiles: ReadonlySet<string>;
+  readonly changedLines: ReadonlyMap<string, readonly LineRange[]>;
   readonly pullRequest: PullRequest;
   cleanup(): Promise<void>;
 }
@@ -150,9 +152,15 @@ export function createPullRequestCheckout(
       const head = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
       await runGit(root, ['worktree', 'add', '--detach', rulesRoot, 'refs/coderuler/base']);
       const mergeBase = (await runGit(root, ['merge-base', 'refs/coderuler/base', 'refs/coderuler/head'])).stdout.trim();
-      const files = await changedFiles(root, mergeBase, isolatedEnv);
+      const changes = await collectChanges(root, mergeBase, isolatedEnv);
       await assertNoWorktreeOverride(rulesRoot);
-      return { root, rulesRoot, changedFiles: files, pullRequest: { ...pullRequest, head }, cleanup };
+      return {
+        root,
+        rulesRoot,
+        ...changes,
+        pullRequest: { ...pullRequest, head },
+        cleanup,
+      };
     } catch (error) {
       await cleanup();
       throw error;
