@@ -287,6 +287,63 @@ export const aiTests = [
   assert.match(mismatch.stdout, /expected pass.*(?:got|actual).*violation/i);
 });
 
+test('test --ai --ai-scores runs mixed cases through the OpenAI decision backend', async t => {
+  const target = sandbox.isolated('openai-ai-decisions');
+  const fixture = await startDecisionFixture();
+  t.after(() => fixture.close());
+  fixture.answer = (_request, index) => ({
+    body: JSON.stringify({
+      model: 'gpt-6-luna',
+      answers: [{
+        type: 'predicate',
+        name: 'follows_instructions',
+        probability: index === 0 ? 0.9 : 0.1,
+      }],
+      usage: { input_tokens: 11, output_tokens: 0 },
+    }),
+  });
+  const path = writeFile(join(target.cwd, '.coderuler/mixed.rule.ts'), `import { Rule, pass, test } from '@alex-dbs/coderuler';
+export default class Mixed extends Rule {
+  files = ['inputs/*.txt'];
+  check = (subject, context) => subject.source === 'LOCAL' ? pass() : context.ai({ rule: 'The input must be good.' });
+}
+export const tests = [test('local assertion').withFiles({ 'inputs/local.txt': 'LOCAL' }).passes()];
+export const aiTests = [
+  test('provider pass assertion').withFiles({ 'inputs/good.txt': 'GOOD' }).passes(),
+  test('provider violation assertion').withFiles({ 'inputs/bad.txt': 'BAD' }).violates(),
+];`);
+  const openAiEnv = {
+    RK_BACKEND: 'openai',
+    OPENAI_API_KEY: fixture.apiKey,
+    OPENAI_BASE_URL: `${fixture.baseUrl}/v1`,
+  };
+
+  const ordinary = await runCli(['test', path], target, openAiEnv);
+  assert.equal(ordinary.status, 0, ordinary.stderr || ordinary.stdout);
+  assert.match(ordinary.stdout, /PASS local assertion/);
+  assert.equal(fixture.requests.length, 0);
+
+  const scored = await runCli(['test', '--ai', '--ai-scores', '--concurrency', '1', path], target, openAiEnv);
+  assert.equal(scored.status, 0, scored.stderr || scored.stdout);
+  assert.equal(scored.stderr, '');
+  assert.equal(fixture.requests.length, 2);
+  for (const request of fixture.requests) {
+    assert.equal(request.method, 'POST');
+    assert.equal(request.path, '/v1/decisions');
+    assert.equal(request.authorization, `Bearer ${fixture.apiKey}`);
+  }
+  const resultLines = scored.stdout.split('\n').filter(Boolean);
+  assert.ok(resultLines.indexOf(resultLines.find(line => line.includes('local assertion'))!) <
+    resultLines.indexOf(resultLines.find(line => line.includes('provider pass assertion'))!), scored.stdout);
+  const scoreLines = resultLines.filter(line =>
+    line.includes('provider pass assertion') || line.includes('provider violation assertion'));
+  assert.match(scoreLines[0]!, /provider pass assertion/);
+  assert.match(scoreLines[1]!, /provider violation assertion/);
+  assert.deepEqual(scoreLines.map(line => line.match(/\b0\.\d+\b/g) ?? []), [['0.9'], ['0.1']]);
+  assert.match(scoreLines[0]!, /PASS/);
+  assert.match(scoreLines[1]!, /PASS/);
+});
+
 test('test --ai never authorizes ordinary cases after a live case used the same worker', async t => {
   const target = sandbox.isolated('ai-permission');
   const fixture = await startDecisionFixture();

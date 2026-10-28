@@ -66,7 +66,7 @@ export function renderRuleTestResult(
     ? ''
     : safe(` (expected ${result.expected}, actual ${result.actual})`);
   const aiScores = showAIScores && result.aiScores !== undefined && result.aiScores.length > 0
-    ? ` (${result.aiScores.length === 1 ? 'Jev score' : 'Jev scores'}: ${result.aiScores.join(', ')})`
+    ? ` (${result.aiScores.length === 1 ? 'AI score' : 'AI scores'}: ${result.aiScores.join(', ')})`
     : '';
   const duration = paint(safe(` (${formatDuration(result.durationMs)})`), 'dim', color);
   return `${branch}${label} ${safe(result.name)}${detail}${aiScores}${duration}\n`;

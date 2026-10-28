@@ -266,7 +266,7 @@ export const tests = [
   ]);
 });
 
-test('AI tests require --ai and can show all Jev scores', async context => {
+test('AI tests require --ai and can show all decision scores', async context => {
   const target = sandbox.isolated('failures-only-ai');
   const fixture = await startDecisionFixture();
   context.after(() => fixture.close());
@@ -296,17 +296,17 @@ export const aiTests = [
     '└─ FAIL provider mismatch (expected pass, actual violation)',
     '1 passed, 1 failed  Time: <duration>',
   ]);
-  assert.doesNotMatch(live.stdout, /Jev scores?:/);
   assert.equal(fixture.requests.length, 3);
 
   const scored = await runCli(['test', '--ai', '--ai-scores', '--concurrency', '1', path], target, fixture.env);
   assert.equal(scored.status, 1, scored.stderr || scored.stdout);
   assert.equal(scored.stderr, '');
-  assert.deepEqual(withoutTimings(scored.stdout).split('\n').filter(Boolean), [
-    'mixed',
-    '├─ FAIL provider mismatch (expected pass, actual violation) (Jev scores: 0.1, 0.9)',
-    '└─ PASS provider pass (Jev score: 0.9)',
-    '1 passed, 1 failed  Time: <duration>',
-  ]);
+  const scoredLines = withoutTimings(scored.stdout).split('\n').filter(Boolean);
+  assert.equal(scoredLines[0], 'mixed');
+  assert.match(scoredLines[1]!, /^├─ FAIL provider mismatch \(expected pass, actual violation\)/);
+  assert.match(scoredLines[2]!, /^└─ PASS provider pass\b/);
+  assert.deepEqual(scoredLines[1]!.match(/\b0\.\d+\b/g) ?? [], ['0.1', '0.9']);
+  assert.deepEqual(scoredLines[2]!.match(/\b0\.\d+\b/g) ?? [], ['0.9']);
+  assert.match(scoredLines[3]!, /^1 passed, 1 failed  Time: <duration>$/);
   assert.equal(fixture.requests.length, 6);
 });

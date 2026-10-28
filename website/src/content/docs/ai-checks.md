@@ -1,6 +1,6 @@
 ---
 title: AI checks
-description: Configure optional Jev checks, customize selected input, and understand decisions and cost.
+description: Configure optional Jev and OpenAI checks, customize selected input, and understand decisions and cost.
 section: Build rules
 order: 7
 ---
@@ -9,7 +9,9 @@ order: 7
 
 Use AI when a policy needs judgment about meaning that deterministic code cannot express. Keep file selection, required-data checks, and applicability deterministic.
 
-The built-in AI backend is Jev from [Typesafe](https://typesafe.ai/). AI is optional. Deterministic rules do not need an API key.
+Jev from [Typesafe](https://typesafe.ai/) is the default AI backend. You can also select OpenAI. AI is optional, and deterministic rules do not need an API key.
+
+CodeRuler reads only the selected backend's configuration when an AI call runs. Deterministic checks and skipped or filtered rules do not need either provider's key.
 
 ## Configure the service
 
@@ -20,17 +22,28 @@ export TYPESAFE_API_KEY='your-api-key'
 export TYPESAFE_DEFAULT_MODEL='jev-latest'
 ```
 
+For OpenAI, set:
+
+```sh
+export RK_BACKEND='openai'
+export OPENAI_API_KEY='your-api-key'
+export OPENAI_DEFAULT_MODEL='gpt-6-luna'
+```
+
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
-| `TYPESAFE_API_KEY` | None | Required credential for live calls |
-| `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | Service base URL |
-| `TYPESAFE_DEFAULT_MODEL` | `jev-latest` | Default model |
-| `RK_BACKEND` | `jev` | Built-in decision backend |
+| `TYPESAFE_API_KEY` | None | Jev credential, read only when Jev is selected and an AI call runs |
+| `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | Jev service base URL |
+| `TYPESAFE_DEFAULT_MODEL` | `jev-latest` | Jev default model |
+| `OPENAI_API_KEY` | None | OpenAI credential, read only when OpenAI is selected and an AI call runs |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI service base URL |
+| `OPENAI_DEFAULT_MODEL` | `gpt-6-luna` | OpenAI default model |
+| `RK_BACKEND` | `jev` | Backend: `jev` or `openai` |
 | `RK_THRESHOLD` | `0.4` | Decision threshold |
-| `RK_INPUT_COST_PER_MILLION` | `0.042` | Estimated USD per million input tokens |
+| `RK_INPUT_COST_PER_MILLION` | Selected provider default | Estimated USD per million input tokens |
 | `RK_OUTPUT_COST_PER_MILLION` | `0` | Estimated USD per million output tokens |
 
-The key is required only when an AI call runs. Do not commit credentials to rules or fixtures.
+Do not commit credentials to rules or fixtures.
 
 ## Write a focused policy
 
@@ -78,13 +91,13 @@ Run the live test only when you intend to contact the service:
 coderuler test .coderuler/actionable-instructions.rule.ts --ai --ai-scores --timeout 45s
 ```
 
-`--ai` authorizes live provider calls for `aiTests`. It requires the API key and can incur charges. `--ai-scores` displays each Jev probability, but does not authorize calls by itself. Both options are needed to run AI tests and display scores.
+`--ai` authorizes live provider calls for `aiTests`. It requires the selected provider's API key and can incur charges. `--ai-scores` displays each AI probability, but does not authorize calls by itself. Both options are needed to run AI tests and display scores.
 
 Compare instruction styles on the same fixtures, model version, examples, input, and threshold. Change only the instruction. Compliant cases need scores near `1`; violations need scores near `0`. Compare both groups separately and inspect individual regressions, not just averages. `PASS` means the test expectation matched, so a passing violation test still needs a low score. Repeat close comparisons, and do not change fixtures or thresholds to hide weak wording. See [testing](/docs/testing/) for running live cases. `check` and `inspect` also make live calls.
 
 ## Advanced: customize the input
 
-By default, AI receives the selected scopes, including their path and scope metadata, plus the rule instruction and examples. It does not receive the whole repository. Keep Jev's input to the smallest scope that still supports a correct decision. For function-local code policies, use `scopes.astGrep` to select one function or method per scope and filter for relevant syntax, such as pointer dereferences.
+By default, AI receives the selected scopes, including their path and scope metadata, plus the rule instruction and examples. It does not receive the whole repository. Keep the selected provider's input to the smallest scope that still supports a correct decision. For function-local code policies, use `scopes.astGrep` to select one function or method per scope and filter for relevant syntax, such as pointer dereferences.
 
 Use the `input` option to reduce the context further. This example sends only the selected source text:
 
@@ -106,16 +119,18 @@ The [Go dereference guard](https://github.com/alex-dbs/coderuler/blob/main/.code
 
 ## Understand decisions and precedence
 
-The service returns a probability of compliance. A probability of `1` means compliant, and `0` means noncompliant. The threshold is the cutoff for a passing result. A result passes only when its probability is strictly greater than the effective threshold. Equality is a violation.
+Jev and OpenAI return a probability of compliance. A probability of `1` means compliant, and `0` means noncompliant. The threshold is the cutoff for a passing result. A result passes only when its probability is strictly greater than the effective threshold. Equality is a violation.
 
 Threshold precedence is CLI `check --threshold` → rule `settings.threshold` → `RK_THRESHOLD` → `0.4`. The threshold must be finite and between `0` and `1`.
 
-Backend and model use rule settings → environment → defaults. `RuleSettings.backend` supports `'jev'`. Set `model`, `threshold`, `inputCostPerMillion`, and `outputCostPerMillion` on a rule to override defaults.
+`RuleSettings.backend` supports `'jev'` and `'openai'`. Backend precedence is rule setting → `RK_BACKEND` → `jev`. Model precedence is rule setting → the selected provider's model variable → its default. Jev uses `TYPESAFE_DEFAULT_MODEL` and defaults to `jev-latest`; OpenAI uses `OPENAI_DEFAULT_MODEL` and defaults to `gpt-6-luna`. Set `model`, `threshold`, `inputCostPerMillion`, and `outputCostPerMillion` on a rule to override defaults.
 
 ## Cost
 
-Costs depend on the service, model, input size, and billing terms. Configured token prices produce estimates, not a billing guarantee. They do not change the decision.
+Costs depend on the provider, model, input size, and billing terms. Configured token prices produce estimates, not a billing guarantee. They do not change the decision.
 
-Inspection reports calls, unreported calls, token counts, and estimated input/output costs. Missing provider counts remain unreported. Totals cover reported usage only. Override inspection prices with `--input-cost-per-million` and `--output-cost-per-million`.
+Default input prices are `$0.042` per million tokens for Jev and `$0.10` for OpenAI. Both providers default to `$0` per million output tokens.
+
+Inspection reports calls, unreported calls, token counts, and estimated input/output costs. Missing provider counts remain unreported. Totals cover reported usage only. Price precedence is inspection override → rule setting → `RK_INPUT_COST_PER_MILLION` or `RK_OUTPUT_COST_PER_MILLION` → selected provider default. Override inspection prices with `--input-cost-per-million` and `--output-cost-per-million`.
 
 See the [author reference](https://github.com/alex-dbs/coderuler/blob/main/skills/coderuler-new-rule/reference.md#ai-options-examples-and-settings) and [settings source](https://github.com/alex-dbs/coderuler/blob/main/src/infra/settings.ts) for the exact contracts.

@@ -30,7 +30,7 @@ export function createServices(
   cwd: string,
   env: Readonly<Record<string, string | undefined>>,
 ): CliServices {
-  const redact = createRedactor([env.TYPESAFE_API_KEY, env.GITHUB_TOKEN]);
+  const redact = createRedactor([env.TYPESAFE_API_KEY, env.OPENAI_API_KEY, env.GITHUB_TOKEN]);
   let dependenciesPromise: Promise<RuleDependencyManager> | undefined;
   let ruleServicesPromise: Promise<RuleServices> | undefined;
   const getDependencies = (context: CliContext): Promise<RuleDependencyManager> =>
@@ -179,7 +179,11 @@ export async function runCli(argv: readonly string[]): Promise<number> {
     if (!versionOnly) loadEnvironment(cwd);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const redact = createRedactor([process.env.TYPESAFE_API_KEY, process.env.GITHUB_TOKEN]);
+    const redact = createRedactor([
+      process.env.TYPESAFE_API_KEY,
+      process.env.OPENAI_API_KEY,
+      process.env.GITHUB_TOKEN,
+    ]);
     process.stderr.write(`coderuler: ${redact(escapeDiagnostic(message))}\n`);
     return EXIT_FAILURE;
   }

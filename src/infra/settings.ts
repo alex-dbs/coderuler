@@ -1,12 +1,16 @@
 import { JevAdapter } from '../adapter/decision/jev.js';
+import { OpenAIAdapter } from '../adapter/decision/openai.js';
 import type { DecisionRuntime } from '../app/ports.js';
 import type { RuleSettings, TokenPricing } from '../app/rule.js';
 
 const DEFAULT_BACKEND = 'jev';
 const DEFAULT_MODEL = 'jev-latest';
 const DEFAULT_BASE_URL = 'https://api.typesafe.ai';
+const OPENAI_DEFAULT_MODEL = 'gpt-6-luna';
+const OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_THRESHOLD = 0.4;
 const DEFAULT_INPUT_COST_PER_MILLION = 0.042;
+const OPENAI_DEFAULT_INPUT_COST_PER_MILLION = 0.10;
 const DEFAULT_OUTPUT_COST_PER_MILLION = 0;
 const THRESHOLD_MESSAGE = 'must be a number between 0 and 1';
 const DECIMAL = /^(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)$/;
@@ -69,9 +73,10 @@ export function createDecisionResolver(
 
   return settings => {
     const backend = settings.backend ?? setting(env, 'RK_BACKEND') ?? DEFAULT_BACKEND;
-    if (backend !== 'jev') {
-      throw new Error(`Unknown decision backend '${backend}'; supported backends: ${DEFAULT_BACKEND}`);
+    if (backend !== 'jev' && backend !== 'openai') {
+      throw new Error(`Unknown decision backend '${backend}'; supported backends: jev, openai`);
     }
+    const isOpenAI = backend === 'openai';
 
     let threshold: number;
     if (flagThreshold !== undefined) {
@@ -91,20 +96,26 @@ export function createDecisionResolver(
     }
     const pricing: TokenPricing = {
       inputCostPerMillion: price(
-        inputOverride, settings.inputCostPerMillion, env, 'RK_INPUT_COST_PER_MILLION', DEFAULT_INPUT_COST_PER_MILLION,
+        inputOverride, settings.inputCostPerMillion, env, 'RK_INPUT_COST_PER_MILLION',
+        isOpenAI ? OPENAI_DEFAULT_INPUT_COST_PER_MILLION : DEFAULT_INPUT_COST_PER_MILLION,
       ),
       outputCostPerMillion: price(
         outputOverride, settings.outputCostPerMillion, env, 'RK_OUTPUT_COST_PER_MILLION', DEFAULT_OUTPUT_COST_PER_MILLION,
       ),
     };
 
-    const model = settings.model ?? setting(env, 'TYPESAFE_DEFAULT_MODEL') ?? DEFAULT_MODEL;
-    const baseUrl = setting(env, 'TYPESAFE_BASE_URL') ?? DEFAULT_BASE_URL;
-    const apiKey = setting(env, 'TYPESAFE_API_KEY');
-    if (apiKey === undefined) {
-      throw new Error('No decision API key: set TYPESAFE_API_KEY');
-    }
+    const model = settings.model ??
+      setting(env, isOpenAI ? 'OPENAI_DEFAULT_MODEL' : 'TYPESAFE_DEFAULT_MODEL') ??
+      (isOpenAI ? OPENAI_DEFAULT_MODEL : DEFAULT_MODEL);
+    const baseUrl = setting(env, isOpenAI ? 'OPENAI_BASE_URL' : 'TYPESAFE_BASE_URL') ??
+      (isOpenAI ? OPENAI_DEFAULT_BASE_URL : DEFAULT_BASE_URL);
+    const apiKeyName = isOpenAI ? 'OPENAI_API_KEY' : 'TYPESAFE_API_KEY';
+    const apiKey = setting(env, apiKeyName);
+    if (apiKey === undefined) throw new Error(`No decision API key: set ${apiKeyName}`);
 
+    if (isOpenAI) {
+      return { backend: new OpenAIAdapter({ model, baseUrl, apiKey }), threshold, pricing };
+    }
     return { backend: new JevAdapter({ model, baseUrl, apiKey }), threshold, pricing };
   };
 }

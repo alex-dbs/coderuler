@@ -374,6 +374,7 @@ test('reports each request when the connection fails', { timeout: 5_000 }, async
   context.mock.timers.enable({ apis: ['setTimeout'] });
   try {
     const pending = adapterFor(origin).decide(REQUEST, observer);
+    void pending.catch(() => {});
     await requests[0]!.promise;
 
     for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt += 1) {

@@ -55,7 +55,7 @@ export type Grouping =
   | { readonly by: 'folder'; readonly level: number };
 
 export interface RuleSettings {
-  readonly backend?: 'jev';
+  readonly backend?: 'jev' | 'openai';
   readonly model?: string;
   readonly threshold?: number;
   readonly inputCostPerMillion?: number;

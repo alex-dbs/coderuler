@@ -301,12 +301,20 @@ test('validateRule accepts structurally valid rules in every grouping and settin
     brandedRule({ comment: 'Follow **this** policy.' }),
     brandedRule({ settings: { backend: 'jev', model: 'jev-latest', threshold: 0 } }),
     brandedRule({ settings: { backend: 'jev', model: 'jev-latest', threshold: 1 } }),
+    brandedRule({ settings: { backend: 'openai', model: 'gpt-6-luna' } }),
     brandedRule({ settings: { inputCostPerMillion: 0, outputCostPerMillion: Number.MAX_VALUE } }),
   ];
 
   for (const rule of accepted) {
     assert.doesNotThrow(() => validateRule(rule, RULE_FILE));
   }
+});
+
+test('validateRule reports the supported decision backends', () => {
+  assert.throws(
+    () => validateRule(brandedRule({ settings: { backend: 'other' } }), RULE_FILE),
+    { message: /settings\.backend must be "jev" or "openai"/ },
+  );
 });
 
 test('validateRule describes the rule file when validation fails', () => {
