@@ -1,6 +1,6 @@
 ---
 name: coderuler-new-rule
-description: Create CodeRuler rules, including custom selection, filters and checks, inline tests, and inspection.
+description: Create CodeRuler rules, including custom selection, filters and checks, inline or companion tests, and inspection.
 ---
 
 # Create a CodeRuler rule
@@ -29,7 +29,9 @@ Start the name with its language or technology prefix, such as `go-`, `ts-`, or 
 
 Keep rules short, with only a few lines of policy code. Reuse built-in selectors, evaluators, and standard libraries before writing custom logic. Add helpers only for real reuse.
 
-For a deterministic rule, add a named `tests` export with `.passes()` and `.violates()` cases. For an AI rule, put every test case in `aiTests` and do not add a separate `tests` export. Omit `.skips()` assertions when creating a rule: skipped inputs never reach the check and provide no evidence of policy behavior.
+Test cases can live in the rule module or in a sibling `.test` module. For example, `sample.rule.ts` pairs with `sample.test.ts`; keep the same extension for `.mts`, `.js`, and `.mjs`. The `test` command combines exports from both modules. It runs ordinary `tests` by default; include `--ai` to run `aiTests`.
+
+For a deterministic rule, export named `tests` with `.passes()` and `.violates()` cases. For an AI rule, put every test case in `aiTests` and do not add a separate `tests` export. Omit `.skips()` assertions when creating a rule: skipped inputs never reach the check and provide no evidence of policy behavior.
 
 For an AI rule, use `instruction` to state what compliant code does, beginning with a direct requirement. Add only applicability boundaries or real exceptions needed to define the policy; keep one policy per rule. Keep reporting language in `violationMessage`, examples in `examples`, and test cases in `aiTests`—not in the instruction. See [AI instruction style](reference.md#ai-instruction-style).
 
@@ -94,7 +96,7 @@ coderuler validate
 coderuler test
 ```
 
-`validate` checks the module contract, not policy behavior or TypeScript semantics. `check` and `validate` do not execute inline tests. `test` with no selected cases is an error, not success.
+`validate` checks the module contract, not policy behavior or TypeScript semantics. `check` and `validate` do not run test cases or load sibling `.test` modules. `test` with no selected cases is an error, not success.
 
 Useful test options:
 

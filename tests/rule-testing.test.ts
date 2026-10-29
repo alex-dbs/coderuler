@@ -22,6 +22,206 @@ function writeRule(target: Sandbox, name: string, cases: string): string {
   return writeFile(join(target.cwd, '.coderuler', `${name}.rule.ts`), `${TEXT_RULE}\nexport const tests = [${cases}];\n`);
 }
 
+test('external-only datasets load for each supported rule extension', async t => {
+  for (const extension of ['ts', 'mts', 'js', 'mjs']) {
+    await t.test(extension, async () => {
+      const target = sandbox.isolated(`external-only-${extension}`);
+      const directory = join(target.cwd, '.coderuler/nested');
+      writeFile(join(directory, `text.rule.${extension}`), TEXT_RULE);
+      writeFile(join(directory, `text.test.${extension}`), `import { test } from '@alex-dbs/coderuler';
+export const tests = [
+  test('external good ${extension}').withFiles({ 'inputs/good.txt': 'GOOD' }).passes(),
+  test('external bad ${extension}').withFiles({ 'inputs/bad.txt': 'BAD' }).violates(),
+];`);
+      writeFile(join(directory, `unrelated.test.${extension}`), "throw new Error('unrelated test file was imported');\n");
+
+      const result = await runCli(['test'], target);
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.match(result.stdout, new RegExp(`PASS external good ${extension}`));
+      assert.match(result.stdout, new RegExp(`PASS external bad ${extension}`));
+      assert.equal(result.stdout.includes('unrelated test file'), false, result.stdout);
+    });
+  }
+});
+
+test('external cases follow inline cases and rule selection stays on rule modules', async () => {
+  const target = sandbox.isolated('external-selection');
+  const localPath = writeFile(join(target.cwd, '.coderuler/nested/local.rule.ts'), `${TEXT_RULE}
+export const tests = [test('local inline').withFiles({ 'inputs/a.txt': 'GOOD' }).passes()];`);
+  writeFile(join(target.cwd, '.coderuler/nested/local.test.ts'), `import { test } from '@alex-dbs/coderuler';
+export const tests = [test('local external').withFiles({ 'inputs/a.txt': 'GOOD' }).passes()];`);
+  writeFile(join(target.home, '.coderuler/home.rule.ts'), `${TEXT_RULE}
+export const tests = [test('home inline').withFiles({ 'inputs/a.txt': 'GOOD' }).passes()];`);
+  writeFile(join(target.home, '.coderuler/home.test.ts'), `import { test } from '@alex-dbs/coderuler';
+export const tests = [test('home external').withFiles({ 'inputs/a.txt': 'GOOD' }).passes()];`);
+
+  const discovered = await runCli(['test'], target);
+  assert.equal(discovered.status, 0, discovered.stderr || discovered.stdout);
+  for (const name of ['local inline', 'local external', 'home inline', 'home external']) {
+    assert.equal(discovered.stdout.match(new RegExp(`PASS ${name}`, 'g'))?.length, 1, discovered.stdout);
+  }
+  assert.ok(discovered.stdout.indexOf('local inline') < discovered.stdout.indexOf('local external'), discovered.stdout);
+  assert.ok(discovered.stdout.indexOf('home inline') < discovered.stdout.indexOf('home external'), discovered.stdout);
+  assert.match(discovered.stdout, /^local$/m);
+  assert.match(discovered.stdout, /^home$/m);
+
+  for (const [selector, options] of [
+    ['local', []],
+    [localPath, ['--concurrency', '2']],
+    ['.coderuler/nested', []],
+  ] as const) {
+    const selected = await runCli(['test', ...options, selector], target);
+    assert.equal(selected.status, 0, selected.stderr || selected.stdout);
+    assert.match(selected.stdout, /^local$/m);
+    assert.doesNotMatch(selected.stdout, /^home$/m);
+    for (const name of ['local inline', 'local external']) {
+      assert.equal(selected.stdout.match(new RegExp(`PASS ${name}`, 'g'))?.length, 1, selected.stdout);
+    }
+    assert.ok(selected.stdout.indexOf('local inline') < selected.stdout.indexOf('local external'), selected.stdout);
+  }
+});
+
+test('check and validate ignore test companions, and test imports only selected enabled companions', async () => {
+  const target = sandbox.isolated('companion-selection');
+  const throwingTest = (name: string): void => {
+    writeFile(join(target.cwd, `.coderuler/${name}.test.ts`), "throw new Error('companion exploded');\n");
+  };
+  writeFile(join(target.cwd, '.coderuler/throwing.rule.ts'), TEXT_RULE);
+  const throwingPath = join(target.cwd, '.coderuler/throwing.test.ts');
+  throwingTest('throwing');
+  writeFile(join(target.cwd, '.coderuler/unselected.rule.ts'), TEXT_RULE);
+  throwingTest('unselected');
+  writeFile(join(target.cwd, '.coderuler/disabled.rule.ts'), `import { Rule } from '@alex-dbs/coderuler';
+export default class Disabled extends Rule {
+  enabled = false;
+  check = () => { throw new Error('disabled rule ran'); };
+}`);
+  throwingTest('disabled');
+  writeRule(target, 'selected', `test('selected case').withFiles({ 'inputs/a.txt': 'GOOD' }).passes()`);
+  writeFile(join(target.cwd, '.coderuler/selected.test.ts'), `import { test } from '@alex-dbs/coderuler';
+export const tests = [test('selected external').withFiles({ 'inputs/a.txt': 'GOOD' }).passes()];`);
+
+  for (const command of ['check', 'validate']) {
+    const result = await runCli([command], target);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(result.stderr.includes('companion exploded'), false, result.stderr);
+  }
+  const selected = await runCli(['test', 'selected'], target);
+  assert.equal(selected.status, 0, selected.stderr || selected.stdout);
+  assert.match(selected.stdout, /PASS selected case/);
+  assert.match(selected.stdout, /PASS selected external/);
+  assert.doesNotMatch(selected.stderr, /companion exploded/);
+
+  const broken = await runCli(['test', 'throwing'], target);
+  assert.equal(broken.status, 2, broken.stdout || broken.stderr);
+  assert.ok(broken.stderr.includes(throwingPath), broken.stderr);
+  assert.match(broken.stderr, /companion exploded/);
+});
+
+test('external test declarations report malformed data, import errors, and empty datasets', async () => {
+  const cases = [
+    {
+      name: 'malformed',
+      source: 'export const tests = {};',
+      expected: /tests: expected an array of test cases/,
+    },
+    {
+      name: 'unfinished',
+      source: `import { test } from '@alex-dbs/coderuler';
+export const tests = [test('unfinished case').withFiles({ 'inputs/a.txt': 'GOOD' })];`,
+      expected: /tests\[0\].*name must be/,
+    },
+    {
+      name: 'missing-import',
+      source: `import './missing-helper.js';
+export const tests = [];`,
+      expected: /missing-helper/,
+    },
+  ];
+  for (const scenario of cases) {
+    const target = sandbox.isolated(`external-${scenario.name}`);
+    const rulePath = writeFile(join(target.cwd, `.coderuler/${scenario.name}.rule.ts`), TEXT_RULE);
+    const testPath = writeFile(join(target.cwd, `.coderuler/${scenario.name}.test.ts`), scenario.source);
+    const result = await runCli(['test', rulePath], target);
+    assert.equal(result.status, 2, result.stdout || result.stderr);
+    assert.ok(result.stderr.includes(testPath), result.stderr);
+    assert.match(result.stderr, scenario.expected);
+  }
+
+  const empty = sandbox.isolated('external-empty');
+  const emptyPath = writeFile(join(empty.cwd, '.coderuler/empty.rule.ts'), TEXT_RULE);
+  writeFile(join(empty.cwd, '.coderuler/empty.test.ts'), 'export const tests = [];\n');
+  const noCases = await runCli(['test', emptyPath], empty);
+  assert.equal(noCases.status, 2, noCases.stdout || noCases.stderr);
+  assert.match(noCases.stderr, /No rule test cases found in the selected rules/);
+
+  const inline = sandbox.isolated('external-empty-inline');
+  const inlinePath = writeRule(inline, 'inline', `test('inline still runs').withFiles({ 'inputs/a.txt': 'GOOD' }).passes()`);
+  writeFile(join(inline.cwd, '.coderuler/inline.test.ts'), 'export const tests = [];\n');
+  const withInline = await runCli(['test', inlinePath], inline);
+  assert.equal(withInline.status, 0, withInline.stderr || withInline.stdout);
+  assert.match(withInline.stdout, /PASS inline still runs/);
+});
+
+test('external AI cases run after ordinary cases only with --ai', async t => {
+  const target = sandbox.isolated('external-ai');
+  const fixture = await startDecisionFixture();
+  t.after(() => fixture.close());
+  fixture.answer = (_request, index) => ({ probability: index === 0 ? 0.9 : 0.1 });
+  const rulePath = writeFile(join(target.cwd, '.coderuler/mixed.rule.ts'), `import { Rule, pass, test } from '@alex-dbs/coderuler';
+export default class Mixed extends Rule {
+  files = ['inputs/*.txt'];
+  check = (subject, context) => subject.source === 'LOCAL'
+    ? pass()
+    : context.ai({ rule: 'The input must be good.' });
+}
+export const tests = [test('inline ordinary').withFiles({ 'inputs/inline.txt': 'LOCAL' }).passes()];
+export const aiTests = [test('inline AI pass').withFiles({ 'inputs/ai-good.txt': 'GOOD' }).passes()];`);
+  writeFile(join(target.cwd, '.coderuler/mixed.test.ts'), `import { test } from '@alex-dbs/coderuler';
+export const tests = [test('external ordinary').withFiles({ 'inputs/external.txt': 'LOCAL' }).passes()];
+export const aiTests = [test('external AI violation').withFiles({ 'inputs/ai-bad.txt': 'BAD' }).violates()];`);
+
+  const ordinary = await runCli(['test', rulePath], target, fixture.env);
+  assert.equal(ordinary.status, 0, ordinary.stderr || ordinary.stdout);
+  assert.match(ordinary.stdout, /PASS inline ordinary/);
+  assert.match(ordinary.stdout, /PASS external ordinary/);
+  assert.doesNotMatch(ordinary.stdout, /inline AI pass|external AI violation/);
+  assert.equal(fixture.requests.length, 0);
+
+  const selected = await runCli(['test', '--ai', '--concurrency', '1', rulePath], target, fixture.env);
+  assert.equal(selected.status, 0, selected.stderr || selected.stdout);
+  assert.equal(fixture.requests.length, 2);
+  const names = ['inline ordinary', 'external ordinary', 'inline AI pass', 'external AI violation'];
+  for (const name of names) {
+    assert.equal(selected.stdout.match(new RegExp(`PASS ${name}`, 'g'))?.length, 1, selected.stdout);
+  }
+  const positions = names.map(name => selected.stdout.indexOf(`PASS ${name}`));
+  assert.ok(positions.every((position, index) => index === 0 || positions[index - 1]! < position), selected.stdout);
+});
+
+test('external AI-only and malformed AI exports keep the --ai selection rules', async () => {
+  const onlyAI = sandbox.isolated('external-ai-only');
+  const onlyPath = writeFile(join(onlyAI.cwd, '.coderuler/live.rule.ts'), TEXT_RULE);
+  writeFile(join(onlyAI.cwd, '.coderuler/live.test.ts'), `import { test } from '@alex-dbs/coderuler';
+export const aiTests = [test('external live').withFiles({ 'inputs/a.txt': 'GOOD' }).passes()];`);
+  const hint = await runCli(['test', onlyPath], onlyAI);
+  assert.equal(hint.status, 2, hint.stdout || hint.stderr);
+  assert.match(hint.stderr, /--ai/);
+  assert.match(hint.stderr, /No ordinary rule test cases found/);
+
+  const malformed = sandbox.isolated('external-invalid-ai');
+  const malformedPath = writeRule(malformed, 'ordinary', `test('ordinary case').withFiles({ 'inputs/a.txt': 'GOOD' }).passes()`);
+  const malformedTest = writeFile(join(malformed.cwd, '.coderuler/ordinary.test.ts'), 'export const aiTests = {};\n');
+  const ordinary = await runCli(['test', malformedPath], malformed);
+  assert.equal(ordinary.status, 0, ordinary.stderr || ordinary.stdout);
+  assert.match(ordinary.stdout, /PASS ordinary case/);
+  const selected = await runCli(['test', '--ai', malformedPath], malformed);
+  assert.equal(selected.status, 2, selected.stdout || selected.stderr);
+  assert.ok(selected.stderr.includes(malformedTest), selected.stderr);
+  assert.match(selected.stderr, /aiTests: expected an array of test cases/);
+});
+
+
 test('test runs fluent cases through selection, filtering and grouping with isolated state and files', async () => {
   const target = sandbox.isolated('pipeline');
   writeFile(join(target.cwd, '.coderuler/budget.rule.ts'), `import { Rule, scopes, pass, test, violation } from '@alex-dbs/coderuler';
