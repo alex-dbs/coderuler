@@ -16,6 +16,7 @@ export interface RuleTestWorkerRequest {
   readonly files: RuleTestCase['files'];
   readonly ai: boolean;
   readonly dependencies?: PreparedRuleDependencies;
+  readonly includeDisabled?: boolean;
 }
 
 export interface RuleTestWorkerOutcome {
@@ -34,7 +35,7 @@ function fixturePath(root: string, filepath: string): string {
   return target;
 }
 
-async function runCase({ root, ruleFile, files, ai, dependencies }: RuleTestWorkerRequest): Promise<RuleTestWorkerOutcome> {
+async function runCase({ root, ruleFile, files, ai, dependencies, includeDisabled }: RuleTestWorkerRequest): Promise<RuleTestWorkerOutcome> {
   for (const [filepath, source] of Object.entries(files)) {
     const target = fixturePath(root, filepath);
     await mkdir(dirname(target), { recursive: true });
@@ -44,6 +45,7 @@ async function runCase({ root, ruleFile, files, ai, dependencies }: RuleTestWork
     dependencies === undefined ? {} : { preparedDependencies: dependencies },
   ).load({ root, explicit: ruleFile, invocationCwd: root });
   if (rules.length !== 1) throw new Error('Expected exactly one freshly loaded rule');
+  if (includeDisabled === true) rules[0]!.rule.enabled = true;
   const reports = await executeRules(rules, {
     project: createProject(root, { excludeFiles: [ruleFile] }),
     isTarget: () => true,

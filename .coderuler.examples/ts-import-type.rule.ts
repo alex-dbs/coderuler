@@ -1,6 +1,7 @@
 import { Rule, scopes, test, violation } from '@alex-dbs/coderuler';
 
 export default class TsImportType extends Rule {
+  enabled = false;
   files = ['**/*.{ts,tsx,mts,cts}'];
   exclude = ['**/*.d.{ts,mts,cts}'];
 

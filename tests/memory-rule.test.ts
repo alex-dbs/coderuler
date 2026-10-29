@@ -13,6 +13,7 @@ const message = 'Memory limit must not exceed 1.5 times the memory request.';
 async function runMemoryRule(file: string) {
   const rule = new MemoryRatio();
   rule.files = [file];
+  rule.enabled = true;
   const loaded: LoadedRule = {
     name: 'memory',
     ruleFile: fileURLToPath(new URL('../.coderuler/memory.rule.ts', import.meta.url)),

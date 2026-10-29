@@ -795,11 +795,13 @@ async function makeManualRoot(label: string, files: Readonly<Record<string, stri
 }
 
 async function loadDuplicatedEnv(root: string): Promise<readonly LoadedRule[]> {
-  return createRuleLoader({ home: ABSENT_HOME }).load({
+  const rules = await createRuleLoader({ home: ABSENT_HOME }).load({
     root,
     explicit: DUPLICATED_ENV_RULE,
     invocationCwd: root,
   });
+  for (const { rule } of rules) rule.enabled = true;
+  return rules;
 }
 
 function subjectShape(subject: Subject<JsonValue>) {

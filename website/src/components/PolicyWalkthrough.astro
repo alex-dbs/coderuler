@@ -4,7 +4,7 @@ import Violation from './Violation.astro';
 import RuleCode from './RuleCode.astro';
 import '../styles/walkthrough.css';
 
-import appendSliceRuleSource from '../../../.coderuler/go-append-slice.rule.ts?raw';
+import appendSliceRuleSource from '../../../.coderuler.examples/go-append-slice.rule.ts?raw';
 
 const policy = appendSliceRuleSource
   .split('\nexport const aiTests')[0]
@@ -53,8 +53,8 @@ const command = 'coderuler check';
     </div>
 
     <div class="walkthrough-example">
-      <RuleCode code={policy} filename=".coderuler/go-append-slice.rule.ts" class="walkthrough-policy-code">
-        <a slot="footer" class="rule-source-link" href="https://github.com/alex-dbs/coderuler/blob/main/.coderuler/go-append-slice.rule.ts">Read the full source policy <span aria-hidden="true">↗</span></a>
+      <RuleCode code={policy} filename=".coderuler.examples/go-append-slice.rule.ts" class="walkthrough-policy-code">
+        <a slot="footer" class="rule-source-link" href="https://github.com/alex-dbs/coderuler/blob/main/.coderuler.examples/go-append-slice.rule.ts">Read the full source policy <span aria-hidden="true">↗</span></a>
       </RuleCode>
 
       <Violation

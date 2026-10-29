@@ -158,7 +158,7 @@ A scope is a file or selected part of a file. CodeRuler validates selected rules
 The `settings` field sets AI options for one rule, such as its model, decision threshold, and input or output token prices.
 
 > [!TIP]
-> Browse the [`.coderuler` folder](.coderuler) for rule examples.
+> Browse the [`.coderuler.examples` folder](.coderuler.examples) for rule examples.
 
 ## Commands
 

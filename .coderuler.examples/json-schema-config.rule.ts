@@ -9,6 +9,7 @@ const validateConfig = new Ajv().compile({
 });
 
 export default class JsonSchemaConfig extends Rule {
+  enabled = false;
   files = ['config/**/*.json'];
   scope = scopes.json();
 

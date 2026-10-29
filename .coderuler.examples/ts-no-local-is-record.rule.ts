@@ -6,6 +6,7 @@ const namedIsRecord = {
 const callable = { any: [{ kind: 'arrow_function' }, { kind: 'function_expression' }] };
 
 export default class TsNoLocalIsRecord extends Rule {
+  enabled = false;
   files = ['**/*.{ts,tsx,mts,cts}'];
   exclude = ['**/*.d.{ts,mts,cts}'];
 

@@ -1,6 +1,7 @@
 import { Rule, scopes, test, violation } from '@alex-dbs/coderuler';
 
 export default class TsNoAny extends Rule {
+  enabled = false;
   files = ['**/*.{ts,tsx,mts,cts}'];
 
   scope = scopes.astGrep({
