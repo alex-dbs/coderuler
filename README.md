@@ -15,6 +15,7 @@ Install the CLI globally:
 ```sh
 npm install -g @alex-dbs/coderuler
 coderuler --help
+coderuler skill install
 ```
 
 The npm package is scoped. The command is `coderuler`. A global installation can load rules without a project-local dependency.
@@ -24,6 +25,7 @@ For a project-specific CLI version, install it locally:
 ```sh
 npm install --save-dev @alex-dbs/coderuler
 npx coderuler --help
+npx coderuler skill install
 ```
 
 The global installation is optional: with only the project-local dependency, run commands through `npx coderuler`.

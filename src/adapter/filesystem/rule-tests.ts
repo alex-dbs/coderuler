@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { lstat, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -8,7 +8,7 @@ import type { LoadedRule } from '../../app/ports.js';
 import type { RuleTestCase, RuleTestResult } from '../../app/rule-tests.js';
 import { isRecord, validateJsonValue } from '../../app/validate.js';
 import type { RuleTestWorkerMessage, RuleTestWorkerOutcome, RuleTestWorkerRequest } from './rule-test-worker.js';
-import { getRuleDependencies } from './rule-resolution.js';
+import { getRuleDependencies, registerRuleDependencies } from './rule-resolution.js';
 
 // A JavaScript entry lets inherited tsx hooks resolve the source worker's .js import.
 const WORKER_MODULE = new URL('./rule-test-worker.js', import.meta.url);
@@ -27,6 +27,50 @@ function validateCase(value: unknown, label: string): RuleTestCase {
     throw new Error(`${at}: expected must be "pass", "violation", or "skipped"`);
   }
   return value as unknown as RuleTestCase;
+}
+
+interface RuleTestModule {
+  readonly tests?: unknown;
+  readonly aiTests?: unknown;
+}
+
+async function loadExternalTests(ruleFile: string, testFile: string): Promise<RuleTestModule | undefined> {
+  try {
+    await lstat(testFile);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+
+  try {
+    const dependencies = getRuleDependencies(ruleFile);
+    if (dependencies !== undefined) registerRuleDependencies(testFile, dependencies);
+    // The companion path comes from the selected rule filename.
+    return await import(pathToFileURL(testFile).href) as RuleTestModule;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Rule test module ${testFile} failed to import: ${detail}`, { cause: error });
+  }
+}
+
+interface RuleTestGroup {
+  readonly values: readonly unknown[];
+  readonly label: string;
+  readonly ai: boolean;
+}
+
+function addTestGroup(
+  groups: RuleTestGroup[],
+  values: unknown,
+  sourceLabel: string,
+  exportName: 'tests' | 'aiTests',
+  ai: boolean,
+): void {
+  if (values === undefined) return;
+  if (!Array.isArray(values)) {
+    throw new Error(`${sourceLabel} ${exportName}: expected an array of test cases`);
+  }
+  groups.push({ values, label: `${sourceLabel} ${exportName}`, ai });
 }
 
 type TestActual = RuleTestResult['actual'];
@@ -222,22 +266,24 @@ export async function runRuleTests(
       if (failureObserved) throw failure;
       if (!includeDisabled && !rule.rule.enabled) continue;
       // Discovery selects the rule module path at runtime.
-      const { tests, aiTests } = await import(pathToFileURL(rule.ruleFile).href) as {
-        readonly tests?: unknown;
-        readonly aiTests?: unknown;
-      };
+      const ruleModule = await import(pathToFileURL(rule.ruleFile).href) as RuleTestModule;
+      const testFile = rule.ruleFile.replace(/\.rule\.(ts|mts|js|mjs)$/, '.test.$1');
+      const externalModule = await loadExternalTests(rule.ruleFile, testFile);
+      const { tests, aiTests } = ruleModule;
       if (failureObserved) throw failure;
-      if (!includeAI && aiTests !== undefined) hasExcludedAITests = true;
-      const selectedAI = includeAI ? aiTests : undefined;
+      if (!includeAI && (aiTests !== undefined || externalModule?.aiTests !== undefined)) {
+        hasExcludedAITests = true;
+      }
       const label = `Rule "${rule.name}"`;
-      if (tests !== undefined && !Array.isArray(tests)) {
-        throw new Error(`${label} tests: expected an array of test cases`);
+      const externalLabel = `${label} test module ${testFile}`;
+      const groups: RuleTestGroup[] = [];
+      addTestGroup(groups, tests, label, 'tests', false);
+      addTestGroup(groups, externalModule?.tests, externalLabel, 'tests', false);
+      if (includeAI) {
+        addTestGroup(groups, aiTests, label, 'aiTests', true);
+        addTestGroup(groups, externalModule?.aiTests, externalLabel, 'aiTests', true);
       }
-      if (selectedAI !== undefined && !Array.isArray(selectedAI)) {
-        throw new Error(`${label} aiTests: expected an array of test cases`);
-      }
-      const regularCount = tests?.length ?? 0;
-      const count = regularCount + (selectedAI?.length ?? 0);
+      const count = groups.reduce((total, group) => total + group.values.length, 0);
       const completed = new Array<RuleTestResult | undefined>(count);
       let nextIndex = 0;
       let nextResult = 0;
@@ -246,11 +292,15 @@ export async function runRuleTests(
           const index = nextIndex++;
           if (index >= count) return;
           try {
-            const ai = index >= regularCount;
-            const caseIndex = ai ? index - regularCount : index;
-            const value = ai ? selectedAI![caseIndex] : tests![caseIndex];
-            const example = validateCase(value, `${label} ${ai ? 'aiTests' : 'tests'}[${caseIndex}]`);
-            completed[index] = await runCase(rule, example, ai, timeoutMs, session, fail, includeDisabled);
+            let groupIndex = 0;
+            let caseIndex = index;
+            while (caseIndex >= groups[groupIndex]!.values.length) {
+              caseIndex -= groups[groupIndex]!.values.length;
+              groupIndex += 1;
+            }
+            const group = groups[groupIndex]!;
+            const example = validateCase(group.values[caseIndex], `${group.label}[${caseIndex}]`);
+            completed[index] = await runCase(rule, example, group.ai, timeoutMs, session, fail, includeDisabled);
             if (failureObserved) return;
             while (completed[nextResult] !== undefined) {
               const result = completed[nextResult]!;

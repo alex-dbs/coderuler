@@ -201,6 +201,24 @@ for (const [locked, commonjs] of [[false, false], [false, true], [true, false], 
   });
 }
 
+test('a rule-test companion cannot borrow an undeclared application package', async () => {
+  const directory = await project('ambient-test-companion');
+  await put(join(directory, 'node_modules', 'ambient-only', 'package.json'), JSON.stringify({
+    name: 'ambient-only', type: 'module', exports: './index.js',
+  }));
+  const marker = join(directory, 'ambient-test-executed');
+  await put(join(directory, 'node_modules', 'ambient-only', 'index.js'), `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'executed'); export const value = true;\n`);
+  await put(join(directory, '.coderuler', 'ambient.rule.mjs'), rule('', 'null'));
+  await put(join(directory, '.coderuler', 'ambient.test.mjs'), `import { test } from '@alex-dbs/coderuler';
+import { value } from 'ambient-only';
+export const tests = [test('ambient package').withFiles({ 'input.txt': String(value) }).passes()];
+`);
+  const dependencies = await installedDependencies(directory);
+  const loaded = await loadPrepared(directory, dependencies);
+  await rejects(() => runRuleTests(loaded, undefined, 10_000, 1), /ambient-only/, /undeclared|declar|dependency/i);
+  assert.equal(existsSync(marker), false, 'undeclared application package code must not execute');
+});
+
 test('a transitive dependency is not a direct rule import even when hoisted in local node_modules', async () => {
   const directory = await project('transitive-boundary', 1);
   await put(join(directory, '.coderuler', 'transitive.rule.mjs'), rule("import { message } from 'fixture-shared';", 'message'));
@@ -536,7 +554,12 @@ export default class Versioned extends Rule {
 }
 export const tests = [
   test('${name} first').withFiles({ 'inputs/a.txt': ${JSON.stringify(message)} }).passes(),
-  test('${name} second').withFiles({ 'inputs/a.txt': ${JSON.stringify(message)} }).passes(),
+];
+`);
+    await put(join(owner, '.coderuler', `${name}.test.mjs`), `import { test } from '@alex-dbs/coderuler';
+import { message } from 'fixture-policy';
+export const tests = [
+  test('${name} second').withFiles({ 'inputs/a.txt': message }).passes(),
 ];
 `);
   }

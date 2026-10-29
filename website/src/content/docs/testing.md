@@ -26,6 +26,8 @@ export const tests = [
 ];
 ```
 
+You can put these exports in `.coderuler/internal-url.test.ts`, beside `.coderuler/internal-url.rule.ts`. Keep the same extension for each pair, such as `.rule.mts` and `.test.mts`. Inline and companion cases run together. `coderuler test` selects rules, not test files. `check` and `validate` do not load companions.
+
 Use this export in the [quickstart rule](/docs/quickstart/). `test(name).withFiles(files)` accepts a nonblank name and a map of root-relative fixture paths to JSON-compatible values.
 
 Strings become literal file content. Objects, arrays, numbers, booleans, and `null` become pretty-printed JSON. For YAML-specific syntax or several YAML documents, supply a string rather than an object.
@@ -75,11 +77,11 @@ export TYPESAFE_API_KEY='your-api-key'
 coderuler test .coderuler/actionable-instructions.rule.ts --ai --ai-scores --timeout 45s
 ```
 
-`--ai` adds `aiTests` to the test cases and authorizes live provider calls. The requests send selected fixture content to the configured service and can incur charges. Results can vary. Provider errors are errors, not passes. `--ai-scores` displays each Jev probability; it does not authorize calls without `--ai`.
+`--ai` adds inline and companion `aiTests` to the run and authorizes live provider calls. The requests send selected fixture content to the configured service and can incur charges. Results can vary. Provider errors are errors, not passes. `--ai-scores` displays each Jev probability; it does not authorize calls without `--ai`.
 
 ## What validation does not test
 
-`validate` checks rule structure, not TypeScript semantics or policy behavior. Neither `validate` nor `check` executes inline tests.
+`validate` checks rule structure, not TypeScript semantics or policy behavior. Neither `validate` nor `check` runs test cases or loads companion files.
 
 A selected rule set with no test cases from enabled rules is an error. If only `aiTests` exist, an ordinary `test` run tells you to include them with `--ai`. Do not use an empty dataset as a successful test run.
 
