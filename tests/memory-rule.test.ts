@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import MemoryRatio from '../.coderuler/memory.rule.ts';
+import MemoryRatio from '../.coderuler.examples/memory.rule.ts';
 import type { LoadedRule, Rule } from '../dist/index.js';
 import { createProject } from '../dist/adapter/filesystem/project.js';
 import { executeRules } from '../dist/app/execute.js';
@@ -16,7 +16,7 @@ async function runMemoryRule(file: string) {
   rule.enabled = true;
   const loaded: LoadedRule = {
     name: 'memory',
-    ruleFile: fileURLToPath(new URL('../.coderuler/memory.rule.ts', import.meta.url)),
+    ruleFile: fileURLToPath(new URL('../.coderuler.examples/memory.rule.ts', import.meta.url)),
     rule: rule as unknown as Rule<unknown>,
   };
   return executeRules([loaded], {

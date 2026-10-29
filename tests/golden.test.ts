@@ -776,7 +776,7 @@ test('fixture: the approved ai example is skipped when its directory gate fails'
   ]);
 });
 
-const DUPLICATED_ENV_RULE = fileURLToPath(new URL('../.coderuler/duplicated-env.rule.ts', import.meta.url));
+const DUPLICATED_ENV_RULE = fileURLToPath(new URL('../.coderuler.examples/duplicated-env.rule.ts', import.meta.url));
 const tempRoots: string[] = [];
 
 after(async () => {
