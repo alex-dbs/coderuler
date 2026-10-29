@@ -1,8 +1,8 @@
 import { Rule, ai, scopes, test, type ScopeSubject } from '@alex-dbs/coderuler';
 
 export default class GoAppNoInfrastructure extends Rule {
+  enabled = false;
   files = ['internal/app/**/*.go'];
-
   scope = scopes.astGrep({
     language: 'go',
     rule: { any: [{ kind: 'function_declaration' }, { kind: 'method_declaration' }] },

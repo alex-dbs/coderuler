@@ -115,7 +115,7 @@ export default class ActionableInstructions extends Rule {
 }
 ```
 
-The [Go dereference guard](https://github.com/alex-dbs/coderuler/blob/main/.coderuler/go-dereference-guard.rule.ts) selects functions and methods with an explicit Go `*` operation. It sends the selected function and its Go file to the AI, so the AI can see pointer types in that file. A Go pointer dereference must be preceded by a nil check for that pointer on every path. Each nested pointer in the field path must have its own nil check. The rule does not send other files or check field access without an explicit `*`.
+The [Go dereference guard](https://github.com/alex-dbs/coderuler/blob/main/.coderuler.examples/go-dereference-guard.rule.ts) selects functions and methods with an explicit Go `*` operation. It sends the selected function and its Go file to the AI, so the AI can see pointer types in that file. A Go pointer dereference must be preceded by a nil check for that pointer on every path. Each nested pointer in the field path must have its own nil check. The rule does not send other files or check field access without an explicit `*`.
 
 ## Understand decisions and precedence
 

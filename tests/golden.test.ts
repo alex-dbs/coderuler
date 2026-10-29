@@ -776,7 +776,7 @@ test('fixture: the approved ai example is skipped when its directory gate fails'
   ]);
 });
 
-const DUPLICATED_ENV_RULE = fileURLToPath(new URL('../.coderuler/duplicated-env.rule.ts', import.meta.url));
+const DUPLICATED_ENV_RULE = fileURLToPath(new URL('../.coderuler.examples/duplicated-env.rule.ts', import.meta.url));
 const tempRoots: string[] = [];
 
 after(async () => {
@@ -795,11 +795,13 @@ async function makeManualRoot(label: string, files: Readonly<Record<string, stri
 }
 
 async function loadDuplicatedEnv(root: string): Promise<readonly LoadedRule[]> {
-  return createRuleLoader({ home: ABSENT_HOME }).load({
+  const rules = await createRuleLoader({ home: ABSENT_HOME }).load({
     root,
     explicit: DUPLICATED_ENV_RULE,
     invocationCwd: root,
   });
+  for (const { rule } of rules) rule.enabled = true;
+  return rules;
 }
 
 function subjectShape(subject: Subject<JsonValue>) {

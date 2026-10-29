@@ -1,6 +1,7 @@
 import { Rule, ai, scopes, test, type ScopeSubject } from '@alex-dbs/coderuler';
 
 export default class GoDereferenceGuard extends Rule {
+  enabled = false;
   files = ['**/*.go'];
 
   scope = scopes.astGrep({

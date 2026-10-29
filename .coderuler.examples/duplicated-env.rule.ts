@@ -7,8 +7,8 @@ import type { CheckResult, GroupSubject, JsonValue, ScopeSubject, Subject } from
 import { isPresent } from './presence.ts';
 
 export default class DuplicatedEnv extends Rule<Record<string, JsonValue>> {
+  enabled = false;
   files = ['tests/manual/*.yml'];
-
   scope = scopes.yaml<Record<string, JsonValue>>({ path: '$.*.env.text' });
 
   group = 'folder' as const;

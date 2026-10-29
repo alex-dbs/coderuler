@@ -1,15 +1,15 @@
 ---
 import RuleCode from './RuleCode.astro';
-import goRuleSource from '../../../.coderuler/go-dereference-guard.rule.ts?raw';
-import goAppRuleSource from '../../../.coderuler/go-app-no-infrastructure.rule.ts?raw';
-import serviceRuleSource from '../../../.coderuler/service-proto.rule.ts?raw';
-import jsonSchemaRuleSource from '../../../.coderuler/json-schema-config.rule.ts?raw';
+import goRuleSource from '../../../.coderuler.examples/go-dereference-guard.rule.ts?raw';
+import goAppRuleSource from '../../../.coderuler.examples/go-app-no-infrastructure.rule.ts?raw';
+import serviceRuleSource from '../../../.coderuler.examples/service-proto.rule.ts?raw';
+import jsonSchemaRuleSource from '../../../.coderuler.examples/json-schema-config.rule.ts?raw';
 import Violation from './Violation.astro';
 import { sitePath } from '../lib/paths';
 import '../styles/rule-examples.css';
 
-const source = 'https://github.com/alex-dbs/coderuler/blob/main/.coderuler/';
-const sourceDirectory = 'https://github.com/alex-dbs/coderuler/tree/main/.coderuler/';
+const source = 'https://github.com/alex-dbs/coderuler/blob/main/.coderuler.examples/';
+const sourceDirectory = 'https://github.com/alex-dbs/coderuler/tree/main/.coderuler.examples/';
 const httpRule = `import { Rule, ai, scopes } from '@alex-dbs/coderuler';
 
 export default class HttpResponseSplitting extends Rule {

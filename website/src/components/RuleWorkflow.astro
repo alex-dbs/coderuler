@@ -126,7 +126,7 @@ const stages = ['Choose files', 'Select portions', 'Filter matches', 'Run the ch
             if (stage !== undefined) node.properties['data-flow-code-stage'] = String(stage);
           },
         }]}>
-          <a slot="footer" class="rule-source-link" href={check.mode === 'code' ? 'https://github.com/alex-dbs/coderuler/blob/main/website/src/content/docs/writing-rules.md#write-a-custom-function' : `https://github.com/alex-dbs/coderuler/blob/main/.coderuler/${check.filename}`}>{check.mode === 'code' ? 'Open the custom-function docs' : 'Read the full source policy'} <span aria-hidden="true">↗</span></a>
+          <a slot="footer" class="rule-source-link" href={check.mode === 'code' ? 'https://github.com/alex-dbs/coderuler/blob/main/website/src/content/docs/writing-rules.md#write-a-custom-function' : `https://github.com/alex-dbs/coderuler/blob/main/.coderuler.examples/${check.filename}`}>{check.mode === 'code' ? 'Open the custom-function docs' : 'Read the full source policy'} <span aria-hidden="true">↗</span></a>
         </RuleCode>
         <p class="workflow-underhood">{check.description}</p>
       </div>)}

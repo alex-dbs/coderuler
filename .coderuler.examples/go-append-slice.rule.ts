@@ -1,8 +1,8 @@
 import { Rule, ai, scopes, test } from '@alex-dbs/coderuler';
 
 export default class GoAppendSlice extends Rule {
+  enabled = false;
   files = ['**/*.go'];
-
   scope = scopes.astGrep({
     language: 'go',
     rule: {

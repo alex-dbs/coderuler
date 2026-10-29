@@ -19,6 +19,7 @@ function parseMemoryBytes(value: string): BigNumber {
 }
 
 export default class MemoryRatio extends Rule<MemoryResources> {
+  enabled = false;
   files = ['tests/manual/*.yml'];
 
   scope = scopes.yaml<MemoryResources>({ path: '$.*.container.resources' });

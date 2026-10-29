@@ -15,6 +15,7 @@ const immediateAccess = {
 };
 
 export default class TsNoInlineCastAccess extends Rule {
+  enabled = false;
   files = ['**/*.{ts,tsx,mts,cts}'];
 
   scope = scopes.astGrep({

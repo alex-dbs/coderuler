@@ -131,6 +131,7 @@ async function runCase(
   timeoutMs: number,
   session: RuleTestSession,
   onFailure: (error: unknown) => void,
+  includeDisabled: boolean,
 ): Promise<RuleTestResult> {
   const started = performance.now();
   const deadline = started + timeoutMs;
@@ -155,6 +156,7 @@ async function runCase(
         const dependencies = getRuleDependencies(entry.ruleFile);
         const outcome = await active.run({
           root, ruleFile: entry.ruleFile, files: example.files, ai,
+          ...(includeDisabled ? { includeDisabled: true } : {}),
           ...(dependencies === undefined ? {} : { dependencies }),
         }, deadline, failCase);
         if (typeof outcome === 'string') actual = outcome;
@@ -194,6 +196,7 @@ export async function runRuleTests(
   timeoutMs = 10_000,
   concurrency = 1,
   includeAI = false,
+  includeDisabled = false,
 ): Promise<readonly RuleTestResult[]> {
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) {
     throw new RangeError(`--concurrency must be a positive safe integer, received ${String(concurrency)}`);
@@ -217,7 +220,7 @@ export async function runRuleTests(
   try {
     for (const rule of rules) {
       if (failureObserved) throw failure;
-      if (!rule.rule.enabled) continue;
+      if (!includeDisabled && !rule.rule.enabled) continue;
       // Discovery selects the rule module path at runtime.
       const { tests, aiTests } = await import(pathToFileURL(rule.ruleFile).href) as {
         readonly tests?: unknown;
@@ -247,7 +250,7 @@ export async function runRuleTests(
             const caseIndex = ai ? index - regularCount : index;
             const value = ai ? selectedAI![caseIndex] : tests![caseIndex];
             const example = validateCase(value, `${label} ${ai ? 'aiTests' : 'tests'}[${caseIndex}]`);
-            completed[index] = await runCase(rule, example, ai, timeoutMs, session, fail);
+            completed[index] = await runCase(rule, example, ai, timeoutMs, session, fail, includeDisabled);
             if (failureObserved) return;
             while (completed[nextResult] !== undefined) {
               const result = completed[nextResult]!;

@@ -374,7 +374,7 @@ test('reports each request when the connection fails', { timeout: 5_000 }, async
   context.mock.timers.enable({ apis: ['setTimeout'] });
   try {
     const pending = adapterFor(origin).decide(REQUEST, observer);
-    void pending.catch(() => {});
+    const failure = failed(() => pending);
     await requests[0]!.promise;
 
     for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt += 1) {
@@ -386,7 +386,7 @@ test('reports each request when the connection fails', { timeout: 5_000 }, async
       assert.equal(requestCount, attempt + 2, `connection failure retry ${attempt + 1} must be reported`);
       await requests[attempt + 1]!.promise;
     }
-    const error = await failed(() => pending);
+    const error = await failure;
 
     assert.match(error.message, /ECONNREFUSED/);
     assert.ok(!error.message.includes(API_KEY), 'the diagnostic must not leak the credential');

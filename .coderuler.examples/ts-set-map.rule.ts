@@ -1,6 +1,7 @@
 import { Rule, ai, scopes, test } from '@alex-dbs/coderuler';
 
 export default class TsSetMap extends Rule {
+  enabled = false;
   files = ['**/*.{ts,tsx,mts,cts}'];
   exclude = ['**/*.d.{ts,mts,cts}'];
 

@@ -1,6 +1,7 @@
 import { Rule, regex, scopes, test } from '@alex-dbs/coderuler';
 
 export default class PublicProto extends Rule {
+  enabled = false;
   files = ['tests/manual/proto/public/*.proto'];
 
   scope = scopes.protobuf({ path: "$.rpcs[*].options['google.api.http']..['get','put','post','delete','patch','path']" });

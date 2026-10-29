@@ -2,6 +2,7 @@ import { Rule, scopes, test, violation, type ProjectContext, type ScopeSubject }
 import { goVersionAtLeast } from './go-version.ts';
 
 export default class GoRandV2 extends Rule {
+  enabled = false;
   files = ['**/*.go'];
 
   scope = scopes.astGrep({

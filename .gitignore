@@ -12,5 +12,5 @@ report.[0-9]*.[0-9]*.[0-9]*.json
 
 .env
 .env.*
-.coderuler/.gitignore
+.coderuler.examples/.gitignore
 !.env.example
