@@ -2,6 +2,7 @@ import { relative, resolve, sep } from 'node:path';
 
 import type { DiffChanges, LoadedRule, RuleReport, RunContext } from '../../../app/ports.js';
 import type { PullRequestCheckout } from '../../github/pull-request.js';
+import type { RuleRepositoryCheckout } from '../../git/rules.js';
 import { CliExit, EXIT_VIOLATION } from '../exit.js';
 import { createProgress } from '../progress.js';
 import {
@@ -15,7 +16,7 @@ import {
   renderViolationComments,
   type WalkthroughRenderer,
 } from '../reports.js';
-import type { CheckOptions, CheckServices, CliContext } from '../services.js';
+import type { CheckOptions, CheckServices, CliContext, RuleSelectorResolution } from '../services.js';
 import { planWalk } from './rules.js';
 
 async function runCheck(
@@ -32,6 +33,7 @@ async function runCheck(
     ? createProgress(context.writeError, () => context.terminal?.columns ?? 80)
     : undefined;
   let checkout: PullRequestCheckout | undefined;
+  let rulesCheckout: RuleRepositoryCheckout | undefined;
   try {
     let reports: readonly RuleReport[];
     let durationMs: number;
@@ -47,9 +49,13 @@ async function runCheck(
       let changes: DiffChanges | undefined = checkout === undefined
         ? (diffOnly ? await services.collectChanges(area.root, options.base ?? 'HEAD') : undefined)
         : { changedFiles: checkout.changedFiles, changedLines: checkout.changedLines };
-      const choice = options.rules === undefined
-        ? {}
-        : await services.resolveRuleSelector(options.rules, context.cwd, true);
+      let choice: RuleSelectorResolution = {};
+      if (options.rules !== undefined) {
+        rulesCheckout = await services.checkoutRuleRepository(options.rules);
+        choice = rulesCheckout === undefined
+          ? await services.resolveRuleSelector(options.rules, context.cwd, true)
+          : { explicit: rulesCheckout.root };
+      }
       const prepared = await planWalk(
         context.cwd,
         services,
@@ -126,7 +132,7 @@ async function runCheck(
       throw new CliExit(EXIT_VIOLATION);
     }
   } finally {
-    await checkout?.cleanup();
+    await Promise.all([checkout?.cleanup(), rulesCheckout?.cleanup()]);
   }
 }
 

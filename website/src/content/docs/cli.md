@@ -71,7 +71,7 @@ The default target is `.`. A file or folder target narrows selection inside the 
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--rules <rule>` | Discovery | Rule name, module path, or directory |
+| `--rules <rule>` | Discovery | Rule name, module path, directory, or Git repository URL[#revision] |
 | `--tags <tags...>` | `[]` | Run rules that match any listed tag |
 | `--exclude-tags <tags...>` | `[]` | Exclude rules that match any listed tag |
 | `--json` | Off | Print one JSON document |
@@ -85,6 +85,12 @@ The default target is `.`. A file or folder target narrows selection inside the 
 | `--base <ref>` | `HEAD` for diff | Set the diff base, or the base branch for a PR |
 | `--concurrency <number>` | `8` | Maximum in-flight selection and evaluation tasks |
 | `--threshold <number>` | Rule/environment | Override the AI decision threshold |
+
+An HTTPS or SSH Git URL loads every rule module from the repository's default branch. Add `#revision` to select a branch, tag, or full commit ID. An explicit source replaces project and home discovery, but target paths still refer to the current project.
+
+```sh
+coderuler check . --rules 'https://github.com/acme/company-rules.git#main'
+```
 
 For rule-name and discovery behavior, see the description under [Validate](#validate).
 Tags are space-separated, exact, and case-sensitive. Exclusion takes precedence over inclusion. With no tag flags, `check` uses every rule. If the filters match no rules, `check` succeeds with zero rules.

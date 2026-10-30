@@ -172,7 +172,7 @@ export function createProgram(services: CliServices): Command {
     .command('check')
     .description('Evaluate every selected rule against the working tree')
     .argument('[path]', 'target file or folder that narrows selection', '.')
-    .option('--rules <rule>', 'rule name, module path, or directory')
+    .option('--rules <rule>', 'rule name, module path, directory, or Git repository URL[#revision]')
     .option('--tags <tags...>', 'run rules matching any listed tag', [])
     .option('--exclude-tags <tags...>', 'exclude rules matching any listed tag', [])
     .option('--json', 'print violations as {durationMs, reports} JSON on stdout')

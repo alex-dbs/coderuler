@@ -10,6 +10,7 @@ import type { RuleTestResult } from '../../app/rule-tests.js';
 import type { TokenPricing } from '../../app/rule.js';
 import type { ViolationComment } from '../../app/violation-comments.js';
 import type { PullRequest, PullRequestCheckout } from '../github/pull-request.js';
+import type { RuleRepositoryCheckout } from '../git/rules.js';
 import type { SkillOptions } from '../skills/cli.js';
 import type { TerminalCapabilities } from './progress.js';
 import type { TextRedactor, TextWriter } from './text.js';
@@ -101,6 +102,9 @@ export interface ExecutionServices extends RuleServices {
 export interface CheckServices extends ExecutionServices {
   readonly collectChanges: (root: string, base: string) => Promise<DiffChanges>;
   readonly checkoutPullRequest: (selector: string, baseBranch?: string) => Promise<PullRequestCheckout>;
+  readonly checkoutRuleRepository: (
+    selector: string,
+  ) => Promise<RuleRepositoryCheckout | undefined>;
   readonly commentOnPullRequest: (
     root: string,
     comments: readonly ViolationComment[],

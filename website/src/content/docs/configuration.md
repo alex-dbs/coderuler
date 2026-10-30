@@ -17,7 +17,9 @@ The filename without its rule suffix is the exact rule name. For example, `polic
 
 Discovery does not follow symlinks. It skips `old`, `node_modules`, and CodeRuler's temporary installation directories. Ordinary hidden rule folders are not excluded merely because their names start with a dot.
 
-Use `validate [rule]`, `test [rule]`, or `check --rules <rule>` to select a rule name, module path, or directory. A name filters discovered rules; an explicit path or directory replaces discovery. `inspect` takes one module path or exact discovered name, not a rule directory.
+Use `validate [rule]`, `test [rule]`, or `check --rules <rule>` to select a rule name, module path, or directory. A name filters discovered rules; an explicit path or directory replaces discovery. `check --rules` also accepts an HTTPS or SSH Git URL with optional `#revision`; this loads the whole repository like a directory. The check target stays in the current project. `inspect` takes one module path or exact discovered name, not a rule directory.
+
+A shared Git repository is a good way to distribute company-wide rules across projects and maintain them in one place.
 
 ## Rule members
 
