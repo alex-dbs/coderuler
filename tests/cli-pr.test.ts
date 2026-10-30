@@ -287,6 +287,58 @@ test('caller-relative --rules intentionally overrides discovery but still requir
   assert.deepEqual(posts(requests), []);
 });
 
+test('check --pr uses remote rules for PR-head changes and removes both checkouts', async context => {
+  const target = fixture(context, 'remote-rules');
+  const requests = await interceptGithub(context, target);
+
+  const ruleRemote = join(target.root, 'rule-remote.git');
+  const ruleSource = join(target.root, 'rule-source');
+  const ruleTransport = 'https://rules.example.invalid/team/policies.git';
+  git(target, 'init', '--bare', ruleRemote);
+  git(target, 'init', ruleSource);
+  git(target, '-C', ruleSource, 'config', 'user.name', 'CodeRuler tests');
+  git(target, '-C', ruleSource, 'config', 'user.email', 'tests@example.invalid');
+  writeFile(join(ruleSource, 'remote.rule.ts'), policy(
+    `subject => subject.source.includes('BAD') ? violation('Remote policy rejects BAD') : pass()`,
+  ));
+  git(target, '-C', ruleSource, 'add', '--all');
+  git(target, '-C', ruleSource, 'commit', '-m', 'remote PR policy');
+  git(target, '-C', ruleSource, 'push', ruleRemote, 'HEAD:refs/heads/main');
+  git(target, '-C', ruleRemote, 'symbolic-ref', 'HEAD', 'refs/heads/main');
+
+  const globalConfig = join(target.home, '.gitconfig');
+  const transportConfig = join(target.home, 'temporary-checkout.gitconfig');
+  writeFile(globalConfig, [
+    `[includeIf "gitdir:**/coderuler-pr-*/head/.git"]`,
+    `\tpath = ${JSON.stringify(transportConfig)}`,
+    `[includeIf "gitdir:**/coderuler-rules-*/repository/.git"]`,
+    `\tpath = ${JSON.stringify(transportConfig)}`,
+    '',
+  ].join('\n'));
+  writeFile(transportConfig, [
+    `[url ${JSON.stringify(target.remote)}]`,
+    `\tinsteadOf = https://github.com/${PR_REPOSITORY}.git`,
+    `\tinsteadOf = git@github.com:${PR_REPOSITORY}.git`,
+    `[url ${JSON.stringify(ruleRemote)}]`,
+    `\tinsteadOf = ${ruleTransport}`,
+    '',
+  ].join('\n'));
+
+  const result = await check(target, ['--pr', '42', '--rules', ruleTransport]);
+  assert.equal(result.status, 1, result.stderr);
+  const reports = parseCheckOutput(result, 'remote PR policy');
+  assert.deepEqual(evaluations(reports), [
+    { rule: 'remote', filepath: 'src/changed.txt', status: 'violation', message: 'Remote policy rejects BAD' },
+  ]);
+  assert.match(reports[0]!.ruleFile, /[/\\]coderuler-rules-[^/\\]+[/\\]repository[/\\]remote\.rule\.ts$/);
+  assert.deepEqual(posts(requests), []);
+  assert.deepEqual(
+    readdirSync(target.temporary).filter(name => name.startsWith('coderuler-pr-') || name.startsWith('coderuler-rules-')),
+    [],
+    'both PR and remote-rule workspaces must be removed',
+  );
+});
+
 test('positional targets resolve in PR head and preserve missing, boundary, and symlink errors with cleanup', async context => {
   let target = fixture(context, 'targets');
   const outside = writeFile(join(target.root, 'outside.txt'), 'BAD outside\n');

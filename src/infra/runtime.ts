@@ -93,6 +93,10 @@ export function createServices(
             const { createPullRequestCheckout } = await import('../adapter/github/pull-request.js');
             return createPullRequestCheckout(cwd, env)(selector, baseBranch);
           },
+          async checkoutRuleRepository(selector: string) {
+            const { createRuleRepositoryCheckout } = await import('../adapter/git/rules.js');
+            return createRuleRepositoryCheckout(env)(selector);
+          },
           async commentOnPullRequest(root, comments, pullRequest) {
             const { createGithubCommenter } = await import('../adapter/github/comments.js');
             return createGithubCommenter(env)(root, comments, pullRequest);
