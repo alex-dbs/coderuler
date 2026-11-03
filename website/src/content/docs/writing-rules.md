@@ -133,17 +133,35 @@ context.changedFiles // ReadonlySet<string> of changed project-relative paths
 context.changedLines // ReadonlyMap<string, readonly { start: number; end: number }[]>
 ```
 
-Both values are `undefined` when no diff was collected. In diff mode, empty collections mean no changes. Ranges are 1-based, inclusive added or replaced lines in the current file. A known changed path can have `[]` when it has no added lines. If a path is missing from `changedLines`, its line information is unavailable, for example for binary or conversion-attributed files; it is not unchanged.
+Both values are `undefined` when no diff was collected. `isDiffMode(context)` returns `true` when either value is available. In diff mode, empty collections mean no changes. `changedLines` contains 1-based, inclusive ranges for added or replaced lines in the current file. A known changed path can have `[]` when it has no added lines. If a path is missing from `changedLines`, its line information is unavailable, for example for binary or conversion-attributed files.
 
-For example, select only scopes whose line spans overlap a changed range:
+Use `isInDiff` in `filter` to keep only scopes that overlap a changed range. It returns `false` when diff ranges or scope line data are unavailable.
 
 ```ts
-const ranges = context.changedLines?.get(filepath);
-const overlaps = scope.lines !== undefined && ranges?.some(range =>
-  range.start <= scope.lines.end && scope.lines.start <= range.end) === true;
+import { Rule, isInDiff } from '@alex-dbs/coderuler';
+
+class Local extends Rule {
+  filter = isInDiff;
+}
 ```
 
-When diff data is absent, a selector can keep its full-scan behavior. In diff mode, use `changedFiles` to distinguish changed paths from unchanged paths and map presence to distinguish unavailable line information from an empty range list.
+Use `isDiffMode` to preserve full scans when no diff was collected:
+
+```ts
+import {
+  Rule,
+  isDiffMode,
+  isInDiff,
+  type ProjectContext,
+  type ScopeSubject,
+} from '@alex-dbs/coderuler';
+
+class Local extends Rule {
+  filter = (subject: ScopeSubject, context: ProjectContext) =>
+    !isDiffMode(context) || isInDiff(subject, context);
+}
+```
+
 
 | Project reader | Result |
 | --- | --- |

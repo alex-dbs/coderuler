@@ -493,6 +493,64 @@ test('nested project cwd uses project-relative paths rather than repository-rela
   ]);
 });
 
+test('diff filters queried scopes with isInDiff and keeps full scans explicit', async () => {
+  const target = repository('diff-filter');
+  writeFile(join(target.cwd, '.coderuler/local.rule.ts'), `import { Rule, isInDiff, scopes, violation } from '@alex-dbs/coderuler';
+export default class Local extends Rule {
+  files = ['src/*.ts'];
+  scope = scopes.astGrep({ language: 'typescript', rule: { kind: 'function_declaration' } });
+  filter(subject, context) {
+    return context.changedLines === undefined || isInDiff(subject, context);
+  }
+  check = () => violation('Review function');
+}
+`);
+  files(target, {
+    'src/a.ts': 'function unchanged() {\n  return 1;\n}\n\nfunction changed() {\n  return 1;\n}\n',
+  });
+  const base = commit(target);
+  files(target, {
+    'src/a.ts': 'function unchanged() {\n  return 1;\n}\n\nfunction changed() {\n  return 2;\n}\n',
+  });
+
+  const projectEvaluations = (report: CheckReportShape) => report.evaluations.map(({ subject, result }) => {
+    assert.equal(subject.kind, 'scope');
+    if (subject.kind !== 'scope') throw new Error('Expected a scope');
+    return {
+      filepath: subject.filepath,
+      source: subject.source,
+      lines: subject.lines,
+      result: { status: result.status, message: result.message },
+    };
+  });
+
+  const diff = await runCli(['check', '.', '--diff-only', '--base', base, '--json', '--output-all'], target);
+  assert.equal(diff.status, 1, diff.stderr);
+  assert.deepEqual(projectEvaluations(parseCheckOutput(diff, 'diff filter')[0]!), [{
+    filepath: 'src/a.ts',
+    source: 'function changed() {\n  return 2;\n}',
+    lines: { start: 5, end: 7 },
+    result: { status: 'violation', message: 'Review function' },
+  }]);
+
+  const full = await runCli(['check', '.', '--json', '--output-all'], target);
+  assert.equal(full.status, 1, full.stderr);
+  assert.deepEqual(projectEvaluations(parseCheckOutput(full, 'full scan')[0]!), [
+    {
+      filepath: 'src/a.ts',
+      source: 'function unchanged() {\n  return 1;\n}',
+      lines: { start: 1, end: 3 },
+      result: { status: 'violation', message: 'Review function' },
+    },
+    {
+      filepath: 'src/a.ts',
+      source: 'function changed() {\n  return 2;\n}',
+      lines: { start: 5, end: 7 },
+      result: { status: 'violation', message: 'Review function' },
+    },
+  ]);
+});
+
 test('custom selectors cannot evaluate unchanged subjects during diff checks', async () => {
   const target = repository('custom-select');
   rule(target, 'custom', `async select(context) {

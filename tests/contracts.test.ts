@@ -5,6 +5,8 @@ import { test } from 'node:test';
 import {
   Rule,
   ai,
+  isDiffMode,
+  isInDiff,
   pass,
   regex,
   violation,
@@ -227,6 +229,96 @@ function expectThrows(label: string, run: () => unknown): void {
   }
   assert.ok(threw, `expected a thrown error for ${label}`);
 }
+
+test('isDiffMode detects available diff data', () => {
+  const cases: readonly (readonly [string, ProjectContext, boolean])[] = [
+    ['no diff data', { project: new MemoryProject(), trace: () => {} }, false],
+    ['changedFiles is present', {
+      project: new MemoryProject(),
+      changedFiles: new Set<string>(),
+      trace: () => {},
+    }, true],
+    ['changedLines is present', {
+      project: new MemoryProject(),
+      changedLines: new Map(),
+      trace: () => {},
+    }, true],
+  ];
+
+  for (const [label, context, expected] of cases) {
+    assert.equal(isDiffMode(context), expected, label);
+  }
+});
+
+test('isInDiff matches inclusive changed-line ranges', () => {
+  const subject = scopeSubject({
+    filepath: 'src/a.ts',
+    id: 'function',
+    source: 'function',
+    lines: { start: 5, end: 7 },
+  });
+  const cases: readonly (readonly [string, readonly { start: number; end: number }[], boolean])[] = [
+    ['touching the scope start', [{ start: 4, end: 5 }], true],
+    ['touching the scope end', [{ start: 7, end: 8 }], true],
+    ['inside the scope', [{ start: 6, end: 6 }], true],
+    ['containing the scope', [{ start: 1, end: 10 }], true],
+    ['before the scope', [{ start: 1, end: 4 }], false],
+    ['after the scope', [{ start: 8, end: 10 }], false],
+    ['scope in a gap', [{ start: 1, end: 3 }, { start: 9, end: 10 }], false],
+    ['overlap in a later range', [{ start: 1, end: 2 }, { start: 6, end: 6 }], true],
+    ['deletion-only change', [], false],
+  ];
+
+  for (const [label, ranges, expected] of cases) {
+    const context: ProjectContext = {
+      project: new MemoryProject(),
+      changedLines: new Map([['src/a.ts', ranges]]),
+      trace: () => {},
+    };
+    assert.equal(isInDiff(subject, context), expected, label);
+  }
+});
+
+test('isInDiff requires scope lines and known changed-line ranges', () => {
+  const subject = scopeSubject({
+    filepath: 'src/a.ts',
+    id: 'function',
+    source: 'function',
+    lines: { start: 5, end: 7 },
+  });
+  const contexts: readonly (readonly [string, ProjectContext])[] = [
+    ['absent changedLines map', { project: new MemoryProject(), trace: () => {} }],
+    ['empty changedLines map', {
+      project: new MemoryProject(),
+      changedLines: new Map(),
+      trace: () => {},
+    }],
+    ['another filepath only', {
+      project: new MemoryProject(),
+      changedLines: new Map([['src/b.ts', [{ start: 5, end: 7 }]]]),
+      trace: () => {},
+    }],
+    ['changed filepath missing from map', {
+      project: new MemoryProject(),
+      changedFiles: new Set(['src/a.ts']),
+      changedLines: new Map(),
+      trace: () => {},
+    }],
+  ];
+
+  for (const [label, context] of contexts) {
+    assert.equal(isInDiff(subject, context), false, label);
+  }
+
+  const knownRanges: ProjectContext = {
+    project: new MemoryProject(),
+    changedLines: new Map([['src/a.ts', [{ start: 5, end: 7 }]]]),
+    trace: () => {},
+  };
+  const subjectWithoutLines = scopeSubject({ filepath: 'src/a.ts', id: 'function', source: 'function' });
+  assert.equal(isInDiff(subjectWithoutLines, knownRanges), false);
+});
+
 
 test('Rule exposes its documented defaults', async () => {
   const rule = new DefaultsRule();
