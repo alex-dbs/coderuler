@@ -334,6 +334,25 @@ Results validate; supplied messages survive reporting. Violations without a mess
 
 `changedFiles` contains paths that changed in the project. `changedLines` maps changed paths to added or replaced lines. These values are absent outside `--diff` and `--pr` runs. In those runs, an empty set means no changed files. An empty map means no exact line ranges are available. A missing entry for a path means line data is unavailable, for example for binary or conversion-attributed files. An entry with `[]` means the file changed but has no added lines.
 
+`isDiffMode(context)` returns `true` when either `changedFiles` or `changedLines` is defined, even if empty; it returns `false` when both are absent. `isInDiff(subject, context)` returns `true` when the subject's line span overlaps a known changed range; a missing span or range returns `false`.
+
+Use both helpers to keep full scans outside diff mode:
+
+```ts
+import {
+  Rule,
+  isDiffMode,
+  isInDiff,
+  type ProjectContext,
+  type ScopeSubject,
+} from '@alex-dbs/coderuler';
+
+export default class Local extends Rule {
+  filter = (subject: ScopeSubject, context: ProjectContext) =>
+    !isDiffMode(context) || isInDiff(subject, context);
+}
+```
+
 
 Use `trace` for decision evidence visible during inspection; keep normal execution free of ad-hoc console output. AI/regex projection callbacks receive only `ProjectContext`, not the full check context.
 

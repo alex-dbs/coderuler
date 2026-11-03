@@ -1,4 +1,4 @@
-export { Rule } from './app/rule.js';
+export { Rule, isDiffMode, isInDiff } from './app/rule.js';
 export { test } from './app/rule-tests.js';
 export type { RuleTestCase } from './app/rule-tests.js';
 export type {

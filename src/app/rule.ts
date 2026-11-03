@@ -140,6 +140,21 @@ export interface CheckContext<T = JsonValue> extends SelectionContext {
   ai(options: AiOptions<T>): Promise<CheckResult>;
 }
 
+export function isDiffMode(context: ProjectContext): boolean {
+  return context.changedFiles !== undefined || context.changedLines !== undefined;
+}
+
+export function isInDiff(subject: ScopeSubject<unknown>, context: ProjectContext): boolean {
+  const lines = subject.lines;
+  const ranges = context.changedLines?.get(subject.filepath);
+  if (lines === undefined || ranges === undefined) return false;
+  for (const range of ranges) {
+    if (range.start <= lines.end && lines.start <= range.end) return true;
+  }
+  return false;
+}
+
+
 export const RULE_BRAND: symbol = Symbol.for('coderuler.Rule');
 
 export abstract class Rule<T = JsonValue> {
