@@ -96,8 +96,9 @@ export interface DecisionRuntime {
 
 export interface RunContext {
   readonly project: Project;
-  readonly createLspBackend?: LspBackendFactory;
   readonly isTarget: (filepath: string) => boolean;
+  readonly createLspBackend?: LspBackendFactory;
+  readonly createRubyLspBackend?: LspBackendFactory;
   readonly changedFiles?: ReadonlySet<string>;
   readonly changedLines?: ReadonlyMap<string, readonly LineRange[]>;
   readonly concurrency: number;

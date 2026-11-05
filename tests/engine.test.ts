@@ -2906,6 +2906,141 @@ test('nested selection failure is recorded before sibling LSP work is aborted', 
   assert.deepEqual(eventsOfType(harness.events, 'error').map(event => event.message)[0], failure.message);
 });
 
+test('Ruby-only work starts only Ruby LSP, and one run can start both language backends', async () => {
+  const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }));
+  let goStarts = 0;
+  let rubyStarts = 0;
+  let goCloses = 0;
+  let rubyCloses = 0;
+  const context: RunContext = {
+    ...harness.context,
+    createLspBackend: async () => {
+      goStarts += 1;
+      return lifecycleBackend(async () => { goCloses += 1; });
+    },
+    createRubyLspBackend: async () => {
+      rubyStarts += 1;
+      return lifecycleBackend(async () => { rubyCloses += 1; });
+    },
+  };
+
+  const rubyOnly = new TestRule({
+    when: async projectContext => {
+      await projectContext.rubyLsp.hover({ filepath: 'a.rb', line: 1 });
+      return true;
+    },
+  });
+  await executeRules([loaded('ruby-only', rubyOnly)], context);
+  assert.equal(goStarts, 0, 'Ruby-only work must not start the Go server');
+  assert.equal(rubyStarts, 1);
+  assert.equal(goCloses, 0);
+  assert.equal(rubyCloses, 1);
+
+  const both = new TestRule({
+    when: async projectContext => {
+      await Promise.all([
+        projectContext.goLsp.hover({ filepath: 'a.go', line: 1 }),
+        projectContext.rubyLsp.hover({ filepath: 'a.rb', line: 1 }),
+      ]);
+      return true;
+    },
+  });
+  await executeRules([loaded('both-languages', both)], context);
+  assert.equal(goStarts, 1);
+  assert.equal(rubyStarts, 2);
+  assert.equal(goCloses, 1);
+  assert.equal(rubyCloses, 2);
+});
+
+test('a rule failure aborts pending Ruby work before the run drains it', { timeout: 5000 }, async () => {
+  const failure = new Error('Ruby-backed check failed');
+  const requestStarted = Promise.withResolvers<void>();
+  const requestSettled = Promise.withResolvers<void>();
+  let aborted = false;
+  let closes = 0;
+  const rule = new TestRule({
+    files: ['a.txt'],
+    scope: changedLineScope,
+    check: async (subject, context) => {
+      if (subject.kind !== 'scope') return pass();
+      if (subject.source === 'fail') {
+        await context.rubyLsp.hover({ filepath: 'a.rb', line: 2 });
+        throw failure;
+      }
+      await context.rubyLsp.hover({ filepath: 'a.rb', line: 1 });
+      return pass();
+    },
+  });
+  const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'wait\nfail' }), { concurrency: 2 });
+  const context: RunContext = {
+    ...harness.context,
+    createRubyLspBackend: async (_project, signal) => ({
+      ...lifecycleBackend(async () => { closes += 1; }),
+      hover: async target => {
+        if (target.line === 1) {
+          const pending = Promise.withResolvers<null>();
+          signal.addEventListener('abort', () => {
+            aborted = true;
+            pending.reject(new Error('Ruby LSP request aborted'));
+          }, { once: true });
+          requestStarted.resolve();
+          return pending.promise.finally(() => requestSettled.resolve());
+        }
+        await requestStarted.promise;
+        return null;
+      },
+    }),
+  };
+
+  await assert.rejects(
+    () => executeRules([loaded('ruby-failure-before-drain', rule)], context),
+    error => error === failure,
+  );
+  await requestSettled.promise;
+  assert.equal(aborted, true, 'pending Ruby work must observe run cancellation');
+  assert.equal(closes, 1);
+});
+
+test('run cleanup closes both language backends and preserves primary or standalone failures', async () => {
+  const project = new MemoryProject('/repo', { 'a.txt': 'A' });
+  const ruleFailure = new Error('check failed');
+  const closeFailure = new Error('Go backend close failed');
+  for (const failsInRule of [true, false]) {
+    const closed: string[] = [];
+    const rule = new TestRule({
+      files: ['a.txt'],
+      when: async context => {
+        await Promise.all([
+          context.goLsp.hover({ filepath: 'a.go', line: 1 }),
+          context.rubyLsp.hover({ filepath: 'a.rb', line: 1 }),
+        ]);
+        return true;
+      },
+      check: async () => {
+        if (failsInRule) throw ruleFailure;
+        return pass();
+      },
+    });
+    const harness = new Harness(project);
+    const context: RunContext = {
+      ...harness.context,
+      createLspBackend: async () => lifecycleBackend(async () => {
+        closed.push('go');
+        throw closeFailure;
+      }),
+      createRubyLspBackend: async () => lifecycleBackend(async () => {
+        closed.push('ruby');
+      }),
+    };
+
+    await assert.rejects(
+      () => executeRules([loaded('close-both-languages', rule)], context),
+      error => error === (failsInRule ? ruleFailure : closeFailure),
+    );
+    assert.deepEqual([...closed].sort(), ['go', 'ruby'], 'Ruby must still close when Go cleanup fails');
+  }
+});
+
 test('run cleanup preserves rule errors and reports standalone backend close failures', async () => {
   const project = new MemoryProject('/repo', { 'a.txt': 'A' });
   const ruleFailure = new Error('check failed');

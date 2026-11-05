@@ -126,11 +126,11 @@ A custom function receives the selected subject and a context object. Return `pa
 
 The hooks receive `project` readers and `trace(message, details?)`. `select` also receives `context.select(...)`. Checks also receive `ruleName` and `context.ai(...)`.
 
-`context.goLsp` provides Go-to-definition, declaration, type-definition, implementation, reference, hover, document-symbol, workspace-symbol, caller, and callee queries. LSP use is optional; install Go and `gopls` only if a rule calls these helpers. 
+`context.goLsp` provides Go-to-definition, declaration, type-definition, implementation, reference, hover, document-symbol, workspace-symbol, caller, and callee queries. `context.rubyLsp` provides Ruby definitions, references, hover, document symbols, and workspace symbols. LSP use is optional; install Go and `gopls` or Shopify Ruby LSP (`ruby-lsp`) on `PATH` only if a rule uses that language's helpers. CodeRuler does not install either server.
 
-Pass file paths and positive, 1-based line and UTF-16 column coordinates. A column counts UTF-16 code units. Navigation and hover use column 1 when omitted. Caller and callee queries use the enclosing named function or method when the column is omitted. Their required `depth` is a nonnegative integer; depth 1 returns direct neighbors. Set `includeDependencies: true` to include available dependency or standard-library source outside the project; the default is `false`.
+Pass file paths and positive, 1-based line and UTF-16 column coordinates. A column counts UTF-16 code units. Navigation and hover use column 1 when omitted. Caller and callee queries (Go only) use the enclosing named function or method when the column is omitted. Their required `depth` is a nonnegative integer; depth 1 returns direct neighbors. Set `includeDependencies: true` to include available dependency or standard-library source outside the project; the default is `false`. Ruby dependency definitions are excluded by default and can be requested with `includeDependencies: true`.
 
-Caller and callee results are a static call graph. They can omit dynamic calls and do not load every possible package consumer. Use them as the server's known call relationships, not as a complete runtime graph.
+An operation a server does not support rejects with a capability error. Caller and callee results are a static call graph. They can omit dynamic calls and do not load every possible package consumer. Use them as the server's known call relationships, not as a complete runtime graph.
 
 For example, call graph helpers inside an async custom check:
 

@@ -20,16 +20,26 @@ interface TestProject {
   readonly project: Project;
 }
 
-async function makeProject(): Promise<TestProject> {
+async function makeProject(sourceText = source, filename = 'main.go'): Promise<TestProject> {
   const root = await mkdtemp(join(tmpdir(), 'rulekeeper lsp process-'));
-  const sourcePath = join(root, 'main.go');
-  await writeFile(sourcePath, source);
+  const sourcePath = join(root, filename);
+  await writeFile(sourcePath, sourceText);
   return {
     root,
     sourcePath,
     pidPath: join(root, 'child.pid'),
     project: createProject(root),
   };
+}
+
+function rubyServerOptions(command: string, args: readonly string[], requestTimeoutMs: number) {
+  return {
+    command,
+    args,
+    languageId: 'ruby',
+    initializationProgressToken: 'indexing-progress',
+    requestTimeoutMs,
+  } as const;
 }
 
 async function removeProject(project: TestProject): Promise<void> {
@@ -237,6 +247,131 @@ function protocolPeerScript(
     connection.listen();
   `;
 }
+type RubyProgressPeerMode = 'gated' | 'early' | 'indexing-error';
+
+function rubyProgressPeerScript(
+  pidPath: string,
+  exitPath: string,
+  markerPath: string,
+  releasePath: string,
+  mode: RubyProgressPeerMode,
+  descendantPidPath?: string,
+): string {
+  const initializeHandler = mode === 'early'
+    ? `
+      connection.onRequest('initialize', async () => {
+        await connection.sendRequest('window/workDoneProgress/create', { token });
+        await connection.sendNotification('$/progress', {
+          token,
+          value: { kind: 'end' },
+        });
+        writeMarker(${JSON.stringify(markerPath)}, 'early-end-sent');
+        return { capabilities: { textDocumentSync: 1 } };
+      });
+    `
+    : `
+      connection.onRequest('initialize', () => ({
+        capabilities: { textDocumentSync: 1 },
+      }));
+    `;
+  const initializedHandler = mode === 'gated'
+    ? `
+      connection.onNotification('initialized', async () => {
+        await connection.sendRequest('window/workDoneProgress/create', { token });
+        await connection.sendNotification('$/progress', {
+          token,
+          value: { kind: 'begin', title: 'Indexing' },
+        });
+        await connection.sendNotification('$/progress', {
+          token,
+          value: { kind: 'report', message: 'Indexing files' },
+        });
+        await connection.sendNotification('$/progress', {
+          token: 'unrelated-token',
+          value: { kind: 'end' },
+        });
+        await connection.sendRequest('window/showMessageRequest', {
+          type: 3,
+          message: 'progress synchronization barrier',
+        });
+
+        const watcher = watch(${JSON.stringify(dirname(releasePath))}, () => {
+          if (!existsSync(${JSON.stringify(releasePath)})) return;
+          watcher.close();
+          void connection.sendNotification('$/progress', {
+            token,
+            value: { kind: 'end' },
+          }).then(() => writeMarker(${JSON.stringify(`${markerPath}.end-sent`)}, 'end-sent'));
+        });
+        writeMarker(${JSON.stringify(markerPath)}, 'indexing-in-progress');
+      });
+    `
+    : mode === 'indexing-error'
+      ? `
+        connection.onNotification('initialized', async () => {
+          await connection.sendRequest('window/workDoneProgress/create', { token });
+          const indexingError = connection.sendNotification('window/showMessage', {
+            type: 1,
+            message: 'Error while indexing (Ruby parser error)',
+          });
+          const indexingEnd = connection.sendNotification('$/progress', {
+            token,
+            value: { kind: 'end' },
+          });
+          writeMarker(${JSON.stringify(markerPath)}, 'indexing-error-and-end-sent');
+          await Promise.all([indexingError, indexingEnd]);
+        });
+      `
+      : '';
+  const descendantScript = descendantPidPath === undefined
+    ? ''
+    : `
+      import { writeFileSync } from 'node:fs';
+      process.on('SIGTERM', () => {});
+      // The referenced timer keeps the descendant alive until process-group shutdown.
+      setInterval(() => {}, 1_000);
+      writeFileSync(${JSON.stringify(`${descendantPidPath}.ready`)}, String(process.pid));
+    `;
+  const spawnDescendant = descendantPidPath === undefined
+    ? ''
+    : `
+      const descendant = spawn(process.execPath, [
+        '--input-type=module',
+        '-e',
+        ${JSON.stringify(descendantScript)},
+      ], { stdio: ['ignore', 'ignore', 'inherit'] });
+      writeMarker(${JSON.stringify(descendantPidPath)}, String(descendant.pid));
+    `;
+
+  return `
+    import { spawn } from 'node:child_process';
+    import { existsSync, renameSync, watch, writeFileSync } from 'node:fs';
+    const writeMarker = (path, value) => {
+      const temporary = path + '.' + process.pid + '.tmp';
+      writeFileSync(temporary, value);
+      renameSync(temporary, path);
+    };
+    const token = 'indexing-progress';
+    writeMarker(${JSON.stringify(pidPath)}, String(process.pid));
+    ${spawnDescendant}
+    process.on('exit', () => writeMarker(${JSON.stringify(exitPath)}, String(process.pid)));
+    process.on('SIGTERM', () => process.exit(0));
+    // The peer must load the protocol implementation in its own process.
+    const { createProtocolConnection } = await import(${JSON.stringify(protocolNodeModuleUrl)});
+    const connection = createProtocolConnection(process.stdin, process.stdout);
+    ${initializeHandler}
+    connection.onRequest('shutdown', () => null);
+    connection.onNotification('exit', () => process.exit(0));
+    ${initializedHandler}
+    connection.listen();
+  `;
+}
+
+async function nextEventLoopTurn(): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setImmediate(resolve);
+  await promise;
+}
 
 test('a nonexistent executable rejects during startup', { timeout: 10_000 }, async () => {
   const fixture = await makeProject();
@@ -320,6 +455,280 @@ test('aborting initialization rejects before timeout and kills the child', { tim
     assertProcessExited(pid);
   } finally {
     await cleanupProject(fixture);
+  }
+});
+
+test('Ruby startup waits for the matching indexing end event', { timeout: 15_000 }, async () => {
+  const fixture = await makeProject();
+  const progressPath = join(fixture.root, 'indexing.progress');
+  const releasePath = join(fixture.root, 'release-indexing');
+  const exitPath = join(fixture.root, 'child.exited');
+  let backend: LspBackend | undefined;
+  try {
+    let startupResolved = false;
+    const startup = createLspBackend(
+      fixture.project,
+      new AbortController().signal,
+      rubyServerOptions(
+        process.execPath,
+        nodeArgs(rubyProgressPeerScript(
+          fixture.pidPath,
+          exitPath,
+          progressPath,
+          releasePath,
+          'gated',
+        )),
+        5_000,
+      ),
+    );
+    void startup.then(
+      resolvedBackend => {
+        startupResolved = true;
+        backend = resolvedBackend;
+      },
+      () => { startupResolved = true; },
+    );
+
+    await waitForMarker(progressPath, value => value === 'indexing-in-progress');
+    await nextEventLoopTurn();
+    assert.equal(startupResolved, false);
+
+    await writeFile(releasePath, 'release');
+    await waitForMarker(`${progressPath}.end-sent`, value => value === 'end-sent');
+    backend = await startup;
+    await backend.close();
+    backend = undefined;
+    await waitForMarker(exitPath, validPidMarker);
+  } finally {
+    await cleanupProject(fixture, backend);
+  }
+});
+
+test('Ruby startup retains a matching end received during initialize', { timeout: 10_000 }, async () => {
+  const fixture = await makeProject();
+  const progressPath = join(fixture.root, 'indexing.progress');
+  const releasePath = join(fixture.root, 'unused-release');
+  const exitPath = join(fixture.root, 'child.exited');
+  let backend: LspBackend | undefined;
+  try {
+    backend = await createLspBackend(
+      fixture.project,
+      new AbortController().signal,
+      rubyServerOptions(
+        process.execPath,
+        nodeArgs(rubyProgressPeerScript(
+          fixture.pidPath,
+          exitPath,
+          progressPath,
+          releasePath,
+          'early',
+        )),
+        2_000,
+      ),
+    );
+    assert.equal(await waitForMarker(progressPath, value => value === 'early-end-sent'), 'early-end-sent');
+    const pid = pidFromMarker(await waitForMarker(fixture.pidPath, validPidMarker));
+    await backend.close();
+    backend = undefined;
+    await waitForMarker(exitPath, validPidMarker);
+    await waitForProcessExit(pid);
+    assertProcessExited(pid);
+  } finally {
+    await cleanupProject(fixture, backend);
+  }
+});
+
+test('a Ruby indexing error still rejects when progress ends', { timeout: 10_000 }, async () => {
+  const fixture = await makeProject();
+  const progressPath = join(fixture.root, 'indexing.progress');
+  const releasePath = join(fixture.root, 'unused-release');
+  const exitPath = join(fixture.root, 'child.exited');
+  try {
+    const startup = createLspBackend(
+      fixture.project,
+      new AbortController().signal,
+      rubyServerOptions(
+        process.execPath,
+        nodeArgs(rubyProgressPeerScript(
+          fixture.pidPath,
+          exitPath,
+          progressPath,
+          releasePath,
+          'indexing-error',
+        )),
+        2_000,
+      ),
+    );
+    const rejectedStartup = assert.rejects(startup, /Error while indexing \(/);
+    await waitForMarker(progressPath, value => value === 'indexing-error-and-end-sent');
+    await rejectedStartup;
+    const pid = pidFromMarker(await waitForMarker(fixture.pidPath, validPidMarker));
+    await waitForMarker(exitPath, validPidMarker);
+    await waitForProcessExit(pid);
+    assertProcessExited(pid);
+  } finally {
+    await cleanupProject(fixture);
+  }
+});
+
+test('a Ruby indexing readiness timeout reaps the child', { timeout: 15_000 }, async () => {
+  const fixture = await makeProject();
+  const progressPath = join(fixture.root, 'indexing.progress');
+  const releasePath = join(fixture.root, 'unused-release');
+  const exitPath = join(fixture.root, 'child.exited');
+  try {
+    const startup = createLspBackend(
+      fixture.project,
+      new AbortController().signal,
+      rubyServerOptions(
+        process.execPath,
+        nodeArgs(rubyProgressPeerScript(
+          fixture.pidPath,
+          exitPath,
+          progressPath,
+          releasePath,
+          'gated',
+        )),
+        2_000,
+      ),
+    );
+    const rejectedStartup = assert.rejects(startup, /timeout|timed out/i);
+    await waitForMarker(progressPath, value => value === 'indexing-in-progress');
+    await rejectedStartup;
+    const pid = pidFromMarker(await waitForMarker(fixture.pidPath, validPidMarker));
+    await waitForMarker(exitPath, validPidMarker);
+    await waitForProcessExit(pid);
+    assertProcessExited(pid);
+  } finally {
+    await cleanupProject(fixture);
+  }
+});
+
+test('aborting Ruby indexing readiness reaps the child', { timeout: 10_000 }, async () => {
+  const fixture = await makeProject();
+  const controller = new AbortController();
+  const progressPath = join(fixture.root, 'indexing.progress');
+  const releasePath = join(fixture.root, 'unused-release');
+  const exitPath = join(fixture.root, 'child.exited');
+  try {
+    const startup = createLspBackend(
+      fixture.project,
+      controller.signal,
+      rubyServerOptions(
+        process.execPath,
+        nodeArgs(rubyProgressPeerScript(
+          fixture.pidPath,
+          exitPath,
+          progressPath,
+          releasePath,
+          'gated',
+        )),
+        5_000,
+      ),
+    );
+    const rejectedStartup = assert.rejects(startup, /abort/i);
+    await waitForMarker(progressPath, value => value === 'indexing-in-progress');
+    controller.abort();
+    await rejectedStartup;
+    const pid = pidFromMarker(await waitForMarker(fixture.pidPath, validPidMarker));
+    await waitForMarker(exitPath, validPidMarker);
+    await waitForProcessExit(pid);
+    assertProcessExited(pid);
+  } finally {
+    controller.abort();
+    await cleanupProject(fixture);
+  }
+});
+
+if (process.platform !== 'win32') {
+  test('aborting Ruby startup terminates a descendant holding stderr', { timeout: 15_000 }, async () => {
+    const fixture = await makeProject();
+    const progressPath = join(fixture.root, 'indexing.progress');
+    const releasePath = join(fixture.root, 'unused-release');
+    const exitPath = join(fixture.root, 'child.exited');
+    const descendantPidPath = join(fixture.root, 'descendant.pid');
+    const controller = new AbortController();
+    let startup: Promise<LspBackend> | undefined;
+    let settledStartup: Promise<void> | undefined;
+    try {
+      startup = createLspBackend(
+        fixture.project,
+        controller.signal,
+        rubyServerOptions(
+          process.execPath,
+          nodeArgs(rubyProgressPeerScript(
+            fixture.pidPath,
+            exitPath,
+            progressPath,
+            releasePath,
+            'gated',
+            descendantPidPath,
+          )),
+          10_000,
+        ),
+      );
+      settledStartup = startup.then(() => undefined, () => undefined);
+      const rejectedStartup = assert.rejects(startup, /abort/i);
+      const pid = pidFromMarker(await waitForMarker(fixture.pidPath, validPidMarker));
+      const descendantPid = pidFromMarker(await waitForMarker(descendantPidPath, validPidMarker));
+      await waitForMarker(`${descendantPidPath}.ready`, value => value === String(descendantPid));
+      await waitForMarker(progressPath, value => value === 'indexing-in-progress');
+      assert.doesNotThrow(
+        () => process.kill(descendantPid, 0),
+        'descendant must still be alive before abort',
+      );
+      controller.abort();
+      await rejectedStartup;
+      await waitForMarker(exitPath, validPidMarker);
+      await Promise.all([waitForProcessExit(pid), waitForProcessExit(descendantPid)]);
+      assertProcessExited(pid);
+      assertProcessExited(descendantPid);
+      assert.equal(await readFile(fixture.sourcePath, 'utf8'), source);
+    } finally {
+      controller.abort();
+      await settledStartup;
+      await terminateChild(descendantPidPath);
+      await cleanupProject(fixture);
+    }
+  });
+}
+
+test('Ruby positive-depth call hierarchy rejects before resolving either target shape', { timeout: 10_000 }, async () => {
+  const fixture = await makeProject('puts 1\n', 'main.rb');
+  const progressPath = join(fixture.root, 'indexing.progress');
+  const releasePath = join(fixture.root, 'unused-release');
+  const exitPath = join(fixture.root, 'child.exited');
+  let backend: LspBackend | undefined;
+  try {
+    backend = await createLspBackend(
+      fixture.project,
+      new AbortController().signal,
+      rubyServerOptions(
+        process.execPath,
+        nodeArgs(rubyProgressPeerScript(
+          fixture.pidPath,
+          exitPath,
+          progressPath,
+          releasePath,
+          'early',
+        )),
+        2_000,
+      ),
+    );
+
+    for (const method of ['callers', 'callees'] as const) {
+      for (const target of [
+        { filepath: 'main.rb', line: 1, column: 1 },
+        { filepath: 'main.rb', line: 1 },
+      ]) {
+        await assert.rejects(
+          backend[method](target, { depth: 1 }),
+          { message: 'LSP server does not support textDocument/prepareCallHierarchy' },
+        );
+      }
+    }
+  } finally {
+    await cleanupProject(fixture, backend);
   }
 });
 

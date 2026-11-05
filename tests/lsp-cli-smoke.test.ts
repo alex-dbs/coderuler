@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { cpSync, readdirSync } from 'node:fs';
+import { cpSync, readFileSync, readdirSync } from 'node:fs';
 import { after, test } from 'node:test';
 import { join } from 'node:path';
 
+import { createRubyLspFixture } from './ruby-lsp-support.ts';
 import { createSandbox, ROOT, runCli, writeFile } from './support.ts';
 
 const sandbox = createSandbox('coderuler-lsp-cli-');
@@ -19,6 +20,49 @@ function fixture(label: string) {
   cpSync(join(source, 'project-dependency'), join(target.root, 'project-dependency'), { recursive: true });
   return target;
 }
+
+test('check uses the default Ruby LSP backend to resolve the Ruby fixture', async () => {
+  const target = await createRubyLspFixture(sandbox.isolated('ruby-check'));
+  const result = await runCli([
+    'check', '.', '--rules', '.coderuler/ruby-definition.rule.ts', '--json', '--output-all',
+  ], target);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /"status":\s*"pass"/);
+  assert.match(result.stdout, /Widget\.build/);
+});
+
+test('inspect uses the default Ruby LSP backend to resolve the Ruby fixture', async () => {
+  const target = await createRubyLspFixture(sandbox.isolated('ruby-inspect'));
+  const result = await runCli([
+    'inspect', '.coderuler/ruby-definition.rule.ts', '.', '--json',
+  ], target);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.equal(result.stderr, '');
+  assert.match(result.stdout, /"status":\s*"pass"/);
+  assert.match(result.stdout, /Widget\.build/);
+});
+
+test('check reports the Ruby fixture violation for an unresolved widget', async () => {
+  const target = await createRubyLspFixture(sandbox.isolated('ruby-check-violation'));
+  const usagePath = join(target.cwd, 'lib', 'usage.rb');
+  const usage = readFileSync(usagePath, 'utf8');
+  assert.ok(usage.includes('Widget.build'), usage);
+  writeFile(usagePath, usage.replace('Widget.build', 'UnknownWidget.build'));
+  const result = await runCli([
+    'check', '.', '--rules', '.coderuler/ruby-definition.rule.ts', '--json', '--output-all',
+  ], target);
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /Widget must resolve to lib\/widget\.rb/);
+});
+
+test('test runs both Ruby fixture examples with their declared outcomes', async () => {
+  const target = await createRubyLspFixture(sandbox.isolated('ruby-test'));
+  const result = await runCli([
+    'test', '.coderuler/ruby-definition.rule.ts', '--timeout', '60s',
+  ], target);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.equal(result.stdout.match(/^.*PASS.*$/gm)?.length, 2, result.stdout);
+});
 
 const offlineGo = {
   GOPROXY: 'off',

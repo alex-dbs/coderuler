@@ -33,7 +33,12 @@ function astGrepWith(options: Record<string, unknown>): ScopeSelector<JsonValue>
 }
 
 const project = createProject(ROOT);
-const projectContext: ProjectContext = { project, goLsp: createRunLsp(project).tools, trace: () => {} };
+const projectContext: ProjectContext = {
+  project,
+  goLsp: createRunLsp(project).tools,
+  rubyLsp: createRunLsp(project).tools,
+  trace: () => {},
+};
 async function select(
   selector: ScopeSelector<JsonValue>,
   filepath: string,

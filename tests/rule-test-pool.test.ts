@@ -445,66 +445,105 @@ test('inline rule tests close one fresh parent-owned LSP backend per successful 
     target.cwd,
     ruleFile,
     inlineRule(
-      `async (_subject, context) => { await context.goLsp.hover({ filepath: 'inputs/one.txt', line: 1 }); return pass(); }`,
+      `async (_subject, context) => {
+        await context.goLsp.hover({ filepath: 'inputs/one.txt', line: 1 });
+        await context.rubyLsp.hover({ filepath: 'inputs/one.txt', line: 1 });
+        return pass();
+      }`,
       cases(['first', 'second']),
     ),
   );
-  const openedRoots: string[] = [];
-  const closedRoots: string[] = [];
-  const rootsAtClose: boolean[] = [];
+  const openedRoots = { go: [] as string[], ruby: [] as string[] };
+  const closedRoots = { go: [] as string[], ruby: [] as string[] };
+  const rootsAtClose = { go: [] as boolean[], ruby: [] as boolean[] };
   const createBackend: LspBackendFactory = async project => {
-    openedRoots.push(project.root);
+    openedRoots.go.push(project.root);
     return lspBackend(() => {
-      closedRoots.push(project.root);
-      rootsAtClose.push(existsSync(project.root));
+      closedRoots.go.push(project.root);
+      rootsAtClose.go.push(existsSync(project.root));
+    }, async () => null);
+  };
+  const createRubyBackend: LspBackendFactory = async project => {
+    openedRoots.ruby.push(project.root);
+    return lspBackend(() => {
+      closedRoots.ruby.push(project.root);
+      rootsAtClose.ruby.push(existsSync(project.root));
     }, async () => null);
   };
 
-  const results = await runRuleTests(rules, undefined, 10_000, 1, false, false, createBackend);
+  const results = await runRuleTests(rules, undefined, 10_000, 1, false, false, createBackend, createRubyBackend);
   assert.deepEqual(results.map(result => result.actual), ['pass', 'pass']);
-  assert.equal(openedRoots.length, 2);
-  assert.equal(new Set(openedRoots).size, 2, 'each reused-worker case must get its own backend');
-  assert.deepEqual(closedRoots, openedRoots);
-  assert.deepEqual(rootsAtClose, [true, true], 'the parent backend must close before its case root is removed');
-  for (const root of openedRoots) assert.equal(existsSync(root), false, root);
+  assert.equal(openedRoots.go.length, 2);
+  assert.equal(openedRoots.ruby.length, 2);
+  assert.equal(new Set(openedRoots.go).size, 2, 'each reused-worker case must get its own Go backend');
+  assert.equal(new Set(openedRoots.ruby).size, 2, 'each reused-worker case must get its own Ruby backend');
+  assert.deepEqual(openedRoots.ruby, openedRoots.go, 'both hosts must use the same case project');
+  assert.deepEqual(closedRoots.go, openedRoots.go);
+  assert.deepEqual(closedRoots.ruby, openedRoots.ruby);
+  assert.deepEqual(rootsAtClose.go, [true, true], 'the Go host must close before its case root is removed');
+  assert.deepEqual(rootsAtClose.ruby, [true, true], 'the Ruby host must close before its case root is removed');
+  for (const root of openedRoots.go) assert.equal(existsSync(root), false, root);
+  for (const root of openedRoots.ruby) assert.equal(existsSync(root), false, root);
 });
 
-test('inline rule timeout closes a pending parent-owned LSP backend before removing its root', { timeout: 20_000 }, async () => {
+test('inline rule timeout closes pending Go and Ruby hosts before removing its root', { timeout: 20_000 }, async () => {
   const target = sandbox.isolated('parent-lsp-timeout');
   const ruleFile = join(target.cwd, '.coderuler', 'lsp.rule.ts');
   const rules = await loadInlineRule(
     target.cwd,
     ruleFile,
     inlineRule(
-      `async (_subject, context) => { await context.goLsp.hover({ filepath: 'inputs/one.txt', line: 1 }); return pass(); }`,
+      `async (_subject, context) => {
+        await Promise.all([
+          context.goLsp.hover({ filepath: 'inputs/one.txt', line: 1 }),
+          context.rubyLsp.hover({ filepath: 'inputs/one.txt', line: 1 }),
+        ]);
+        return pass();
+      }`,
       cases(['pending']),
     ),
   );
-  const started = Promise.withResolvers<string>();
-  const closedRoots: string[] = [];
-  const rootsAtClose: boolean[] = [];
+  const started = Promise.withResolvers<{ go: string; ruby: string }>();
+  const roots = { go: undefined as string | undefined, ruby: undefined as string | undefined };
+  const closedRoots = { go: [] as string[], ruby: [] as string[] };
+  const rootsAtClose = { go: [] as boolean[], ruby: [] as boolean[] };
+  const onStarted = (): void => {
+    if (roots.go !== undefined && roots.ruby !== undefined) started.resolve({ go: roots.go, ruby: roots.ruby });
+  };
   const createBackend: LspBackendFactory = async (project, signal) => {
-    started.resolve(project.root);
+    roots.go = project.root;
+    onStarted();
     return lspBackend(() => {
-      closedRoots.push(project.root);
-      rootsAtClose.push(existsSync(project.root));
+      closedRoots.go.push(project.root);
+      rootsAtClose.go.push(existsSync(project.root));
+    }, () => hoverUntilAbort(signal));
+  };
+  const createRubyBackend: LspBackendFactory = async (project, signal) => {
+    roots.ruby = project.root;
+    onStarted();
+    return lspBackend(() => {
+      closedRoots.ruby.push(project.root);
+      rootsAtClose.ruby.push(existsSync(project.root));
     }, () => hoverUntilAbort(signal));
   };
   // This exercises the real worker-thread deadline, which cannot be driven by parent-side fake time.
-  const execution = runRuleTests(rules, undefined, 4_000, 1, false, false, createBackend);
+  const execution = runRuleTests(rules, undefined, 4_000, 1, false, false, createBackend, createRubyBackend);
   const startedOrFinished = await Promise.race([
-    started.promise.then(root => ({ root })),
+    started.promise.then(projectRoots => ({ projectRoots })),
     execution.then(() => ({ finished: true }), error => ({ error })),
   ]);
-  assert.ok('root' in startedOrFinished, 'the case must reach its parent-owned LSP query before timeout');
+  assert.ok('projectRoots' in startedOrFinished, 'the case must reach both parent-owned LSP hosts before timeout');
   const [result] = await execution;
   assert.equal(result?.actual, 'timeout');
-  assert.deepEqual(closedRoots, [startedOrFinished.root]);
-  assert.deepEqual(rootsAtClose, [true]);
-  assert.equal(existsSync(startedOrFinished.root), false);
+  assert.deepEqual(closedRoots.go, [startedOrFinished.projectRoots.go]);
+  assert.deepEqual(closedRoots.ruby, [startedOrFinished.projectRoots.ruby]);
+  assert.deepEqual(rootsAtClose.go, [true]);
+  assert.deepEqual(rootsAtClose.ruby, [true]);
+  assert.equal(existsSync(startedOrFinished.projectRoots.go), false);
+  assert.equal(existsSync(startedOrFinished.projectRoots.ruby), false);
 });
 
-test('inline sibling failure closes a pending parent-owned LSP backend before removing its root', { timeout: 20_000 }, async context => {
+test('inline sibling failure closes pending Go and Ruby hosts before removing its root', { timeout: 20_000 }, async context => {
   const target = sandbox.isolated('parent-lsp-sibling-failure');
   const ruleFile = join(target.cwd, '.coderuler', 'lsp.rule.ts');
   const gate = await startGate();
@@ -518,7 +557,10 @@ test('inline sibling failure closes a pending parent-owned LSP backend before re
           await waitFor('lsp-started');
           throw new Error('sibling operational failure');
         }
-        await context.goLsp.hover({ filepath: 'inputs/one.txt', line: 1 });
+        await Promise.all([
+          context.goLsp.hover({ filepath: 'inputs/one.txt', line: 1 }),
+          context.rubyLsp.hover({ filepath: 'inputs/one.txt', line: 1 }),
+        ]);
         return pass();
       }`,
       `test('pending').withFiles({ 'inputs/one.txt': 'pending' }).passes(),
@@ -526,27 +568,43 @@ test('sibling').withFiles({ 'inputs/one.txt': 'sibling' }).passes()`,
       gateHelpers(gate.url),
     ),
   );
-  const started = Promise.withResolvers<string>();
-  const closedRoots: string[] = [];
-  const rootsAtClose: boolean[] = [];
+  const started = Promise.withResolvers<{ go: string; ruby: string }>();
+  const roots = { go: undefined as string | undefined, ruby: undefined as string | undefined };
+  const closedRoots = { go: [] as string[], ruby: [] as string[] };
+  const rootsAtClose = { go: [] as boolean[], ruby: [] as boolean[] };
+  const onStarted = (): void => {
+    if (roots.go !== undefined && roots.ruby !== undefined) started.resolve({ go: roots.go, ruby: roots.ruby });
+  };
   const createBackend: LspBackendFactory = async (project, signal) => {
-    started.resolve(project.root);
+    roots.go = project.root;
+    onStarted();
     return lspBackend(() => {
-      closedRoots.push(project.root);
-      rootsAtClose.push(existsSync(project.root));
+      closedRoots.go.push(project.root);
+      rootsAtClose.go.push(existsSync(project.root));
     }, () => hoverUntilAbort(signal));
   };
-  const execution = runRuleTests(rules, undefined, 15_000, 2, false, false, createBackend);
+  const createRubyBackend: LspBackendFactory = async (project, signal) => {
+    roots.ruby = project.root;
+    onStarted();
+    return lspBackend(() => {
+      closedRoots.ruby.push(project.root);
+      rootsAtClose.ruby.push(existsSync(project.root));
+    }, () => hoverUntilAbort(signal));
+  };
+  const execution = runRuleTests(rules, undefined, 15_000, 2, false, false, createBackend, createRubyBackend);
   const startedOrFinished = await Promise.race([
-    started.promise.then(root => ({ root })),
+    started.promise.then(projectRoots => ({ projectRoots })),
     execution.then(() => ({ finished: true }), error => ({ error })),
   ]);
-  assert.ok('root' in startedOrFinished, 'the pending sibling must start its LSP query before failure');
+  assert.ok('projectRoots' in startedOrFinished, 'the pending sibling must start both LSP hosts before failure');
   gate.signal('lsp-started');
   await assert.rejects(execution, /sibling operational failure/);
-  assert.deepEqual(closedRoots, [startedOrFinished.root]);
-  assert.deepEqual(rootsAtClose, [true]);
-  assert.equal(existsSync(startedOrFinished.root), false);
+  assert.deepEqual(closedRoots.go, [startedOrFinished.projectRoots.go]);
+  assert.deepEqual(closedRoots.ruby, [startedOrFinished.projectRoots.ruby]);
+  assert.deepEqual(rootsAtClose.go, [true]);
+  assert.deepEqual(rootsAtClose.ruby, [true]);
+  assert.equal(existsSync(startedOrFinished.projectRoots.go), false);
+  assert.equal(existsSync(startedOrFinished.projectRoots.ruby), false);
 });
 
 test('inline sibling LSP cleanup failure preserves the first rule failure', { timeout: 20_000 }, async context => {
@@ -563,7 +621,10 @@ test('inline sibling LSP cleanup failure preserves the first rule failure', { ti
           await waitFor('lsp-started');
           throw new Error('first rule failure');
         }
-        await context.goLsp.hover({ filepath: 'inputs/one.txt', line: 1 });
+        await Promise.all([
+          context.goLsp.hover({ filepath: 'inputs/one.txt', line: 1 }),
+          context.rubyLsp.hover({ filepath: 'inputs/one.txt', line: 1 }),
+        ]);
         return pass();
       }`,
       `test('pending').withFiles({ 'inputs/one.txt': 'pending' }).passes(),
@@ -571,77 +632,117 @@ test('failure').withFiles({ 'inputs/one.txt': 'failure' }).passes()`,
       gateHelpers(gate.url),
     ),
   );
-  const started = Promise.withResolvers<string>();
-  const closedRoots: string[] = [];
-  const createBackend: LspBackendFactory = async (project, signal) => lspBackend(
-    () => {
-      closedRoots.push(project.root);
-      throw new Error('sibling LSP cleanup failure');
-    },
-    () => {
-      started.resolve(project.root);
-      return hoverUntilAbort(signal);
-    },
-  );
-  const execution = runRuleTests(rules, undefined, 15_000, 2, false, false, createBackend);
+  const started = Promise.withResolvers<{ go: string; ruby: string }>();
+  const roots = { go: undefined as string | undefined, ruby: undefined as string | undefined };
+  const closedRoots = { go: [] as string[], ruby: [] as string[] };
+  const rootsAtClose = { go: [] as boolean[], ruby: [] as boolean[] };
+  const onStarted = (): void => {
+    if (roots.go !== undefined && roots.ruby !== undefined) started.resolve({ go: roots.go, ruby: roots.ruby });
+  };
+  const createBackend: LspBackendFactory = async (project, signal) => {
+    roots.go = project.root;
+    onStarted();
+    return lspBackend(() => {
+      closedRoots.go.push(project.root);
+      rootsAtClose.go.push(existsSync(project.root));
+      throw new Error('Go host cleanup failure');
+    }, () => hoverUntilAbort(signal));
+  };
+  const createRubyBackend: LspBackendFactory = async (project, signal) => {
+    roots.ruby = project.root;
+    onStarted();
+    return lspBackend(() => {
+      closedRoots.ruby.push(project.root);
+      rootsAtClose.ruby.push(existsSync(project.root));
+    }, () => hoverUntilAbort(signal));
+  };
+  const execution = runRuleTests(rules, undefined, 15_000, 2, false, false, createBackend, createRubyBackend);
   const startedOrFinished = await Promise.race([
-    started.promise.then(root => ({ root })),
+    started.promise.then(projectRoots => ({ projectRoots })),
     execution.then(() => ({ finished: true }), error => ({ error })),
   ]);
-  assert.ok('root' in startedOrFinished, 'the pending sibling must start its LSP query before failure');
+  assert.ok('projectRoots' in startedOrFinished, 'the pending sibling must start both LSP hosts before failure');
+  assert.equal(startedOrFinished.projectRoots.go, startedOrFinished.projectRoots.ruby);
   gate.signal('lsp-started');
   await assert.rejects(execution, error => {
     const message = error instanceof Error ? error.message : String(error);
     assert.match(message, /first rule failure/);
-    assert.doesNotMatch(message, /sibling LSP cleanup failure/);
+    assert.doesNotMatch(message, /Go host cleanup failure/);
     return true;
   });
-  assert.deepEqual(closedRoots, [startedOrFinished.root]);
-  assert.equal(existsSync(startedOrFinished.root), false);
+  assert.deepEqual(closedRoots.go, [startedOrFinished.projectRoots.go]);
+  assert.deepEqual(closedRoots.ruby, [startedOrFinished.projectRoots.ruby], 'Ruby host cleanup must run after Go cleanup fails');
+  assert.deepEqual(rootsAtClose.go, [true]);
+  assert.deepEqual(rootsAtClose.ruby, [true]);
+  assert.equal(existsSync(startedOrFinished.projectRoots.go), false);
 });
 
-test('inline rule worker failure takes precedence over parent-owned LSP cleanup failure', { timeout: 20_000 }, async () => {
+test('inline rule worker failure takes precedence over both parent-owned LSP cleanup paths', { timeout: 20_000 }, async () => {
   const target = sandbox.isolated('parent-lsp-cleanup-precedence');
   const ruleFile = join(target.cwd, '.coderuler', 'lsp.rule.ts');
   const rules = await loadInlineRule(
     target.cwd,
     ruleFile,
     inlineRule(
-      `async (_subject, context) => { await context.goLsp.hover({ filepath: 'inputs/one.txt', line: 1 }); throw new Error('original worker failure'); }`,
+      `async (_subject, context) => {
+        await Promise.all([
+          context.goLsp.hover({ filepath: 'inputs/one.txt', line: 1 }),
+          context.rubyLsp.hover({ filepath: 'inputs/one.txt', line: 1 }),
+        ]);
+        throw new Error('original worker failure');
+      }`,
       cases(['failure']),
     ),
   );
+  const closed: string[] = [];
   const createBackend: LspBackendFactory = async () => lspBackend(
-    () => { throw new Error('LSP host cleanup failure'); },
+    () => { closed.push('go'); throw new Error('Go host cleanup failure'); },
+    async () => null,
+  );
+  const createRubyBackend: LspBackendFactory = async () => lspBackend(
+    () => { closed.push('ruby'); },
     async () => null,
   );
 
   await assert.rejects(
-    runRuleTests(rules, undefined, 10_000, 1, false, false, createBackend),
+    runRuleTests(rules, undefined, 10_000, 1, false, false, createBackend, createRubyBackend),
     /original worker failure/,
   );
+  assert.deepEqual([...closed].sort(), ['go', 'ruby']);
 });
 
-test('inline rule test reports a standalone parent-owned LSP cleanup failure', { timeout: 20_000 }, async () => {
+test('inline rule test reports a standalone parent-owned LSP cleanup failure after closing both hosts', { timeout: 20_000 }, async () => {
   const target = sandbox.isolated('parent-lsp-cleanup-standalone');
   const ruleFile = join(target.cwd, '.coderuler', 'lsp.rule.ts');
   const rules = await loadInlineRule(
     target.cwd,
     ruleFile,
     inlineRule(
-      `async (_subject, context) => { await context.goLsp.hover({ filepath: 'inputs/one.txt', line: 1 }); return pass(); }`,
+      `async (_subject, context) => {
+        await Promise.all([
+          context.goLsp.hover({ filepath: 'inputs/one.txt', line: 1 }),
+          context.rubyLsp.hover({ filepath: 'inputs/one.txt', line: 1 }),
+        ]);
+        return pass();
+      }`,
       cases(['success']),
     ),
   );
+  const closed: string[] = [];
   const createBackend: LspBackendFactory = async () => lspBackend(
-    () => { throw new Error('standalone LSP cleanup failure'); },
+    () => { closed.push('go'); throw new Error('standalone LSP cleanup failure'); },
+    async () => null,
+  );
+  const createRubyBackend: LspBackendFactory = async () => lspBackend(
+    () => { closed.push('ruby'); },
     async () => null,
   );
 
   await assert.rejects(
-    runRuleTests(rules, undefined, 10_000, 1, false, false, createBackend),
+    runRuleTests(rules, undefined, 10_000, 1, false, false, createBackend, createRubyBackend),
     /standalone LSP cleanup failure/,
   );
+  assert.deepEqual([...closed].sort(), ['go', 'ruby']);
 });
 
 test('test rejects concurrency values that are not positive safe integers', async context => {

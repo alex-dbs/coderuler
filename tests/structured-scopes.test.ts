@@ -58,7 +58,12 @@ function scope(id: string, source: string, lines: LineSpan, data?: unknown): Rec
 }
 
 const project = createProject(ROOT);
-const projectContext: ProjectContext = { project, goLsp: createRunLsp(project).tools, trace: () => {} };
+const projectContext: ProjectContext = {
+  project,
+  goLsp: createRunLsp(project).tools,
+  rubyLsp: createRunLsp(project).tools,
+  trace: () => {},
+};
 function collect<T>(
   selector: ScopeSelector<T>,
   source: string,

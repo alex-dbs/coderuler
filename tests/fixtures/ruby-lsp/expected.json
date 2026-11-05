@@ -1,0 +1,56 @@
+{
+  "widgetDefinitions": [
+    {
+      "path": "lib/widget.rb",
+      "line": 2
+    }
+  ],
+  "unicodeWidgetDefinitions": [
+    {
+      "path": "lib/widget.rb",
+      "line": 2
+    }
+  ],
+  "widgetReferences": [
+    {
+      "path": "lib/unicode.rb",
+      "line": 2
+    },
+    {
+      "path": "lib/usage.rb",
+      "line": 4
+    },
+    {
+      "path": "lib/widget.rb",
+      "line": 2
+    }
+  ],
+  "widgetDocumentSymbols": [
+    {
+      "name": "Widget",
+      "kind": 5,
+      "path": "lib/widget.rb",
+      "line": 2
+    },
+    {
+      "name": "self.build",
+      "kind": 12,
+      "path": "lib/widget.rb",
+      "line": 3
+    }
+  ],
+  "widgetWorkspaceSymbols": [
+    {
+      "name": "Widget",
+      "kind": 5,
+      "path": "lib/widget.rb",
+      "line": 2
+    }
+  ],
+  "supportWidgetDefinitions": [
+    {
+      "path": "<dependency>/lib/support_widget.rb",
+      "line": 1
+    }
+  ]
+}

@@ -40,6 +40,7 @@ test('unused and depth-zero LSP facades do not start a backend', async () => {
   });
 
   assert.deepEqual(await facade.tools.callers(target, { depth: 0 }), []);
+  assert.deepEqual(await facade.tools.callees(target, { depth: 0 }), []);
   await assert.rejects(
     facade.tools.callers({ filepath: target.filepath, line: 0 }, { depth: 0 }),
     /positive safe integer/,
