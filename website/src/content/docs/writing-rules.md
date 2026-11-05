@@ -199,7 +199,6 @@ class Local extends Rule {
 }
 ```
 
-
 | Project reader | Result |
 | --- | --- |
 | `project.glob(patterns)` | Eligible paths in lexical order |

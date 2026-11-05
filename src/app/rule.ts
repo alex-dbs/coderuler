@@ -209,7 +209,6 @@ export function isInDiff(subject: ScopeSubject<unknown>, context: ProjectContext
   return false;
 }
 
-
 export const RULE_BRAND: symbol = Symbol.for('coderuler.Rule');
 
 export abstract class Rule<T = JsonValue> {

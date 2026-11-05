@@ -106,7 +106,6 @@ function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-
 function createTextIndex(text: string): TextIndex {
   const lineStarts = [0];
   const lineEnds: number[] = [];
@@ -510,7 +509,6 @@ export async function createLspBackend(
     return documentForPath(canonicalPathFromUri(uri), includeDependencies);
   };
 
-
   const filterLocations = (result: unknown, includeDependencies: boolean): readonly Location[] =>
     normalizeLocations(result).filter(location => isAllowedUri(location.uri, includeDependencies));
 
@@ -548,7 +546,6 @@ export async function createLspBackend(
       end: { line: native.end.line, character: native.end.column },
     };
   };
-
 
   const rangeOffsets = (document: Document, range: Range): { readonly start: number; readonly end: number } => {
     const start = document.index.offset(range.start);

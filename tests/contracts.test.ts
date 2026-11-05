@@ -237,16 +237,14 @@ function expectThrows(label: string, run: () => unknown): void {
 
 test('isDiffMode detects available diff data', () => {
   const cases: readonly (readonly [string, ProjectContext, boolean])[] = [
-    ['no diff data', { project: new MemoryProject(), trace: () => {} }, false],
+    ['no diff data', projectContext(), false],
     ['changedFiles is present', {
-      project: new MemoryProject(),
+      ...projectContext(),
       changedFiles: new Set<string>(),
-      trace: () => {},
     }, true],
     ['changedLines is present', {
-      project: new MemoryProject(),
+      ...projectContext(),
       changedLines: new Map(),
-      trace: () => {},
     }, true],
   ];
 
@@ -276,9 +274,8 @@ test('isInDiff matches inclusive changed-line ranges', () => {
 
   for (const [label, ranges, expected] of cases) {
     const context: ProjectContext = {
-      project: new MemoryProject(),
+      ...projectContext(),
       changedLines: new Map([['src/a.ts', ranges]]),
-      trace: () => {},
     };
     assert.equal(isInDiff(subject, context), expected, label);
   }
@@ -292,22 +289,19 @@ test('isInDiff requires scope lines and known changed-line ranges', () => {
     lines: { start: 5, end: 7 },
   });
   const contexts: readonly (readonly [string, ProjectContext])[] = [
-    ['absent changedLines map', { project: new MemoryProject(), trace: () => {} }],
+    ['absent changedLines map', projectContext()],
     ['empty changedLines map', {
-      project: new MemoryProject(),
+      ...projectContext(),
       changedLines: new Map(),
-      trace: () => {},
     }],
     ['another filepath only', {
-      project: new MemoryProject(),
+      ...projectContext(),
       changedLines: new Map([['src/b.ts', [{ start: 5, end: 7 }]]]),
-      trace: () => {},
     }],
     ['changed filepath missing from map', {
-      project: new MemoryProject(),
+      ...projectContext(),
       changedFiles: new Set(['src/a.ts']),
       changedLines: new Map(),
-      trace: () => {},
     }],
   ];
 
@@ -316,14 +310,12 @@ test('isInDiff requires scope lines and known changed-line ranges', () => {
   }
 
   const knownRanges: ProjectContext = {
-    project: new MemoryProject(),
+    ...projectContext(),
     changedLines: new Map([['src/a.ts', [{ start: 5, end: 7 }]]]),
-    trace: () => {},
   };
   const subjectWithoutLines = scopeSubject({ filepath: 'src/a.ts', id: 'function', source: 'function' });
   assert.equal(isInDiff(subjectWithoutLines, knownRanges), false);
 });
-
 
 test('Rule exposes its documented defaults', async () => {
   const rule = new DefaultsRule();

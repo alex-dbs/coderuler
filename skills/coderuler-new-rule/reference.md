@@ -353,7 +353,6 @@ export default class Local extends Rule {
 }
 ```
 
-
 Use `trace` for decision evidence visible during inspection; keep normal execution free of ad-hoc console output. AI/regex projection callbacks receive only `ProjectContext`, not the full check context.
 
 `context.goLsp` provides Go-to-definition, declaration, type-definition, implementation, reference, hover, document-symbol, workspace-symbol, caller, and callee queries. LSP use is optional; install Go and `gopls` only if a rule calls these helpers. Declaration lookup is part of the cross-backend API, but gopls v0.24.0 does not support it, so that query rejects.
