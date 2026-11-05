@@ -1,0 +1,84 @@
+{
+  "widgetDefinitions": [
+    { "path": "src/widget.ts", "line": 5 }
+  ],
+  "widgetTypeDefinitions": [
+    { "path": "src/widget.ts", "line": 5 }
+  ],
+  "builderImplementations": [
+    { "path": "src/widget.ts", "line": 5 }
+  ],
+  "widgetReferencesWithDeclaration": [
+    { "path": "src/unicode.ts", "line": 1 },
+    { "path": "src/unicode.ts", "line": 2 },
+    { "path": "src/usage.ts", "line": 1 },
+    { "path": "src/usage.ts", "line": 4 },
+    { "path": "src/widget.ts", "line": 5 }
+  ],
+  "widgetReferencesWithoutDeclaration": [
+    { "path": "src/unicode.ts", "line": 2 },
+    { "path": "src/usage.ts", "line": 4 }
+  ],
+  "widgetDocumentSymbols": [
+    { "name": "Builder", "kind": 11, "path": "src/widget.ts", "line": 1 },
+    { "name": "build", "kind": 6, "path": "src/widget.ts", "line": 2 },
+    { "name": "Widget", "kind": 5, "path": "src/widget.ts", "line": 5 },
+    { "name": "build", "kind": 6, "path": "src/widget.ts", "line": 6 },
+    { "name": "leaf", "kind": 12, "path": "src/widget.ts", "line": 11 },
+    { "name": "label", "kind": 12, "path": "src/widget.ts", "line": 15 }
+  ],
+  "widgetWorkspaceSymbols": [
+    { "name": "unicodeWidget", "kind": 13, "path": "src/unicode.ts", "line": 2 },
+    { "name": "Widget", "kind": 5, "path": "src/widget.ts", "line": 5 }
+  ],
+  "tsxLabelDefinitions": [
+    { "path": "src/widget.ts", "line": 15 }
+  ],
+  "unicodeWidgetDefinitions": [
+    { "path": "src/widget.ts", "line": 5 }
+  ],
+  "moduleValueDefinitions": [
+    { "path": "src/module.mts", "line": 1 }
+  ],
+  "commonValueDefinitions": [
+    { "path": "src/common.cts", "line": 1 }
+  ],
+  "hoverIdentifiesWidget": true,
+  "runCalleesDepth2": [
+    {
+      "name": "build",
+      "path": "src/widget.ts",
+      "depth": 1,
+      "source": "build(): string {\n    return leaf();\n  }",
+      "lines": { "start": 6, "end": 8 }
+    },
+    {
+      "name": "leaf",
+      "path": "src/widget.ts",
+      "depth": 2,
+      "source": "export function leaf(): string {\n  return 'widget';\n}",
+      "lines": { "start": 11, "end": 13 }
+    }
+  ],
+  "leafCallersDepth2": [
+    {
+      "name": "build",
+      "path": "src/widget.ts",
+      "depth": 1,
+      "source": "build(): string {\n    return leaf();\n  }",
+      "lines": { "start": 6, "end": 8 }
+    },
+    {
+      "name": "run",
+      "path": "src/usage.ts",
+      "depth": 2,
+      "source": "export function run(): string {\n  return widget.build();\n}",
+      "lines": { "start": 5, "end": 7 }
+    }
+  ],
+  "externalDefinitions": [],
+  "externalDependencyDefinitions": [
+    { "path": "<dependency>/index.ts", "line": 1 }
+  ],
+  "nonSymbolDefinitions": []
+}

@@ -2906,12 +2906,14 @@ test('nested selection failure is recorded before sibling LSP work is aborted', 
   assert.deepEqual(eventsOfType(harness.events, 'error').map(event => event.message)[0], failure.message);
 });
 
-test('Ruby-only work starts only Ruby LSP, and one run can start both language backends', async () => {
+test('Ruby-only and TypeScript-only work start only their own LSP, and mixed work starts all three', async () => {
   const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }));
   let goStarts = 0;
   let rubyStarts = 0;
+  let typescriptStarts = 0;
   let goCloses = 0;
   let rubyCloses = 0;
+  let typescriptCloses = 0;
   const context: RunContext = {
     ...harness.context,
     createLspBackend: async () => {
@@ -2921,6 +2923,10 @@ test('Ruby-only work starts only Ruby LSP, and one run can start both language b
     createRubyLspBackend: async () => {
       rubyStarts += 1;
       return lifecycleBackend(async () => { rubyCloses += 1; });
+    },
+    createTypescriptLspBackend: async () => {
+      typescriptStarts += 1;
+      return lifecycleBackend(async () => { typescriptCloses += 1; });
     },
   };
 
@@ -2935,39 +2941,66 @@ test('Ruby-only work starts only Ruby LSP, and one run can start both language b
   assert.equal(rubyStarts, 1);
   assert.equal(goCloses, 0);
   assert.equal(rubyCloses, 1);
+  const typescriptOnly = new TestRule({
+    when: async projectContext => {
+      await projectContext.typescriptLsp.hover({ filepath: 'a.ts', line: 1 });
+      return true;
+    },
+  });
+  await executeRules([loaded('typescript-only', typescriptOnly)], context);
+  assert.equal(goStarts, 0, 'TypeScript-only work must not start the Go server');
+  assert.equal(rubyStarts, 1, 'TypeScript-only work must not start the Ruby server');
+  assert.equal(typescriptStarts, 1);
+  assert.equal(goCloses, 0);
+  assert.equal(rubyCloses, 1, 'TypeScript-only work must not close a Ruby server it did not start');
+  assert.equal(typescriptCloses, 1);
 
   const both = new TestRule({
     when: async projectContext => {
       await Promise.all([
         projectContext.goLsp.hover({ filepath: 'a.go', line: 1 }),
         projectContext.rubyLsp.hover({ filepath: 'a.rb', line: 1 }),
+        projectContext.typescriptLsp.hover({ filepath: 'a.ts', line: 1 }),
       ]);
       return true;
     },
   });
-  await executeRules([loaded('both-languages', both)], context);
+  await executeRules([loaded('mixed-languages', both)], context);
   assert.equal(goStarts, 1);
   assert.equal(rubyStarts, 2);
+  assert.equal(typescriptStarts, 2);
   assert.equal(goCloses, 1);
   assert.equal(rubyCloses, 2);
+  assert.equal(typescriptCloses, 2);
 });
 
-test('a rule failure aborts pending Ruby work before the run drains it', { timeout: 5000 }, async () => {
+test('a rule failure aborts pending Ruby and TypeScript work before the run drains it', { timeout: 5000 }, async () => {
   const failure = new Error('Ruby-backed check failed');
   const requestStarted = Promise.withResolvers<void>();
+  const typescriptRequestStarted = Promise.withResolvers<void>();
   const requestSettled = Promise.withResolvers<void>();
+  const typescriptRequestSettled = Promise.withResolvers<void>();
   let aborted = false;
+  let typescriptAborted = false;
   let closes = 0;
+  let typescriptCloses = 0;
+  const lifecycle: string[] = [];
   const rule = new TestRule({
     files: ['a.txt'],
     scope: changedLineScope,
     check: async (subject, context) => {
       if (subject.kind !== 'scope') return pass();
       if (subject.source === 'fail') {
-        await context.rubyLsp.hover({ filepath: 'a.rb', line: 2 });
+        await Promise.all([
+          context.rubyLsp.hover({ filepath: 'a.rb', line: 2 }),
+          context.typescriptLsp.hover({ filepath: 'a.ts', line: 2 }),
+        ]);
         throw failure;
       }
-      await context.rubyLsp.hover({ filepath: 'a.rb', line: 1 });
+      await Promise.all([
+        context.rubyLsp.hover({ filepath: 'a.rb', line: 1 }),
+        context.typescriptLsp.hover({ filepath: 'a.ts', line: 1 }),
+      ]);
       return pass();
     },
   });
@@ -2975,33 +3008,69 @@ test('a rule failure aborts pending Ruby work before the run drains it', { timeo
   const context: RunContext = {
     ...harness.context,
     createRubyLspBackend: async (_project, signal) => ({
-      ...lifecycleBackend(async () => { closes += 1; }),
+      ...lifecycleBackend(async () => {
+        closes += 1;
+        lifecycle.push('ruby-close');
+      }),
       hover: async target => {
         if (target.line === 1) {
           const pending = Promise.withResolvers<null>();
           signal.addEventListener('abort', () => {
             aborted = true;
+            lifecycle.push('ruby-abort');
             pending.reject(new Error('Ruby LSP request aborted'));
           }, { once: true });
           requestStarted.resolve();
-          return pending.promise.finally(() => requestSettled.resolve());
+          return pending.promise.finally(() => {
+            lifecycle.push('ruby-settled');
+            requestSettled.resolve();
+          });
         }
         await requestStarted.promise;
+        return null;
+      },
+    }),
+    createTypescriptLspBackend: async (_project, signal) => ({
+      ...lifecycleBackend(async () => {
+        typescriptCloses += 1;
+        lifecycle.push('typescript-close');
+      }),
+      hover: async target => {
+        if (target.line === 1) {
+          const pending = Promise.withResolvers<null>();
+          signal.addEventListener('abort', () => {
+            typescriptAborted = true;
+            lifecycle.push('typescript-abort');
+            pending.reject(new Error('TypeScript LSP request aborted'));
+          }, { once: true });
+          typescriptRequestStarted.resolve();
+          return pending.promise.finally(() => {
+            lifecycle.push('typescript-settled');
+            typescriptRequestSettled.resolve();
+          });
+        }
+        await typescriptRequestStarted.promise;
         return null;
       },
     }),
   };
 
   await assert.rejects(
-    () => executeRules([loaded('ruby-failure-before-drain', rule)], context),
+    () => executeRules([loaded('ruby-typescript-failure-before-drain', rule)], context),
     error => error === failure,
   );
-  await requestSettled.promise;
+  await Promise.all([requestSettled.promise, typescriptRequestSettled.promise]);
   assert.equal(aborted, true, 'pending Ruby work must observe run cancellation');
+  assert.equal(typescriptAborted, true, 'pending TypeScript work must observe run cancellation');
   assert.equal(closes, 1);
+  assert.equal(typescriptCloses, 1);
+  const firstClose = Math.min(lifecycle.indexOf('ruby-close'), lifecycle.indexOf('typescript-close'));
+  for (const event of ['ruby-abort', 'typescript-abort', 'ruby-settled', 'typescript-settled']) {
+    assert.ok(lifecycle.indexOf(event) < firstClose, `${event} must happen before either backend closes`);
+  }
 });
 
-test('run cleanup closes both language backends and preserves primary or standalone failures', async () => {
+test('run cleanup closes all three language backends and preserves primary or standalone failures', async () => {
   const project = new MemoryProject('/repo', { 'a.txt': 'A' });
   const ruleFailure = new Error('check failed');
   const closeFailure = new Error('Go backend close failed');
@@ -3013,6 +3082,7 @@ test('run cleanup closes both language backends and preserves primary or standal
         await Promise.all([
           context.goLsp.hover({ filepath: 'a.go', line: 1 }),
           context.rubyLsp.hover({ filepath: 'a.rb', line: 1 }),
+          context.typescriptLsp.hover({ filepath: 'a.ts', line: 1 }),
         ]);
         return true;
       },
@@ -3031,13 +3101,16 @@ test('run cleanup closes both language backends and preserves primary or standal
       createRubyLspBackend: async () => lifecycleBackend(async () => {
         closed.push('ruby');
       }),
+      createTypescriptLspBackend: async () => lifecycleBackend(async () => {
+        closed.push('typescript');
+      }),
     };
 
     await assert.rejects(
-      () => executeRules([loaded('close-both-languages', rule)], context),
+      () => executeRules([loaded('close-all-languages', rule)], context),
       error => error === (failsInRule ? ruleFailure : closeFailure),
     );
-    assert.deepEqual([...closed].sort(), ['go', 'ruby'], 'Ruby must still close when Go cleanup fails');
+    assert.deepEqual(closed, ['go', 'ruby', 'typescript'], 'Ruby and TypeScript must still close when the first cleanup fails');
   }
 });
 

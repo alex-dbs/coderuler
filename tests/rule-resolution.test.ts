@@ -711,7 +711,7 @@ function startWorker(prelude = ''): Worker {
 
 async function requestWorker(
   worker: Worker,
-  request: Omit<RuleTestWorkerRequest, 'lspPort' | 'rubyLspPort'>,
+  request: Omit<RuleTestWorkerRequest, 'lspPort' | 'rubyLspPort' | 'typescriptLspPort'>,
 ): Promise<RuleTestWorkerMessage> {
   const result = Promise.withResolvers<RuleTestWorkerMessage>();
   const onMessage = (message: RuleTestWorkerMessage) => {
@@ -719,19 +719,30 @@ async function requestWorker(
   };
   const onError = (error: Error) => result.reject(error);
   const onExit = (code: number) => result.reject(new Error(`Worker exited before a result: ${code}`));
-  const channel = new MessageChannel();
-  const rubyChannel = new MessageChannel();
-  const project = createProject(request.root, { excludeFiles: [request.ruleFile] });
-  const host = createRuleTestLspHost(channel.port1, project);
-  const rubyHost = createRuleTestLspHost(rubyChannel.port1, project);
+  let channel: MessageChannel | undefined;
+  let rubyChannel: MessageChannel | undefined;
+  let typescriptChannel: MessageChannel | undefined;
+  let host: { close(): Promise<void> } | undefined;
+  let rubyHost: { close(): Promise<void> } | undefined;
+  let typescriptHost: { close(): Promise<void> } | undefined;
+  let transferred = false;
   worker.on('message', onMessage);
   worker.on('error', onError);
   worker.on('exit', onExit);
-  let transferred = false;
   try {
+    channel = new MessageChannel();
+    rubyChannel = new MessageChannel();
+    typescriptChannel = new MessageChannel();
+    const project = createProject(request.root, { excludeFiles: [request.ruleFile] });
+    host = createRuleTestLspHost(channel.port1, project);
+    rubyHost = createRuleTestLspHost(rubyChannel.port1, project);
+    typescriptHost = createRuleTestLspHost(typescriptChannel.port1, project);
     worker.postMessage(
-      { ...request, lspPort: channel.port2, rubyLspPort: rubyChannel.port2 } satisfies RuleTestWorkerRequest,
-      [channel.port2, rubyChannel.port2],
+      {
+        ...request, lspPort: channel.port2, rubyLspPort: rubyChannel.port2,
+        typescriptLspPort: typescriptChannel.port2,
+      } satisfies RuleTestWorkerRequest,
+      [channel.port2, rubyChannel.port2, typescriptChannel.port2],
     );
     transferred = true;
     return await result.promise;
@@ -740,15 +751,21 @@ async function requestWorker(
     worker.off('error', onError);
     worker.off('exit', onExit);
     try {
-      const closes = await Promise.allSettled([host.close(), rubyHost.close()]);
+      const closes = await Promise.allSettled(
+        [host, rubyHost, typescriptHost]
+          .filter((item): item is { close(): Promise<void> } => item !== undefined)
+          .map(item => item.close()),
+      );
       const failed = closes.find((result): result is PromiseRejectedResult => result.status === 'rejected');
       if (failed !== undefined) throw failed.reason;
     } finally {
-      channel.port1.close();
-      rubyChannel.port1.close();
+      channel?.port1.close();
+      rubyChannel?.port1.close();
+      typescriptChannel?.port1.close();
       if (!transferred) {
-        channel.port2.close();
-        rubyChannel.port2.close();
+        channel?.port2.close();
+        rubyChannel?.port2.close();
+        typescriptChannel?.port2.close();
       }
     }
   }

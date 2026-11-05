@@ -86,12 +86,15 @@ export async function executeRules(
 ): Promise<readonly RuleReport[]> {
   const goLsp = createRunLsp(context.project, context.createLspBackend);
   const rubyLsp = createRunLsp(context.project, context.createRubyLspBackend);
+  const typescriptLsp = createRunLsp(context.project, context.createTypescriptLspBackend);
   const closeLspSessions = async (): Promise<void> => {
-    const results = await Promise.allSettled([goLsp.close(), rubyLsp.close()]);
+    const results = await Promise.allSettled([goLsp.close(), rubyLsp.close(), typescriptLsp.close()]);
     const goResult = results[0]!;
     if (goResult.status === 'rejected') throw goResult.reason;
     const rubyResult = results[1]!;
     if (rubyResult.status === 'rejected') throw rubyResult.reason;
+    const typescriptResult = results[2]!;
+    if (typescriptResult.status === 'rejected') throw typescriptResult.reason;
   };
   const abortLsp = (): void => { void closeLspSessions().catch(() => undefined); };
   const startedWork = new Set<Promise<unknown>>();
@@ -108,7 +111,7 @@ export async function executeRules(
   };
   let failed = false;
   try {
-    const reports = await executeRun(rules, context, goLsp.tools, rubyLsp.tools, scheduleWork, abortLsp);
+    const reports = await executeRun(rules, context, goLsp.tools, rubyLsp.tools, typescriptLsp.tools, scheduleWork, abortLsp);
     await drainStartedWork();
     return reports;
   } catch (error) {
@@ -130,6 +133,7 @@ async function executeRun(
   context: RunContext,
   goLsp: LspTools,
   rubyLsp: LspTools,
+  typescriptLsp: LspTools,
   scheduleWork: <T>(work: Promise<T>) => Promise<T>,
   abortLsp: () => void,
 ): Promise<readonly RuleReport[]> {
@@ -160,6 +164,7 @@ async function executeRun(
     project: context.project,
     goLsp,
     rubyLsp,
+    typescriptLsp,
     ...(changedFiles === undefined ? {} : { changedFiles }),
     ...(changedLines === undefined ? {} : { changedLines }),
     trace: traceFor(name, evaluationId),

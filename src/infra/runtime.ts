@@ -2,7 +2,7 @@ import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { createLspBackend, createRubyLspBackend } from '../adapter/lsp/backend.js';
+import { createLspBackend, createRubyLspBackend, createTypescriptLspBackend } from '../adapter/lsp/backend.js';
 import { runProgram } from '../adapter/cli/program.js';
 import { terminalCapabilities } from '../adapter/cli/progress.js';
 import type {
@@ -88,6 +88,7 @@ export function createServices(
               ...runContext,
               createLspBackend: runContext.createLspBackend ?? createLspBackend,
               createRubyLspBackend: runContext.createRubyLspBackend ?? createRubyLspBackend,
+              createTypescriptLspBackend: runContext.createTypescriptLspBackend ?? createTypescriptLspBackend,
             }),
           decisionResolver: (thresholdOverride?: number, pricingOverrides?: Partial<TokenPricing>) =>
             settings.createDecisionResolver(env, thresholdOverride, pricingOverrides),
@@ -125,6 +126,7 @@ export function createServices(
               ...runContext,
               createLspBackend: runContext.createLspBackend ?? createLspBackend,
               createRubyLspBackend: runContext.createRubyLspBackend ?? createRubyLspBackend,
+              createTypescriptLspBackend: runContext.createTypescriptLspBackend ?? createTypescriptLspBackend,
             }),
           decisionResolver: (thresholdOverride?: number, pricingOverrides?: Partial<TokenPricing>) =>
             settings.createDecisionResolver(env, thresholdOverride, pricingOverrides),
@@ -137,7 +139,8 @@ export function createServices(
           ...ruleServices,
           testRules: (rules, onResult, timeoutMs, concurrency, includeAI) =>
             runRuleTests(
-              rules, onResult, timeoutMs, concurrency, includeAI, false, createLspBackend, createRubyLspBackend,
+              rules, onResult, timeoutMs, concurrency, includeAI, false,
+              createLspBackend, createRubyLspBackend, createTypescriptLspBackend,
             ),
         };
       },

@@ -176,6 +176,7 @@ export interface ProjectContext {
   readonly project: Project;
   readonly goLsp: LspTools;
   readonly rubyLsp: LspTools;
+  readonly typescriptLsp: LspTools;
   readonly changedFiles?: ReadonlySet<string>;
   readonly changedLines?: ReadonlyMap<string, readonly LineRange[]>;
   trace(message: string, details?: JsonValue): void;

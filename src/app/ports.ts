@@ -99,6 +99,7 @@ export interface RunContext {
   readonly isTarget: (filepath: string) => boolean;
   readonly createLspBackend?: LspBackendFactory;
   readonly createRubyLspBackend?: LspBackendFactory;
+  readonly createTypescriptLspBackend?: LspBackendFactory;
   readonly changedFiles?: ReadonlySet<string>;
   readonly changedLines?: ReadonlyMap<string, readonly LineRange[]>;
   readonly concurrency: number;
