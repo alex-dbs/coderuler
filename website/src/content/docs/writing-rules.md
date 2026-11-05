@@ -126,6 +126,41 @@ A custom function receives the selected subject and a context object. Return `pa
 
 The hooks receive `project` readers and `trace(message, details?)`. `select` also receives `context.select(...)`. Checks also receive `ruleName` and `context.ai(...)`.
 
+`context.goLsp` provides Go-to-definition, declaration, type-definition, implementation, reference, hover, document-symbol, workspace-symbol, caller, and callee queries. LSP use is optional; install Go and `gopls` only if a rule calls these helpers. 
+
+Pass file paths and positive, 1-based line and UTF-16 column coordinates. A column counts UTF-16 code units. Navigation and hover use column 1 when omitted. Caller and callee queries use the enclosing named function or method when the column is omitted. Their required `depth` is a nonnegative integer; depth 1 returns direct neighbors. Set `includeDependencies: true` to include available dependency or standard-library source outside the project; the default is `false`.
+
+Caller and callee results are a static call graph. They can omit dynamic calls and do not load every possible package consumer. Use them as the server's known call relationships, not as a complete runtime graph.
+
+For example, call graph helpers inside an async custom check:
+
+```ts
+import { Rule, pass, scopes, violation } from '@alex-dbs/coderuler';
+import type { Evaluator } from '@alex-dbs/coderuler';
+
+export default class CallGraphCheck extends Rule {
+  files = ['**/*.go'];
+  scope = scopes.astGrep({
+    language: 'go',
+    rule: { any: [{ kind: 'function_declaration' }, { kind: 'method_declaration' }] },
+  });
+
+  check: Evaluator = async (subject, context) => {
+    if (subject.kind !== 'scope' || subject.lines === undefined) return pass();
+    const target = { filepath: subject.filepath, line: subject.lines.start };
+    const [callers, callees] = await Promise.all([
+      context.goLsp.callers(target, { depth: 2 }),
+      context.goLsp.callees(target, { depth: 2, includeDependencies: true }),
+    ]);
+    return callers.length + callees.length === 0
+      ? pass()
+      : violation('Review callers and callees');
+  };
+}
+```
+
+The example assumes `pass` and `violation` are imported from the SDK.
+
 In `--diff` and `--pr` checks, the context also exposes:
 
 ```ts
@@ -161,7 +196,6 @@ class Local extends Rule {
     !isDiffMode(context) || isInDiff(subject, context);
 }
 ```
-
 
 | Project reader | Result |
 | --- | --- |

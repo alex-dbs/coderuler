@@ -5,7 +5,56 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 
+import type { LspBackend, LspBackendFactory } from '../dist/app/ports.js';
+import type { Hover } from '../dist/app/rule.js';
+import { createRuleLoader } from '../dist/adapter/filesystem/rules.js';
+import { runRuleTests } from '../dist/adapter/filesystem/rule-tests.js';
 import { CLI, createSandbox, runCli, writeFile } from './support.ts';
+
+function lspBackend(close: () => void, hover: () => Promise<Hover | null>): LspBackend {
+  return {
+    definitions: async () => [],
+    declarations: async () => [],
+    typeDefinitions: async () => [],
+    implementations: async () => [],
+    references: async () => [],
+    hover,
+    documentSymbols: async () => [],
+    workspaceSymbols: async () => [],
+    callers: async () => [],
+    callees: async () => [],
+    close: async () => { close(); },
+  };
+}
+
+async function loadInlineRule(projectRoot: string, ruleFile: string, source: string) {
+  writeFile(ruleFile, source);
+  const rules = await createRuleLoader().load({
+    root: projectRoot,
+    explicit: ruleFile,
+    invocationCwd: projectRoot,
+  });
+  assert.equal(rules.length, 1);
+  return rules;
+}
+
+function inlineRule(check: string, tests: string, extraImports = ''): string {
+  return `import { Rule, pass, test } from '@alex-dbs/coderuler';
+${extraImports}
+export default class InlineLsp extends Rule {
+  files = ['inputs/*.txt'];
+  check = ${check};
+}
+export const tests = [${tests}];`;
+}
+
+function hoverUntilAbort(signal: AbortSignal): Promise<Hover | null> {
+  const request = Promise.withResolvers<Hover | null>();
+  const rejectOnAbort = () => request.reject(new Error('fake LSP query aborted'));
+  if (signal.aborted) rejectOnAbort();
+  else signal.addEventListener('abort', rejectOnAbort, { once: true });
+  return request.promise;
+}
 
 const sandbox = createSandbox('coderuler-test-pool-');
 after(() => sandbox.cleanup());
@@ -387,6 +436,212 @@ export const tests = [${cases(names.slice(2))}];`);
   assert.equal(recoveredWorkers.has(records[0]!.threadId), false, 'the timed-out worker must be replaced');
   assert.equal(recoveredWorkers.has(records[1]!.threadId), true, 'the healthy worker must remain reusable');
   for (const record of records) assert.equal(existsSync(record.root), false, record.root);
+});
+
+test('inline rule tests close one fresh parent-owned LSP backend per successful case', { timeout: 30_000 }, async () => {
+  const target = sandbox.isolated('parent-lsp-success');
+  const ruleFile = join(target.cwd, '.coderuler', 'lsp.rule.ts');
+  const rules = await loadInlineRule(
+    target.cwd,
+    ruleFile,
+    inlineRule(
+      `async (_subject, context) => { await context.goLsp.hover({ filepath: 'inputs/one.txt', line: 1 }); return pass(); }`,
+      cases(['first', 'second']),
+    ),
+  );
+  const openedRoots: string[] = [];
+  const closedRoots: string[] = [];
+  const rootsAtClose: boolean[] = [];
+  const createBackend: LspBackendFactory = async project => {
+    openedRoots.push(project.root);
+    return lspBackend(() => {
+      closedRoots.push(project.root);
+      rootsAtClose.push(existsSync(project.root));
+    }, async () => null);
+  };
+
+  const results = await runRuleTests(rules, undefined, 10_000, 1, false, false, createBackend);
+  assert.deepEqual(results.map(result => result.actual), ['pass', 'pass']);
+  assert.equal(openedRoots.length, 2);
+  assert.equal(new Set(openedRoots).size, 2, 'each reused-worker case must get its own backend');
+  assert.deepEqual(closedRoots, openedRoots);
+  assert.deepEqual(rootsAtClose, [true, true], 'the parent backend must close before its case root is removed');
+  for (const root of openedRoots) assert.equal(existsSync(root), false, root);
+});
+
+test('inline rule timeout closes a pending parent-owned LSP backend before removing its root', { timeout: 20_000 }, async () => {
+  const target = sandbox.isolated('parent-lsp-timeout');
+  const ruleFile = join(target.cwd, '.coderuler', 'lsp.rule.ts');
+  const rules = await loadInlineRule(
+    target.cwd,
+    ruleFile,
+    inlineRule(
+      `async (_subject, context) => { await context.goLsp.hover({ filepath: 'inputs/one.txt', line: 1 }); return pass(); }`,
+      cases(['pending']),
+    ),
+  );
+  const started = Promise.withResolvers<string>();
+  const closedRoots: string[] = [];
+  const rootsAtClose: boolean[] = [];
+  const createBackend: LspBackendFactory = async (project, signal) => {
+    started.resolve(project.root);
+    return lspBackend(() => {
+      closedRoots.push(project.root);
+      rootsAtClose.push(existsSync(project.root));
+    }, () => hoverUntilAbort(signal));
+  };
+  // This exercises the real worker-thread deadline, which cannot be driven by parent-side fake time.
+  const execution = runRuleTests(rules, undefined, 4_000, 1, false, false, createBackend);
+  const startedOrFinished = await Promise.race([
+    started.promise.then(root => ({ root })),
+    execution.then(() => ({ finished: true }), error => ({ error })),
+  ]);
+  assert.ok('root' in startedOrFinished, 'the case must reach its parent-owned LSP query before timeout');
+  const [result] = await execution;
+  assert.equal(result?.actual, 'timeout');
+  assert.deepEqual(closedRoots, [startedOrFinished.root]);
+  assert.deepEqual(rootsAtClose, [true]);
+  assert.equal(existsSync(startedOrFinished.root), false);
+});
+
+test('inline sibling failure closes a pending parent-owned LSP backend before removing its root', { timeout: 20_000 }, async context => {
+  const target = sandbox.isolated('parent-lsp-sibling-failure');
+  const ruleFile = join(target.cwd, '.coderuler', 'lsp.rule.ts');
+  const gate = await startGate();
+  context.after(() => gate.close());
+  const rules = await loadInlineRule(
+    target.cwd,
+    ruleFile,
+    inlineRule(
+      `async (subject, context) => {
+        if (subject.source === 'sibling') {
+          await waitFor('lsp-started');
+          throw new Error('sibling operational failure');
+        }
+        await context.goLsp.hover({ filepath: 'inputs/one.txt', line: 1 });
+        return pass();
+      }`,
+      `test('pending').withFiles({ 'inputs/one.txt': 'pending' }).passes(),
+test('sibling').withFiles({ 'inputs/one.txt': 'sibling' }).passes()`,
+      gateHelpers(gate.url),
+    ),
+  );
+  const started = Promise.withResolvers<string>();
+  const closedRoots: string[] = [];
+  const rootsAtClose: boolean[] = [];
+  const createBackend: LspBackendFactory = async (project, signal) => {
+    started.resolve(project.root);
+    return lspBackend(() => {
+      closedRoots.push(project.root);
+      rootsAtClose.push(existsSync(project.root));
+    }, () => hoverUntilAbort(signal));
+  };
+  const execution = runRuleTests(rules, undefined, 15_000, 2, false, false, createBackend);
+  const startedOrFinished = await Promise.race([
+    started.promise.then(root => ({ root })),
+    execution.then(() => ({ finished: true }), error => ({ error })),
+  ]);
+  assert.ok('root' in startedOrFinished, 'the pending sibling must start its LSP query before failure');
+  gate.signal('lsp-started');
+  await assert.rejects(execution, /sibling operational failure/);
+  assert.deepEqual(closedRoots, [startedOrFinished.root]);
+  assert.deepEqual(rootsAtClose, [true]);
+  assert.equal(existsSync(startedOrFinished.root), false);
+});
+
+test('inline sibling LSP cleanup failure preserves the first rule failure', { timeout: 20_000 }, async context => {
+  const target = sandbox.isolated('parent-lsp-sibling-cleanup-precedence');
+  const ruleFile = join(target.cwd, '.coderuler', 'lsp.rule.ts');
+  const gate = await startGate();
+  context.after(() => gate.close());
+  const rules = await loadInlineRule(
+    target.cwd,
+    ruleFile,
+    inlineRule(
+      `async (subject, context) => {
+        if (subject.source === 'failure') {
+          await waitFor('lsp-started');
+          throw new Error('first rule failure');
+        }
+        await context.goLsp.hover({ filepath: 'inputs/one.txt', line: 1 });
+        return pass();
+      }`,
+      `test('pending').withFiles({ 'inputs/one.txt': 'pending' }).passes(),
+test('failure').withFiles({ 'inputs/one.txt': 'failure' }).passes()`,
+      gateHelpers(gate.url),
+    ),
+  );
+  const started = Promise.withResolvers<string>();
+  const closedRoots: string[] = [];
+  const createBackend: LspBackendFactory = async (project, signal) => lspBackend(
+    () => {
+      closedRoots.push(project.root);
+      throw new Error('sibling LSP cleanup failure');
+    },
+    () => {
+      started.resolve(project.root);
+      return hoverUntilAbort(signal);
+    },
+  );
+  const execution = runRuleTests(rules, undefined, 15_000, 2, false, false, createBackend);
+  const startedOrFinished = await Promise.race([
+    started.promise.then(root => ({ root })),
+    execution.then(() => ({ finished: true }), error => ({ error })),
+  ]);
+  assert.ok('root' in startedOrFinished, 'the pending sibling must start its LSP query before failure');
+  gate.signal('lsp-started');
+  await assert.rejects(execution, error => {
+    const message = error instanceof Error ? error.message : String(error);
+    assert.match(message, /first rule failure/);
+    assert.doesNotMatch(message, /sibling LSP cleanup failure/);
+    return true;
+  });
+  assert.deepEqual(closedRoots, [startedOrFinished.root]);
+  assert.equal(existsSync(startedOrFinished.root), false);
+});
+
+test('inline rule worker failure takes precedence over parent-owned LSP cleanup failure', { timeout: 20_000 }, async () => {
+  const target = sandbox.isolated('parent-lsp-cleanup-precedence');
+  const ruleFile = join(target.cwd, '.coderuler', 'lsp.rule.ts');
+  const rules = await loadInlineRule(
+    target.cwd,
+    ruleFile,
+    inlineRule(
+      `async (_subject, context) => { await context.goLsp.hover({ filepath: 'inputs/one.txt', line: 1 }); throw new Error('original worker failure'); }`,
+      cases(['failure']),
+    ),
+  );
+  const createBackend: LspBackendFactory = async () => lspBackend(
+    () => { throw new Error('LSP host cleanup failure'); },
+    async () => null,
+  );
+
+  await assert.rejects(
+    runRuleTests(rules, undefined, 10_000, 1, false, false, createBackend),
+    /original worker failure/,
+  );
+});
+
+test('inline rule test reports a standalone parent-owned LSP cleanup failure', { timeout: 20_000 }, async () => {
+  const target = sandbox.isolated('parent-lsp-cleanup-standalone');
+  const ruleFile = join(target.cwd, '.coderuler', 'lsp.rule.ts');
+  const rules = await loadInlineRule(
+    target.cwd,
+    ruleFile,
+    inlineRule(
+      `async (_subject, context) => { await context.goLsp.hover({ filepath: 'inputs/one.txt', line: 1 }); return pass(); }`,
+      cases(['success']),
+    ),
+  );
+  const createBackend: LspBackendFactory = async () => lspBackend(
+    () => { throw new Error('standalone LSP cleanup failure'); },
+    async () => null,
+  );
+
+  await assert.rejects(
+    runRuleTests(rules, undefined, 10_000, 1, false, false, createBackend),
+    /standalone LSP cleanup failure/,
+  );
 });
 
 test('test rejects concurrency values that are not positive safe integers', async context => {

@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+import { createLspBackend } from '../adapter/lsp/backend.js';
 import { runProgram } from '../adapter/cli/program.js';
 import { terminalCapabilities } from '../adapter/cli/progress.js';
 import type {
@@ -82,7 +83,11 @@ export function createServices(
           ...ruleServices,
           createProject: project.createProject,
           resolveTarget: project.resolveTarget,
-          runRules: execution.executeRules,
+          runRules: (rules, runContext) =>
+            execution.executeRules(rules, {
+              ...runContext,
+              createLspBackend: runContext.createLspBackend ?? createLspBackend,
+            }),
           decisionResolver: (thresholdOverride?: number, pricingOverrides?: Partial<TokenPricing>) =>
             settings.createDecisionResolver(env, thresholdOverride, pricingOverrides),
           async collectChanges(root: string, base: string) {
@@ -114,7 +119,11 @@ export function createServices(
           ...ruleServices,
           createProject: project.createProject,
           resolveTarget: project.resolveTarget,
-          runRules: execution.executeRules,
+          runRules: (rules, runContext) =>
+            execution.executeRules(rules, {
+              ...runContext,
+              createLspBackend: runContext.createLspBackend ?? createLspBackend,
+            }),
           decisionResolver: (thresholdOverride?: number, pricingOverrides?: Partial<TokenPricing>) =>
             settings.createDecisionResolver(env, thresholdOverride, pricingOverrides),
         };
@@ -125,7 +134,7 @@ export function createServices(
         return {
           ...ruleServices,
           testRules: (rules, onResult, timeoutMs, concurrency, includeAI) =>
-            runRuleTests(rules, onResult, timeoutMs, concurrency, includeAI),
+            runRuleTests(rules, onResult, timeoutMs, concurrency, includeAI, false, createLspBackend),
         };
       },
       async update(_context: CliContext) {

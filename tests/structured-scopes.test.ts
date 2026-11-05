@@ -8,6 +8,7 @@ import { json, parseJson } from '../dist/adapter/scope/json.js';
 import { yaml, parseYaml } from '../dist/adapter/scope/yaml.js';
 import { wholeFileScope } from '../dist/app/selection.js';
 import type { ProjectContext, ScopeMatch, ScopeSelector, SourceFile } from '../dist/index.js';
+import { createRunLsp } from '../dist/app/lsp.js';
 import { ROOT } from './support.ts';
 
 interface LineSpan {
@@ -56,7 +57,8 @@ function scope(id: string, source: string, lines: LineSpan, data?: unknown): Rec
   return { id, source, data, lines };
 }
 
-const projectContext: ProjectContext = { project: createProject(ROOT), trace: () => {} };
+const project = createProject(ROOT);
+const projectContext: ProjectContext = { project, goLsp: createRunLsp(project).tools, trace: () => {} };
 function collect<T>(
   selector: ScopeSelector<T>,
   source: string,

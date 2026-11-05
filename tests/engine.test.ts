@@ -17,6 +17,7 @@ import type {
   Grouping,
   GroupSubject,
   JsonValue,
+  LspBackend,
   LoadedRule,
   PredicateResult,
   Project,
@@ -237,6 +238,22 @@ async function runRule(
   assert.equal(reports.length, 1);
   assert.ok(Number.isFinite(report.durationMs) && report.durationMs >= 0);
   return { report, harness };
+}
+
+function lifecycleBackend(close: () => Promise<void>): LspBackend {
+  return {
+    definitions: async () => [],
+    declarations: async () => [],
+    typeDefinitions: async () => [],
+    implementations: async () => [],
+    references: async () => [],
+    hover: async () => null,
+    documentSymbols: async () => [],
+    workspaceSymbols: async () => [],
+    callers: async () => [],
+    callees: async () => [],
+    close,
+  };
 }
 
 function eventsOfType<K extends RunEvent['type']>(
@@ -2147,37 +2164,57 @@ test('concurrent duplicate subjects retain task IDs across traces, selections, A
   assertEvaluationLifecycle(harness.events);
 });
 
-test('stage traces and failures remain outside evaluations even after another rule was selected', async () => {
+test('run cleanup closes the LSP backend after gate, selection, filter, and grouping failures', async () => {
   const project = new MemoryProject('/repo', { 'a.txt': 'A' });
   const trace = (context: ProjectContext) => { context.trace('setup'); };
   for (const stage of ['when', 'select', 'filter', 'group'] as const) {
     const failure = new Error(`${stage} failed`);
     const rule = new TestRule({
       files: ['a.txt'],
-      when: context => {
+      when: async context => {
         trace(context);
-        if (stage === 'when') throw failure;
+        if (stage === 'when') {
+          await context.goLsp.hover({ filepath: 'a.go', line: 1 });
+          throw failure;
+        }
         return true;
       },
       select: async context => {
         trace(context);
-        if (stage === 'select') throw failure;
+        if (stage === 'select') {
+          await context.goLsp.hover({ filepath: 'a.go', line: 1 });
+          throw failure;
+        }
         return context.select({ files: ['a.txt'] });
       },
-      filter: (_subject, context) => {
+      filter: async (_subject, context) => {
         trace(context);
+        if (stage === 'filter' || stage === 'group') {
+          await context.goLsp.hover({ filepath: 'a.go', line: 1 });
+        }
         if (stage === 'filter') throw failure;
         return true;
       },
     });
     if (stage === 'group') rule.group = null as unknown as Grouping;
     const harness = new Harness(project);
+    let starts = 0;
+    let closes = 0;
+    const context: RunContext = {
+      ...harness.context,
+      createLspBackend: async () => {
+        starts += 1;
+        return lifecycleBackend(async () => { closes += 1; });
+      },
+    };
 
     await assert.rejects(() => executeRules([
       loaded('selected-first', new TestRule({ files: ['a.txt'] })),
       loaded('failing-stage', rule),
-    ], harness.context), stage === 'group' ? /./ : error => error === failure);
+    ], context), stage === 'group' ? /./ : error => error === failure);
 
+    assert.equal(starts, 1);
+    assert.equal(closes, 1);
     assert.equal(eventsOfType(harness.events, 'evaluation').length, 0);
     const errors = eventsOfType(harness.events, 'error');
     assert.equal(errors.length, 1);
@@ -2189,6 +2226,765 @@ test('stage traces and failures remain outside evaluations even after another ru
     assert.ok(eventsOfType(harness.events, 'file').every(event => !Object.hasOwn(event, 'evaluationId')));
     assertEvaluationLifecycle(harness.events);
   }
+});
+
+test('a selection failure aborts sibling LSP work before selection workers drain', { timeout: 5000 }, async () => {
+  const failure = new Error('selector failed');
+  const requestStarted = Promise.withResolvers<void>();
+  const requestSettled = Promise.withResolvers<void>();
+  let closes = 0;
+  const project = new MemoryProject('/repo', { 'a-fail.txt': 'fail', 'b-wait.txt': 'wait' });
+  const rule = new TestRule({
+    files: ['*.txt'],
+    scope: async (file, context) => {
+      if (file.filepath === 'a-fail.txt') {
+        await requestStarted.promise;
+        throw failure;
+      }
+      assert.ok(context);
+      await context.goLsp.hover({ filepath: file.filepath, line: 1 });
+      return [];
+    },
+  });
+  const harness = new Harness(project, { concurrency: 2 });
+  const context: RunContext = {
+    ...harness.context,
+    createLspBackend: async (_project, signal) => ({
+      ...lifecycleBackend(async () => { closes += 1; }),
+      hover: async () => {
+        const request = Promise.withResolvers<null>();
+        signal.addEventListener('abort', () => request.reject(new Error('LSP request aborted')), { once: true });
+        requestStarted.resolve();
+        return request.promise.finally(() => requestSettled.resolve());
+      },
+    }),
+  };
+
+  await assert.rejects(
+    () => executeRules([loaded('selection-lsp-failure', rule)], context),
+    error => error === failure,
+  );
+  await requestSettled.promise;
+  assert.equal(closes, 1);
+});
+
+test('the first concurrent check failure aborts pending LSP work before draining siblings', { timeout: 5000 }, async () => {
+  const failure = new Error('concurrent check failed');
+  const requestStarted = Promise.withResolvers<void>();
+  let closes = 0;
+  const project = new MemoryProject('/repo', { 'a.txt': 'waiting\nfail' });
+  const rule = new TestRule({
+    files: ['a.txt'],
+    scope: changedLineScope,
+    check: async (subject, context) => {
+      if (subject.kind !== 'scope') return pass();
+      if (subject.source === 'fail') {
+        await context.goLsp.hover({ filepath: 'a.txt', line: 2 });
+        throw failure;
+      }
+      await context.goLsp.hover({ filepath: 'a.txt', line: 1 });
+      return pass();
+    },
+  });
+  const harness = new Harness(project, { concurrency: 2 });
+  const context: RunContext = {
+    ...harness.context,
+    createLspBackend: async (_project, signal) => ({
+      ...lifecycleBackend(async () => { closes += 1; }),
+      hover: async target => {
+        if (target.line === 1) {
+          const pending = Promise.withResolvers<null>();
+          signal.addEventListener('abort', () => pending.reject(new Error('LSP request aborted')), { once: true });
+          requestStarted.resolve();
+          return pending.promise;
+        }
+        await requestStarted.promise;
+        return null;
+      },
+    }),
+  };
+
+  await assert.rejects(
+    () => executeRules([loaded('concurrent-lsp-failure', rule)], context),
+    error => error === failure,
+  );
+  assert.equal(closes, 1);
+});
+
+test('a failing check closes LSP before draining a pending AI input', { timeout: 5000 }, async () => {
+  const failure = new Error('check failed while AI input is pending');
+  const requestStarted = Promise.withResolvers<void>();
+  const requestSettled = Promise.withResolvers<void>();
+  let inputSettled = false;
+  let closes = 0;
+  const rule = new TestRule({
+    files: ['a.txt'],
+    check: async (_subject, context) => {
+      void context.ai({
+        rule: 'pending input',
+        input: async (_subject, projectContext) => {
+          try {
+            await projectContext.goLsp.hover({ filepath: 'a.txt', line: 1 });
+            return null;
+          } finally {
+            inputSettled = true;
+          }
+        },
+      });
+      await requestStarted.promise;
+      throw failure;
+    },
+  });
+  const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }));
+  const context: RunContext = {
+    ...harness.context,
+    createLspBackend: async (_project, signal) => ({
+      ...lifecycleBackend(async () => { closes += 1; }),
+      hover: async () => {
+        const request = Promise.withResolvers<null>();
+        signal.addEventListener('abort', () => request.reject(new Error('LSP request aborted')), { once: true });
+        requestStarted.resolve();
+        return request.promise.finally(() => requestSettled.resolve());
+      },
+    }),
+  };
+
+  await assert.rejects(
+    () => executeRules([loaded('pending-ai-input', rule)], context),
+    error => error instanceof Error && error === failure && error.message === 'check failed while AI input is pending',
+  );
+  await requestSettled.promise;
+  assert.equal(inputSettled, true);
+  assert.equal(closes, 1);
+});
+
+test('accounting failure during AI drain aborts a sibling LSP input', { timeout: 5000 }, async () => {
+  const requestStarted = Promise.withResolvers<void>();
+  const requestSettled = Promise.withResolvers<void>();
+  const overflowInputStarted = Promise.withResolvers<void>();
+  const releaseOverflowInput = Promise.withResolvers<void>();
+  let inputSettled = false;
+  let closes = 0;
+  const rule = new TestRule({
+    files: ['a.txt'],
+    check: async (_subject, context) => {
+      await context.ai({ rule: 'Baseline usage' });
+      void context.ai({
+        rule: 'LSP-backed input',
+        input: async (_subject, projectContext) => {
+          try {
+            await projectContext.goLsp.hover({ filepath: 'a.txt', line: 1 });
+            return null;
+          } finally {
+            inputSettled = true;
+          }
+        },
+      });
+      void context.ai({
+        rule: 'Overflow input',
+        input: async () => {
+          overflowInputStarted.resolve();
+          await releaseOverflowInput.promise;
+          return null;
+        },
+      });
+      await Promise.all([requestStarted.promise, overflowInputStarted.promise]);
+      setImmediate(() => releaseOverflowInput.resolve());
+      return pass();
+    },
+  });
+  const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }));
+  harness.backend.usages = [
+    { inputTokens: Number.MAX_SAFE_INTEGER, outputTokens: 0 },
+    { inputTokens: 1, outputTokens: 0 },
+  ];
+  const context: RunContext = {
+    ...harness.context,
+    createLspBackend: async (_project, signal) => ({
+      ...lifecycleBackend(async () => { closes += 1; }),
+      hover: async () => {
+        const request = Promise.withResolvers<null>();
+        signal.addEventListener('abort', () => request.reject(new Error('LSP request aborted')), { once: true });
+        requestStarted.resolve();
+        void request.promise.then(() => requestSettled.resolve(), () => requestSettled.resolve());
+        return request.promise;
+      },
+    }),
+  };
+
+  let failure: unknown;
+  await assert.rejects(() => executeRules([loaded('accounting-during-ai-drain', rule)], context), error => {
+    failure = error;
+    return error instanceof Error && /inputTokens/.test(error.message);
+  });
+  await requestSettled.promise;
+  assert.ok(failure instanceof Error);
+  assert.equal(inputSettled, true);
+  assert.equal(closes, 1);
+  assert.deepEqual(eventsOfType(harness.events, 'error').map(event => [event.stage, event.message]), [
+    ['check', failure.message],
+  ]);
+  assertEvaluationLifecycle(harness.events);
+});
+
+test('a nested multi-file selector failure aborts sibling LSP work promptly', { timeout: 5000 }, async () => {
+  const failure = new Error('nested selector failed');
+  const hoverStarted = Promise.withResolvers<void>();
+  const releaseAfterDeadline = Promise.withResolvers<void>();
+  const releaseHover = Promise.withResolvers<null>();
+  const requestSettled = Promise.withResolvers<void>();
+  let hoverInvoked = false;
+  let hoverAborted = false;
+  let promptDeadlineExpired = false;
+  let closes = 0;
+  const rule = new TestRule({
+    files: ['entry.txt'],
+    check: async (_subject, context) => {
+      await context.select({
+        files: ['nested/*.go'],
+        scope: async (file, projectContext) => {
+          if (file.filepath === 'nested/a.go') {
+            await Promise.race([hoverStarted.promise, releaseAfterDeadline.promise]);
+            throw failure;
+          }
+          assert.ok(projectContext);
+          await projectContext.goLsp.hover({ filepath: file.filepath, line: 1 });
+          return [];
+        },
+      });
+      return pass();
+    },
+  });
+  const harness = new Harness(new MemoryProject('/repo', {
+    'entry.txt': 'entry',
+    'nested/a.go': 'fail',
+    'nested/b.go': 'wait',
+  }), { concurrency: 2 });
+  const context: RunContext = {
+    ...harness.context,
+    createLspBackend: async (_project, signal) => ({
+      ...lifecycleBackend(async () => { closes += 1; }),
+      hover: async () => {
+        hoverInvoked = true;
+        const request = Promise.withResolvers<null>();
+        const onAbort = () => {
+          hoverAborted = true;
+          request.reject(new Error('LSP request aborted'));
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+        void releaseHover.promise.then(value => request.resolve(value));
+        hoverStarted.resolve();
+        return request.promise.finally(() => {
+          signal.removeEventListener('abort', onAbort);
+          requestSettled.resolve();
+        });
+      },
+    }),
+  };
+  // This watchdog only resolves a stuck backend request after the prompt deadline so a deadlock cannot hang the test.
+  const cleanupTimer = setTimeout(() => {
+    promptDeadlineExpired = true;
+    releaseAfterDeadline.resolve();
+    releaseHover.resolve(null);
+  }, 1000);
+
+  try {
+    await assert.rejects(
+      () => executeRules([loaded('nested-selector-deadlock', rule)], context),
+      error => error === failure,
+    );
+  } finally {
+    clearTimeout(cleanupTimer);
+    releaseAfterDeadline.resolve();
+    releaseHover.resolve(null);
+    if (hoverInvoked) await requestSettled.promise;
+  }
+
+  assert.equal(promptDeadlineExpired, false, 'the run must not wait for test cleanup to drain the sibling hover');
+  assert.equal(hoverInvoked, true);
+  assert.equal(hoverAborted, true, 'the pending hover must reject because the run aborted');
+  assert.equal(closes, 1);
+});
+
+test('a custom selector catches nested selection failure, releases sibling work, and uses LSP', { timeout: 5000 }, async () => {
+  const failure = new Error('recoverable nested selector failure');
+  const bothNestedSelectorsStarted = Promise.withResolvers<void>();
+  const selectionErrorCaught = Promise.withResolvers<void>();
+  const releaseSibling = Promise.withResolvers<void>();
+  const siblingReleased = Promise.withResolvers<void>();
+  const finishSibling = Promise.withResolvers<void>();
+  const checkFinished = Promise.withResolvers<void>();
+  const runFinished = Promise.withResolvers<void>();
+  const nestedFiles = new Set<string>();
+  let siblingFinished = false;
+  let deadlineExpired = false;
+  let queries = 0;
+  let hoverActive = false;
+  let activeRequestAborts = 0;
+  let closes = 0;
+  const rule = new TestRule({
+    files: ['entry.go'],
+    select: async selectionContext => {
+      const selectionError = await selectionContext.select({
+        files: ['nested/*.go'],
+        scope: async file => {
+          nestedFiles.add(file.filepath);
+          if (nestedFiles.size === 2) bothNestedSelectorsStarted.resolve();
+          await bothNestedSelectorsStarted.promise;
+          if (file.filepath === 'nested/b.go') throw failure;
+          await releaseSibling.promise;
+          siblingReleased.resolve();
+          await finishSibling.promise;
+          siblingFinished = true;
+          return [];
+        },
+      }).then(() => undefined, error => error);
+      assert.equal(selectionError, failure);
+      selectionErrorCaught.resolve();
+      releaseSibling.resolve();
+      return [scopeSubject('entry.go', 'fallback', 'fallback') as unknown as ScopeSubject<JsonValue>];
+    },
+    check: async (subject, context) => {
+      assert.equal(asScope(subject).id, 'fallback');
+      await context.goLsp.hover({ filepath: 'entry.go', line: 1 });
+      checkFinished.resolve();
+      return pass();
+    },
+  });
+  const harness = new Harness(new MemoryProject('/repo', {
+    'entry.go': 'entry',
+    'nested/a.go': 'nested a',
+    'nested/b.go': 'nested b',
+  }), { concurrency: 2 });
+  const context: RunContext = {
+    ...harness.context,
+    createLspBackend: async (_project, signal) => {
+      signal.addEventListener('abort', () => { if (hoverActive) activeRequestAborts += 1; }, { once: true });
+      return {
+        ...lifecycleBackend(async () => { closes += 1; }),
+        hover: async () => {
+          hoverActive = true;
+          try {
+            queries += 1;
+            return null;
+          } finally {
+            hoverActive = false;
+          }
+        },
+      };
+    },
+  };
+  // Release both gates only if nested selection waits for the sibling instead of reporting its failure.
+  const cleanupTimer = setTimeout(() => {
+    deadlineExpired = true;
+    releaseSibling.resolve();
+    finishSibling.resolve();
+  }, 1000);
+  const runPromise = executeRules([loaded('recovered-custom-selector', rule)], context);
+  void runPromise.then(() => runFinished.resolve(), () => runFinished.resolve());
+
+  let reports: readonly RuleReport[] | undefined;
+  try {
+    await Promise.all([selectionErrorCaught.promise, siblingReleased.promise, checkFinished.promise]);
+    const completedWhileSiblingWasHeld = await Promise.race([
+      runFinished.promise.then(() => true),
+      new Promise<boolean>(resolve => { setImmediate(() => resolve(false)); }),
+    ]);
+    assert.equal(deadlineExpired, false, 'the selector catch must run before the cleanup watchdog');
+    assert.equal(siblingFinished, false);
+    assert.equal(completedWhileSiblingWasHeld, false, 'run cleanup must wait for the nested selector sibling');
+    finishSibling.resolve();
+    reports = await runPromise;
+  } finally {
+    clearTimeout(cleanupTimer);
+    releaseSibling.resolve();
+    finishSibling.resolve();
+    await runPromise.catch(() => undefined);
+  }
+
+  assert.ok(reports);
+  assert.equal(reports[0]?.status, 'pass');
+  assert.equal(reports[0]?.evaluations.length, 1);
+  assert.deepEqual([...nestedFiles].sort(), ['nested/a.go', 'nested/b.go']);
+  assert.equal(queries, 1);
+  assert.equal(activeRequestAborts, 0);
+  assert.equal(closes, 1);
+  assert.deepEqual(eventsOfType(harness.events, 'error'), []);
+  assertEvaluationLifecycle(harness.events);
+});
+
+test('a check catches nested selection failure, drains its sibling, and continues to LSP', { timeout: 5000 }, async () => {
+  const failure = new Error('recoverable nested selection failure');
+  const selectorsStarted = Promise.withResolvers<void>();
+  const selectionErrorCaught = Promise.withResolvers<void>();
+  const releaseSibling = Promise.withResolvers<void>();
+  const siblingReleased = Promise.withResolvers<void>();
+  const finishSibling = Promise.withResolvers<void>();
+  const checkFinished = Promise.withResolvers<void>();
+  const runFinished = Promise.withResolvers<void>();
+  const nestedFiles = new Set<string>();
+  let siblingFinished = false;
+  let queries = 0;
+  let hoverActive = false;
+  let activeRequestAborts = 0;
+  const rule = new TestRule({
+    files: ['entry.go'],
+    check: async (_subject, context) => {
+      const selectionError = await context.select({
+        files: ['nested/*.go'],
+        scope: async file => {
+          nestedFiles.add(file.filepath);
+          if (nestedFiles.size === 2) selectorsStarted.resolve();
+          await selectorsStarted.promise;
+          if (file.filepath === 'nested/b.go') throw failure;
+          await releaseSibling.promise;
+          siblingReleased.resolve();
+          await finishSibling.promise;
+          siblingFinished = true;
+          return [];
+        },
+      }).then(() => undefined, error => error);
+      assert.equal(selectionError, failure);
+      selectionErrorCaught.resolve();
+      releaseSibling.resolve();
+      await context.goLsp.hover({ filepath: 'entry.go', line: 1 });
+      checkFinished.resolve();
+      return pass();
+    },
+  });
+  const harness = new Harness(new MemoryProject('/repo', {
+    'entry.go': 'entry',
+    'nested/a.go': 'nested a',
+    'nested/b.go': 'nested b',
+  }), { concurrency: 2 });
+  const context: RunContext = {
+    ...harness.context,
+    createLspBackend: async (_project, signal) => {
+      signal.addEventListener('abort', () => { if (hoverActive) activeRequestAborts += 1; }, { once: true });
+      return {
+        ...lifecycleBackend(async () => {}),
+        hover: async () => {
+          hoverActive = true;
+          try {
+            queries += 1;
+            return null;
+          } finally {
+            hoverActive = false;
+          }
+        },
+      };
+    },
+  };
+  const runPromise = executeRules([loaded('caught-check-selector', rule)], context);
+  void runPromise.then(() => runFinished.resolve(), () => runFinished.resolve());
+
+  let reports: readonly RuleReport[] | undefined;
+  try {
+    await Promise.all([selectionErrorCaught.promise, siblingReleased.promise, checkFinished.promise]);
+    const completedWhileSiblingWasHeld = await Promise.race([
+      runFinished.promise.then(() => true),
+      new Promise<boolean>(resolve => { setImmediate(() => resolve(false)); }),
+    ]);
+    assert.equal(siblingFinished, false);
+    assert.equal(completedWhileSiblingWasHeld, false, 'run must await the nested selector sibling');
+    finishSibling.resolve();
+    reports = await runPromise;
+  } finally {
+    releaseSibling.resolve();
+    finishSibling.resolve();
+    await runPromise.catch(() => undefined);
+  }
+
+  assert.ok(reports);
+  assert.equal(reports[0]?.status, 'pass');
+  assert.equal(queries, 1);
+  assert.equal(activeRequestAborts, 0);
+  assert.deepEqual([...nestedFiles].sort(), ['nested/a.go', 'nested/b.go']);
+});
+
+test('a check accounts for AI usage from a selector worker drained after it returns', { timeout: 5000 }, async () => {
+  const selectorStarted = Promise.withResolvers<void>();
+  const selectionErrorCaught = Promise.withResolvers<void>();
+  const siblingReleased = Promise.withResolvers<void>();
+  const finishSibling = Promise.withResolvers<void>();
+  const siblingGate = Promise.withResolvers<void>();
+  let nestedCount = 0;
+  let checkContext: CheckContext | undefined;
+  const rule = new TestRule({
+    files: ['entry.txt'],
+    check: async (_subject, context) => {
+      checkContext = context;
+      const selectionError = await context.select({
+        files: ['nested/*.txt'],
+        scope: async file => {
+          nestedCount += 1;
+          if (nestedCount === 2) selectorStarted.resolve();
+          await selectorStarted.promise;
+          if (file.filepath === 'nested/b.txt') throw new Error('nested selection failed');
+          await selectionErrorCaught.promise;
+          siblingReleased.resolve();
+          await finishSibling.promise;
+          await siblingGate.promise;
+          await checkContext?.ai({ rule: 'Late selector policy' });
+          return [];
+        },
+      }).then(() => undefined, error => error);
+      assert.ok(selectionError instanceof Error);
+      selectionErrorCaught.resolve();
+      setImmediate(() => siblingGate.resolve());
+      return pass();
+    },
+  });
+  const harness = new Harness(new MemoryProject('/repo', {
+    'entry.txt': 'entry',
+    'nested/a.txt': 'a',
+    'nested/b.txt': 'b',
+  }), { concurrency: 2 });
+  harness.backend.usages = [{ inputTokens: 23, outputTokens: 7 }];
+
+  const completed = executeRules([loaded('late-selector-usage', rule)], harness.context);
+  await siblingReleased.promise;
+  finishSibling.resolve();
+  const [report] = await completed;
+
+  const expectedUsage = {
+    calls: 1, unreportedCalls: 0, inputTokens: 23, outputTokens: 7,
+    inputCost: 23 * 0.042 / 1_000_000, outputCost: 0,
+  };
+  assert.deepEqual(report?.evaluations[0]?.result.usage, expectedUsage);
+  assert.deepEqual(eventsOfType(harness.events, 'usage').map(event => event.usage), [expectedUsage]);
+  const resultIndex = harness.events.findIndex(event => event.type === 'result');
+  assert.ok(resultIndex >= 0);
+  assert.equal(harness.events.slice(resultIndex + 1).some(event => event.type === 'usage'), false);
+});
+
+test('a fatal nested selection waits for deferred non-LSP selector work to settle', { timeout: 5000 }, async () => {
+  const failure = new Error('fatal nested selection failure');
+  const selectorsStarted = Promise.withResolvers<void>();
+  const releaseSibling = Promise.withResolvers<void>();
+  const siblingStarted = Promise.withResolvers<void>();
+  const siblingSettled = Promise.withResolvers<void>();
+  const runFinished = Promise.withResolvers<void>();
+  let settled = false;
+  const rule = new TestRule({
+    files: ['entry.go'],
+    check: async (_subject, context) => {
+      await context.select({
+        files: ['nested/*.go'],
+        scope: async file => {
+          if (file.filepath === 'nested/b.go') {
+            siblingStarted.resolve();
+            await releaseSibling.promise;
+            settled = true;
+            siblingSettled.resolve();
+            return [];
+          }
+          selectorsStarted.resolve();
+          await siblingStarted.promise;
+          throw failure;
+        },
+      });
+      return pass();
+    },
+  });
+  const harness = new Harness(new MemoryProject('/repo', {
+    'entry.go': 'entry',
+    'nested/a.go': 'nested a',
+    'nested/b.go': 'nested b',
+  }), { concurrency: 2 });
+  const runPromise = executeRules([loaded('fatal-check-selector', rule)], harness.context);
+  void runPromise.then(() => runFinished.resolve(), () => runFinished.resolve());
+
+  try {
+    await Promise.all([selectorsStarted.promise, siblingStarted.promise]);
+    const completedBeforeSiblingSettled = await Promise.race([
+      runFinished.promise.then(() => true),
+      new Promise<boolean>(resolve => { setImmediate(() => resolve(false)); }),
+    ]);
+    assert.equal(settled, false);
+    assert.equal(completedBeforeSiblingSettled, false, 'fatal run must drain selector work it owns');
+    releaseSibling.resolve();
+    await assert.rejects(() => runPromise, error => error === failure);
+    await siblingSettled.promise;
+    assert.equal(settled, true);
+  } finally {
+    releaseSibling.resolve();
+    await runPromise.catch(() => undefined);
+  }
+});
+
+test('caught nested selection errors do not poison evaluations or close LSP', async () => {
+  const failure = new Error('recoverable nested selector failure');
+  let queries = 0;
+  let closes = 0;
+  const rule = new TestRule({
+    files: ['eval.txt'],
+    scope: changedLineScope,
+    check: async (subject, context) => {
+      if (subject.kind !== 'scope') return pass();
+      if (subject.source === 'recover') {
+        const selectionError = await context.select({
+          files: ['nested.txt'],
+          scope: async () => { throw failure; },
+        }).then(() => undefined, error => error);
+        assert.equal(selectionError, failure);
+      } else {
+        await context.goLsp.hover({ filepath: 'eval.txt', line: 2 });
+      }
+      return pass();
+    },
+  });
+  const harness = new Harness(new MemoryProject('/repo', {
+    'eval.txt': 'recover\nlsp',
+    'nested.txt': 'nested',
+  }), { concurrency: 1 });
+  const context: RunContext = {
+    ...harness.context,
+    createLspBackend: async () => ({
+      ...lifecycleBackend(async () => { closes += 1; }),
+      hover: async () => { queries += 1; return null; },
+    }),
+  };
+
+  const reports = await executeRules([loaded('caught-nested-selection', rule)], context);
+  assert.equal(reports[0]?.status, 'pass');
+  assert.equal(reports[0]?.evaluations.length, 2);
+  assert.equal(queries, 1);
+  assert.equal(closes, 1);
+  assert.deepEqual(eventsOfType(harness.events, 'error'), []);
+  assertEvaluationLifecycle(harness.events);
+});
+
+test('nested selection failure is recorded before sibling LSP work is aborted', { timeout: 5000 }, async () => {
+  const failure = new Error('nested selector failed');
+  const requestStarted = Promise.withResolvers<void>();
+  const requestSettled = Promise.withResolvers<void>();
+  let closes = 0;
+  const rule = new TestRule({
+    files: ['eval.txt'],
+    scope: changedLineScope,
+    check: async (subject, context) => {
+      if (subject.kind !== 'scope') return pass();
+      if (subject.source === 'fail') {
+        await context.select({
+          files: ['nested.txt'],
+          scope: async () => {
+            await requestStarted.promise;
+            throw failure;
+          },
+        });
+        return pass();
+      }
+      await context.goLsp.hover({ filepath: 'eval.txt', line: 2 });
+      return pass();
+    },
+  });
+  const harness = new Harness(new MemoryProject('/repo', {
+    'eval.txt': 'fail\nwait',
+    'nested.txt': 'nested',
+  }), { concurrency: 2 });
+  const context: RunContext = {
+    ...harness.context,
+    createLspBackend: async (_project, signal) => ({
+      ...lifecycleBackend(async () => { closes += 1; }),
+      hover: async () => {
+        const request = Promise.withResolvers<null>();
+        signal.addEventListener('abort', () => request.reject(new Error('LSP request aborted')), { once: true });
+        requestStarted.resolve();
+        void request.promise.then(() => requestSettled.resolve(), () => requestSettled.resolve());
+        return request.promise;
+      },
+    }),
+  };
+
+  await assert.rejects(
+    () => executeRules([loaded('nested-selection-failure', rule)], context),
+    error => error instanceof Error && error === failure && error.message === 'nested selector failed',
+  );
+  await requestSettled.promise;
+  assert.equal(closes, 1);
+  assert.deepEqual(eventsOfType(harness.events, 'error').map(event => event.message)[0], failure.message);
+});
+
+test('run cleanup preserves rule errors and reports standalone backend close failures', async () => {
+  const project = new MemoryProject('/repo', { 'a.txt': 'A' });
+  const ruleFailure = new Error('check failed');
+  const closeFailure = new Error('backend close failed');
+  const rule = new TestRule({
+    files: ['a.txt'],
+    when: async context => {
+      await context.goLsp.hover({ filepath: 'a.go', line: 1 });
+      return true;
+    },
+    check: async () => { throw ruleFailure; },
+  });
+  const harness = new Harness(project);
+  const context: RunContext = {
+    ...harness.context,
+    createLspBackend: async () => lifecycleBackend(async () => { throw closeFailure; }),
+  };
+
+  await assert.rejects(() => executeRules([loaded('failing-check', rule)], context), error => error === ruleFailure);
+
+  const passing = new TestRule({
+    files: ['a.txt'],
+    when: async context => {
+      await context.goLsp.hover({ filepath: 'a.go', line: 1 });
+      return true;
+    },
+  });
+  await assert.rejects(() => executeRules([loaded('passing', passing)], context), error => error === closeFailure);
+});
+
+test('run cleanup aborts pending backend startup after a gate failure', async () => {
+  const project = new MemoryProject('/repo', { 'a.txt': 'A' });
+  const failure = new Error('gate failed');
+  const factoryStarted = Promise.withResolvers<void>();
+  const rule = new TestRule({
+    when: async context => {
+      void context.goLsp.hover({ filepath: 'a.go', line: 1 });
+      await factoryStarted.promise;
+      throw failure;
+    },
+  });
+  const harness = new Harness(project);
+  const context: RunContext = {
+    ...harness.context,
+    createLspBackend: async (_project, signal) => {
+      const startup = Promise.withResolvers<LspBackend>();
+      signal.addEventListener('abort', () => startup.reject(new Error('startup aborted')), { once: true });
+      factoryStarted.resolve();
+      return startup.promise;
+    },
+  };
+
+  await assert.rejects(() => executeRules([loaded('pending-startup', rule)], context), error => error === failure);
+});
+
+test('each rule run gets a fresh lazy backend and non-LSP runs do not start one', async () => {
+  const harness = new Harness(new MemoryProject('/repo', { 'a.txt': 'A' }));
+  let starts = 0;
+  let closes = 0;
+  const context: RunContext = {
+    ...harness.context,
+    createLspBackend: async () => {
+      starts += 1;
+      return lifecycleBackend(async () => { closes += 1; });
+    },
+  };
+
+  await executeRules([loaded('plain', new TestRule({ files: ['a.txt'] }))], context);
+  assert.equal(starts, 0);
+  const lspRule = new TestRule({
+    when: async projectContext => {
+      await projectContext.goLsp.hover({ filepath: 'a.go', line: 1 });
+      return true;
+    },
+  });
+  await executeRules([loaded('uses-lsp', lspRule)], context);
+  await executeRules([loaded('uses-lsp', lspRule)], context);
+  assert.equal(starts, 2);
+  assert.equal(closes, 2);
 });
 
 test('evaluation task IDs restart at one for each run and skip unevaluated rules', async () => {

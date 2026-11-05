@@ -12,6 +12,7 @@ export async function mapConcurrent<T, R>(
   items: readonly T[],
   concurrency: number,
   mapper: (item: T, index: number, reportFailure: (error: unknown) => void) => Promise<R>,
+  scheduler: (work: Promise<R>) => Promise<R> = work => work,
 ): Promise<R[]> {
   requirePositiveSafeInteger(concurrency);
 
@@ -21,13 +22,14 @@ export async function mapConcurrent<T, R>(
   const workerCount = Math.min(items.length, concurrency);
   let nextIndex = 0;
   let failureObserved = false;
-  let failure: unknown;
+  const { promise: failureSignal, resolve: signalFailure } =
+    Promise.withResolvers<{ readonly error: unknown }>();
 
-  // A mapper may need to drain started work after it has already failed.
+  // A mapper may report failure before its own cleanup finishes.
   const reportFailure = (error: unknown): void => {
     if (!failureObserved) {
       failureObserved = true;
-      failure = error;
+      signalFailure({ error });
     }
   };
 
@@ -37,7 +39,8 @@ export async function mapConcurrent<T, R>(
       nextIndex += 1;
       if (index >= items.length) return;
       try {
-        results[index] = await mapper(items[index]!, index, reportFailure);
+        const work = scheduler(Promise.resolve().then(() => mapper(items[index]!, index, reportFailure)));
+        results[index] = await work;
       } catch (error) {
         reportFailure(error);
       }
@@ -45,7 +48,10 @@ export async function mapConcurrent<T, R>(
   };
 
   const workers = Array.from({ length: workerCount }, () => runWorker());
-  await Promise.all(workers);
-  if (failureObserved) throw failure;
+  const outcome = await Promise.race([
+    Promise.all(workers).then(() => ({ error: undefined, failed: false as const })),
+    failureSignal.then(({ error }) => ({ error, failed: true as const })),
+  ]);
+  if (outcome.failed) throw outcome.error;
   return results;
 }

@@ -6,9 +6,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { Worker } from 'node:worker_threads';
+import { MessageChannel, Worker } from 'node:worker_threads';
 
 import type { LoadedRule, RuleSelection } from '../dist/app/ports.js';
+import { createProject } from '../dist/adapter/filesystem/project.js';
+import { createRuleTestLspHost } from '../dist/adapter/filesystem/rule-test-lsp.js';
 import { createRuleDependencyManager, type PreparedRuleDependencies, type RuleDependencyManager } from '../dist/adapter/filesystem/dependencies.js';
 import { getRuleDependencies } from '../dist/adapter/filesystem/rule-resolution.js';
 import { createRuleLoader } from '../dist/adapter/filesystem/rules.js';
@@ -707,23 +709,42 @@ function startWorker(prelude = ''): Worker {
   return new Worker(new URL(`data:text/javascript,${encodeURIComponent(`${prelude}\nawait import(${JSON.stringify(module)});`)}`));
 }
 
-async function requestWorker(worker: Worker, request: RuleTestWorkerRequest): Promise<RuleTestWorkerMessage> {
+async function requestWorker(
+  worker: Worker,
+  request: Omit<RuleTestWorkerRequest, 'lspPort'>,
+): Promise<RuleTestWorkerMessage> {
   const result = Promise.withResolvers<RuleTestWorkerMessage>();
   const onMessage = (message: RuleTestWorkerMessage) => {
     if (message.id === request.id) result.resolve(message);
   };
   const onError = (error: Error) => result.reject(error);
   const onExit = (code: number) => result.reject(new Error(`Worker exited before a result: ${code}`));
+  const channel = new MessageChannel();
+  const host = createRuleTestLspHost(
+    channel.port1,
+    createProject(request.root, { excludeFiles: [request.ruleFile] }),
+  );
   worker.on('message', onMessage);
   worker.on('error', onError);
   worker.on('exit', onExit);
+  let transferred = false;
   try {
-    worker.postMessage(request);
+    worker.postMessage(
+      { ...request, lspPort: channel.port2 } satisfies RuleTestWorkerRequest,
+      [channel.port2],
+    );
+    transferred = true;
     return await result.promise;
   } finally {
     worker.off('message', onMessage);
     worker.off('error', onError);
     worker.off('exit', onExit);
+    try {
+      await host.close();
+    } finally {
+      channel.port1.close();
+      if (!transferred) channel.port2.close();
+    }
   }
 }
 
