@@ -711,7 +711,7 @@ function startWorker(prelude = ''): Worker {
 
 async function requestWorker(
   worker: Worker,
-  request: Omit<RuleTestWorkerRequest, 'lspPort'>,
+  request: Omit<RuleTestWorkerRequest, 'lspPort' | 'rubyLspPort'>,
 ): Promise<RuleTestWorkerMessage> {
   const result = Promise.withResolvers<RuleTestWorkerMessage>();
   const onMessage = (message: RuleTestWorkerMessage) => {
@@ -720,18 +720,18 @@ async function requestWorker(
   const onError = (error: Error) => result.reject(error);
   const onExit = (code: number) => result.reject(new Error(`Worker exited before a result: ${code}`));
   const channel = new MessageChannel();
-  const host = createRuleTestLspHost(
-    channel.port1,
-    createProject(request.root, { excludeFiles: [request.ruleFile] }),
-  );
+  const rubyChannel = new MessageChannel();
+  const project = createProject(request.root, { excludeFiles: [request.ruleFile] });
+  const host = createRuleTestLspHost(channel.port1, project);
+  const rubyHost = createRuleTestLspHost(rubyChannel.port1, project);
   worker.on('message', onMessage);
   worker.on('error', onError);
   worker.on('exit', onExit);
   let transferred = false;
   try {
     worker.postMessage(
-      { ...request, lspPort: channel.port2 } satisfies RuleTestWorkerRequest,
-      [channel.port2],
+      { ...request, lspPort: channel.port2, rubyLspPort: rubyChannel.port2 } satisfies RuleTestWorkerRequest,
+      [channel.port2, rubyChannel.port2],
     );
     transferred = true;
     return await result.promise;
@@ -740,10 +740,16 @@ async function requestWorker(
     worker.off('error', onError);
     worker.off('exit', onExit);
     try {
-      await host.close();
+      const closes = await Promise.allSettled([host.close(), rubyHost.close()]);
+      const failed = closes.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failed !== undefined) throw failed.reason;
     } finally {
       channel.port1.close();
-      if (!transferred) channel.port2.close();
+      rubyChannel.port1.close();
+      if (!transferred) {
+        channel.port2.close();
+        rubyChannel.port2.close();
+      }
     }
   }
 }

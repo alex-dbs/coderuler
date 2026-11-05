@@ -25,6 +25,11 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: false
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '4.0.7'
+      - run: gem install ruby-lsp --version 0.26.11 --no-document
+      - run: bundle install --gemfile tests/fixtures/ruby-lsp/project/Gemfile
       - run: GOBIN="$RUNNER_TEMP/gopls-bin" go install golang.org/x/tools/gopls@v0.24.0
       - run: echo "$RUNNER_TEMP/gopls-bin" >> "$GITHUB_PATH"
       - run: npm ci

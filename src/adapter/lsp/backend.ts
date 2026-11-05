@@ -17,11 +17,15 @@ import {
   ImplementationRequest,
   InitializeRequest,
   InitializedNotification,
+  MessageType,
   ReferencesRequest,
+  ShowMessageNotification,
   ShowMessageRequest,
   ShutdownRequest,
   SymbolKind,
   TypeDefinitionRequest,
+  WorkDoneProgress,
+  WorkDoneProgressCreateRequest,
   WorkspaceSymbolRequest,
   type ProtocolRequestType,
   type RequestParam,
@@ -56,6 +60,7 @@ export interface LspServerOptions {
   readonly command: string;
   readonly args?: readonly string[];
   readonly languageId: string;
+  readonly initializationProgressToken?: string | number;
   readonly env?: NodeJS.ProcessEnv;
   readonly requestTimeoutMs?: number;
 }
@@ -254,10 +259,12 @@ export async function createLspBackend(
   const root = resolve(project.root);
   const rootUri = pathToFileURL(root).href;
   const workspaceFolder: WorkspaceFolder = { uri: rootUri, name: basename(root) };
+  const usesProcessGroup = settings.languageId === 'ruby' && process.platform !== 'win32';
   const child = spawn(settings.command, [...(settings.args ?? [])], {
     cwd: root,
     env: settings.env,
     shell: false,
+    detached: usesProcessGroup,
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 
@@ -270,12 +277,16 @@ export async function createLspBackend(
   let closePromise: Promise<void> | undefined;
   let connection: ProtocolConnection | undefined;
   let capabilities: ServerCapabilities | undefined;
+  let rubyPositionNeedsSurrogateAdjustment = false;
   const controller = new AbortController();
   const documentPromises = new Map<string, Promise<Document>>();
   const symbolPromises = new Map<string, Promise<readonly DocumentSymbol[] | readonly SymbolInformation[]>>();
   const astPromises = new Map<string, Promise<SgRoot>>();
 
   const { promise: processClosedPromise, resolve: resolveProcessClosed } = Promise.withResolvers<void>();
+  const progressToken = settings.initializationProgressToken;
+  const readiness = progressToken === undefined ? undefined : Promise.withResolvers<void>();
+  let readinessPending = readiness !== undefined;
 
   const stderrText = (): string => stderr.toString('utf8').trim();
   const withStderr = (error: unknown): Error => {
@@ -284,6 +295,19 @@ export async function createLspBackend(
     return createError(detail === '' ? message : `${message}\nLSP stderr (latest ${MAX_STDERR_BYTES} bytes):\n${detail}`, error);
   };
   const closedError = (): Error => terminalError ?? new Error('LSP session is closed');
+  const signalChild = (signalName: NodeJS.Signals): void => {
+    if (usesProcessGroup) {
+      const pid = child.pid;
+      if (pid === undefined) return;
+      try {
+        process.kill(-pid, signalName);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code !== 'ESRCH') throw error;
+      }
+      return;
+    }
+    child.kill(signalName);
+  };
 
   const cleanup = (graceful: boolean): Promise<void> => {
     if (releasePromise !== undefined) return releasePromise;
@@ -299,7 +323,7 @@ export async function createLspBackend(
         })();
         void shutdown.catch(() => undefined);
       } else if (!processClosed) {
-        child.kill('SIGTERM');
+        signalChild('SIGTERM');
       }
 
       if (!processClosed) {
@@ -308,7 +332,7 @@ export async function createLspBackend(
         const closed = processClosedPromise.then(() => 'closed' as const);
         const result = await Promise.race([closed, expired]);
         clearTimeout(releaseTimer);
-        if (result === 'timeout' && !processClosed) child.kill('SIGKILL');
+        if (result === 'timeout' && !processClosed) signalChild('SIGKILL');
         if (!processClosed) await processClosedPromise;
       }
 
@@ -422,6 +446,21 @@ export async function createLspBackend(
       failureReason: 'Read-only LSP session',
     }));
     connection.onRequest(ShowMessageRequest.type, () => null);
+    if (readiness !== undefined && progressToken !== undefined) {
+      connection.onProgress(WorkDoneProgress.type, progressToken, progress => {
+        if (progress.kind !== 'end') return;
+        readinessPending = false;
+        readiness.resolve();
+      });
+      connection.onRequest(WorkDoneProgressCreateRequest.type, () => undefined);
+      connection.onNotification(ShowMessageNotification.type, ({ type, message }) => {
+        if (
+          readinessPending &&
+          type === MessageType.Error &&
+          message.startsWith('Error while indexing (')
+        ) fail(new Error(message));
+      });
+    }
     connection.listen();
 
     const initializeResult = await bounded('initialize', () => connection!.sendRequest(InitializeRequest.type, {
@@ -430,12 +469,19 @@ export async function createLspBackend(
       capabilities: {
         general: { positionEncodings: ['utf-16'] },
         textDocument: { documentSymbol: { hierarchicalDocumentSymbolSupport: true } },
+        ...(readiness === undefined ? {} : { window: { workDoneProgress: true } }),
       },
       workspaceFolders: [workspaceFolder],
     }));
     capabilities = initializeResult.capabilities;
+    // Ruby LSP 0.26.11 counts a preceding surrogate pair as one cursor unit.
+    rubyPositionNeedsSurrogateAdjustment =
+      settings.languageId === 'ruby' &&
+      initializeResult.serverInfo?.name === 'Ruby LSP' &&
+      initializeResult.serverInfo.version === '0.26.11';
     await notify('initialized', () => connection!.sendNotification(InitializedNotification.type, {}));
     initialized = true;
+    if (readiness !== undefined) await bounded('$/progress', () => readiness.promise);
   } catch (error) {
     fail(error);
     await cleanup(false).catch(() => undefined);
@@ -509,6 +555,25 @@ export async function createLspBackend(
     return documentForPath(canonicalPathFromUri(uri), includeDependencies);
   };
 
+  const positionForTarget = (document: Document, line: number, column: number): Position => {
+    const position = document.index.position(line, column);
+    if (!rubyPositionNeedsSurrogateAdjustment) return position;
+    const start = document.index.lineStarts[position.line]!;
+    const end = start + position.character;
+    let surrogatePairs = 0;
+    for (let index = start; index + 1 < end; index += 1) {
+      const code = document.text.charCodeAt(index);
+      const next = document.text.charCodeAt(index + 1);
+      if (code >= 0xd800 && code <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
+        surrogatePairs += 1;
+        index += 1;
+      }
+    }
+    if (surrogatePairs === 0) return position;
+    const character = position.character + surrogatePairs;
+    const lineLength = document.index.lineEnds[position.line]! - start;
+    return character > lineLength ? position : { ...position, character };
+  };
   const filterLocations = (result: unknown, includeDependencies: boolean): readonly Location[] =>
     normalizeLocations(result).filter(location => isAllowedUri(location.uri, includeDependencies));
 
@@ -722,9 +787,10 @@ export async function createLspBackend(
     target: LspTarget,
     includeDependencies: boolean,
   ): Promise<readonly CallHierarchyItem[]> => {
+    assertCapability('textDocument/prepareCallHierarchy', 'callHierarchyProvider');
     const document = await documentForPath(target.filepath, includeDependencies);
     let position: Position;
-    if (target.column !== undefined) position = document.index.position(target.line, target.column);
+    if (target.column !== undefined) position = positionForTarget(document, target.line, target.column);
     else {
       if (!Number.isSafeInteger(target.line) || target.line < 1 || target.line > document.index.lineCount) {
         throw new Error(`LSP line ${target.line} is outside the document`);
@@ -822,7 +888,7 @@ export async function createLspBackend(
   ): Promise<readonly Location[]> => {
     const includeDependencies = options?.includeDependencies === true;
     const document = await documentForPath(target.filepath, includeDependencies);
-    const position = document.index.position(target.line, target.column ?? 1);
+    const position = positionForTarget(document, target.line, target.column ?? 1);
     const result = await request(type, method, {
       textDocument: { uri: document.uri },
       position,
@@ -842,7 +908,7 @@ export async function createLspBackend(
     references: async (target: LspTarget, options?: LspReferenceOptions) => {
       const includeDependencies = options?.includeDependencies === true;
       const document = await documentForPath(target.filepath, includeDependencies);
-      const position = document.index.position(target.line, target.column ?? 1);
+      const position = positionForTarget(document, target.line, target.column ?? 1);
       const result = await request(ReferencesRequest.type, 'textDocument/references', {
         textDocument: { uri: document.uri },
         position,
@@ -853,7 +919,7 @@ export async function createLspBackend(
     hover: async (target: LspTarget, options?: LspOptions): Promise<Hover | null> => {
       const includeDependencies = options?.includeDependencies === true;
       const document = await documentForPath(target.filepath, includeDependencies);
-      const position = document.index.position(target.line, target.column ?? 1);
+      const position = positionForTarget(document, target.line, target.column ?? 1);
       const result = await request(HoverRequest.type, 'textDocument/hover', {
         textDocument: { uri: document.uri },
         position,
@@ -883,4 +949,12 @@ export async function createLspBackend(
   };
 
   return { ...tools, close };
+}
+export function createRubyLspBackend(project: Project, signal: AbortSignal): Promise<LspBackend> {
+  return createLspBackend(project, signal, {
+    command: 'ruby-lsp',
+    args: [],
+    languageId: 'ruby',
+    initializationProgressToken: 'indexing-progress',
+  });
 }

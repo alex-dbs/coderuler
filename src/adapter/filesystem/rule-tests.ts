@@ -77,9 +77,14 @@ function addTestGroup(
 
 type TestActual = RuleTestResult['actual'];
 
-interface ActiveRuleTestLsp {
+interface RuleTestLspPair {
   readonly channel: MessageChannel;
-  readonly host: { close(): Promise<void> };
+  host: { close(): Promise<void> } | undefined;
+}
+
+interface ActiveRuleTestLsp {
+  readonly go: RuleTestLspPair;
+  readonly ruby: RuleTestLspPair;
   transferred: boolean;
   closePromise?: Promise<void>;
 }
@@ -121,10 +126,19 @@ class RuleTestWorkerSession {
     if (active.closePromise !== undefined) return active.closePromise;
     active.closePromise = (async () => {
       try {
-        await active.host.close();
+        const hosts = [active.go.host, active.ruby.host].filter(
+          (host): host is { close(): Promise<void> } => host !== undefined,
+        );
+        const results = await Promise.allSettled(hosts.map(async host => host.close()));
+        const rejected = results.find(result => result.status === 'rejected');
+        if (rejected?.status === 'rejected') throw rejected.reason;
       } finally {
-        active.channel.port1.close();
-        if (!active.transferred) active.channel.port2.close();
+        active.go.channel.port1.close();
+        active.ruby.channel.port1.close();
+        if (!active.transferred) {
+          active.go.channel.port2.close();
+          active.ruby.channel.port2.close();
+        }
         if (this.activeLsp === active) this.activeLsp = undefined;
       }
     })();
@@ -132,10 +146,11 @@ class RuleTestWorkerSession {
   }
 
   async run(
-    request: Omit<RuleTestWorkerRequest, 'id' | 'lspPort'>,
+    request: Omit<RuleTestWorkerRequest, 'id' | 'lspPort' | 'rubyLspPort'>,
     deadline: number,
     onFailure: (error: Error) => void,
     createBackend?: LspBackendFactory,
+    createRubyLspBackend?: LspBackendFactory,
   ): Promise<TestActual | RuleTestWorkerOutcome> {
     this.onFailure = onFailure;
     this.assertHealthy();
@@ -163,24 +178,32 @@ class RuleTestWorkerSession {
     try {
       expire();
       if (performance.now() < deadline) {
-        const channel = new MessageChannel();
+        const channels: MessageChannel[] = [];
         try {
-          const host = createRuleTestLspHost(
-            channel.port1,
-            createProject(request.root, { excludeFiles: [request.ruleFile] }),
-            createBackend,
-          );
-          activeLsp = { channel, host, transferred: false };
+          const goChannel = new MessageChannel();
+          channels.push(goChannel);
+          const rubyChannel = new MessageChannel();
+          channels.push(rubyChannel);
+          activeLsp = {
+            go: { channel: goChannel, host: undefined },
+            ruby: { channel: rubyChannel, host: undefined },
+            transferred: false,
+          };
           this.activeLsp = activeLsp;
+          const project = createProject(request.root, { excludeFiles: [request.ruleFile] });
+          activeLsp.go.host = createRuleTestLspHost(goChannel.port1, project, createBackend);
+          activeLsp.ruby.host = createRuleTestLspHost(rubyChannel.port1, project, createRubyLspBackend);
           this.worker.postMessage(
-            { ...request, id, lspPort: channel.port2 } satisfies RuleTestWorkerRequest,
-            [channel.port2],
+            { ...request, id, lspPort: goChannel.port2, rubyLspPort: rubyChannel.port2 } satisfies RuleTestWorkerRequest,
+            [goChannel.port2, rubyChannel.port2],
           );
           activeLsp.transferred = true;
         } catch (error) {
           if (activeLsp === undefined) {
-            channel.port1.close();
-            channel.port2.close();
+            for (const channel of channels) {
+              channel.port1.close();
+              channel.port2.close();
+            }
           }
           throw error;
         }
@@ -249,6 +272,7 @@ async function runCase(
   onFailure: (error: unknown) => void,
   includeDisabled: boolean,
   createLspBackend?: LspBackendFactory,
+  createRubyLspBackend?: LspBackendFactory,
 ): Promise<RuleTestResult> {
   const started = performance.now();
   const deadline = started + timeoutMs;
@@ -275,7 +299,7 @@ async function runCase(
           root, ruleFile: entry.ruleFile, files: example.files, ai,
           ...(includeDisabled ? { includeDisabled: true } : {}),
           ...(dependencies === undefined ? {} : { dependencies }),
-        }, deadline, failCase, createLspBackend);
+        }, deadline, failCase, createLspBackend, createRubyLspBackend);
         if (typeof outcome === 'string') actual = outcome;
         else {
           actual = outcome.actual;
@@ -315,6 +339,7 @@ export async function runRuleTests(
   includeAI = false,
   includeDisabled = false,
   createLspBackend?: LspBackendFactory,
+  createRubyLspBackend?: LspBackendFactory,
 ): Promise<readonly RuleTestResult[]> {
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) {
     throw new RangeError(`--concurrency must be a positive safe integer, received ${String(concurrency)}`);
@@ -375,7 +400,7 @@ export async function runRuleTests(
             const group = groups[groupIndex]!;
             const example = validateCase(group.values[caseIndex], `${group.label}[${caseIndex}]`);
             completed[index] = await runCase(
-              rule, example, group.ai, timeoutMs, session, fail, includeDisabled, createLspBackend,
+              rule, example, group.ai, timeoutMs, session, fail, includeDisabled, createLspBackend, createRubyLspBackend,
             );
             if (failureObserved) return;
             while (completed[nextResult] !== undefined) {

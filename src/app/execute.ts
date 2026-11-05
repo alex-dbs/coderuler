@@ -84,8 +84,16 @@ export async function executeRules(
   rules: readonly LoadedRule[],
   context: RunContext,
 ): Promise<readonly RuleReport[]> {
-  const lsp = createRunLsp(context.project, context.createLspBackend);
-  const abortLsp = (): void => { void lsp.close().catch(() => undefined); };
+  const goLsp = createRunLsp(context.project, context.createLspBackend);
+  const rubyLsp = createRunLsp(context.project, context.createRubyLspBackend);
+  const closeLspSessions = async (): Promise<void> => {
+    const results = await Promise.allSettled([goLsp.close(), rubyLsp.close()]);
+    const goResult = results[0]!;
+    if (goResult.status === 'rejected') throw goResult.reason;
+    const rubyResult = results[1]!;
+    if (rubyResult.status === 'rejected') throw rubyResult.reason;
+  };
+  const abortLsp = (): void => { void closeLspSessions().catch(() => undefined); };
   const startedWork = new Set<Promise<unknown>>();
   const scheduleWork = <T>(work: Promise<T>): Promise<T> => {
     startedWork.add(work);
@@ -100,7 +108,7 @@ export async function executeRules(
   };
   let failed = false;
   try {
-    const reports = await executeRun(rules, context, lsp.tools, scheduleWork, abortLsp);
+    const reports = await executeRun(rules, context, goLsp.tools, rubyLsp.tools, scheduleWork, abortLsp);
     await drainStartedWork();
     return reports;
   } catch (error) {
@@ -110,7 +118,7 @@ export async function executeRules(
     throw error;
   } finally {
     try {
-      await lsp.close();
+      await closeLspSessions();
     } catch (error) {
       if (!failed) throw error;
     }
@@ -120,7 +128,8 @@ export async function executeRules(
 async function executeRun(
   rules: readonly LoadedRule[],
   context: RunContext,
-  lsp: LspTools,
+  goLsp: LspTools,
+  rubyLsp: LspTools,
   scheduleWork: <T>(work: Promise<T>) => Promise<T>,
   abortLsp: () => void,
 ): Promise<readonly RuleReport[]> {
@@ -149,7 +158,8 @@ async function executeRun(
 
   const projectContextFor = (name: string, evaluationId?: number): ProjectContext => ({
     project: context.project,
-    goLsp: lsp,
+    goLsp,
+    rubyLsp,
     ...(changedFiles === undefined ? {} : { changedFiles }),
     ...(changedLines === undefined ? {} : { changedLines }),
     trace: traceFor(name, evaluationId),
