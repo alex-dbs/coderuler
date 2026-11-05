@@ -126,9 +126,7 @@ A custom function receives the selected subject and a context object. Return `pa
 
 The hooks receive `project` readers and `trace(message, details?)`. `select` also receives `context.select(...)`. Checks also receive `ruleName` and `context.ai(...)`.
 
-You can catch `context.select(...)` errors in a selection hook or check without closing the run's LSP session. An uncaught error aborts pending LSP requests. The run waits for started selectors and checks before returning.
-
-`context.goLsp` provides Go-to-definition, declaration, type-definition, implementation, reference, hover, document-symbol, workspace-symbol, caller, and callee queries. LSP use is optional; install Go and `gopls` only if a rule calls these helpers. Declaration lookup is part of the cross-backend API, but gopls v0.24.0 does not support it, so that query rejects.
+`context.goLsp` provides Go-to-definition, declaration, type-definition, implementation, reference, hover, document-symbol, workspace-symbol, caller, and callee queries. LSP use is optional; install Go and `gopls` only if a rule calls these helpers. 
 
 Pass file paths and positive, 1-based line and UTF-16 column coordinates. A column counts UTF-16 code units. Navigation and hover use column 1 when omitted. Caller and callee queries use the enclosing named function or method when the column is omitted. Their required `depth` is a nonnegative integer; depth 1 returns direct neighbors. Set `includeDependencies: true` to include available dependency or standard-library source outside the project; the default is `false`.
 
