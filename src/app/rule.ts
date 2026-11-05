@@ -1,4 +1,19 @@
+import type {
+  DocumentSymbol,
+  Hover,
+  Location,
+  SymbolInformation,
+  WorkspaceSymbol,
+} from 'vscode-languageserver-protocol';
 import type { Project } from './ports.js';
+
+export type {
+  DocumentSymbol,
+  Hover,
+  Location,
+  SymbolInformation,
+  WorkspaceSymbol,
+} from 'vscode-languageserver-protocol';
 
 export type Awaitable<T> = T | Promise<T>;
 
@@ -20,6 +35,45 @@ export interface SourceFile {
 export interface LineRange {
   readonly start: number;
   readonly end: number;
+}
+
+export interface LspTarget {
+  readonly filepath: string;
+  readonly line: number;
+  readonly column?: number;
+}
+
+export interface LspOptions {
+  readonly includeDependencies?: boolean;
+}
+
+export interface LspReferenceOptions extends LspOptions {
+  readonly includeDeclaration?: boolean;
+}
+
+export interface LspCallOptions extends LspOptions {
+  readonly depth: number;
+}
+
+export interface LspCall {
+  readonly name: string;
+  readonly filepath: string;
+  readonly source: string;
+  readonly lines: LineRange;
+  readonly depth: number;
+}
+
+export interface LspTools {
+  definitions(target: LspTarget, options?: LspOptions): Promise<readonly Location[]>;
+  declarations(target: LspTarget, options?: LspOptions): Promise<readonly Location[]>;
+  typeDefinitions(target: LspTarget, options?: LspOptions): Promise<readonly Location[]>;
+  implementations(target: LspTarget, options?: LspOptions): Promise<readonly Location[]>;
+  references(target: LspTarget, options?: LspReferenceOptions): Promise<readonly Location[]>;
+  hover(target: LspTarget, options?: LspOptions): Promise<Hover | null>;
+  documentSymbols(filepath: string, options?: LspOptions): Promise<readonly DocumentSymbol[] | readonly SymbolInformation[]>;
+  workspaceSymbols(query: string, options?: LspOptions): Promise<readonly (SymbolInformation | WorkspaceSymbol)[]>;
+  callers(target: LspTarget, options: LspCallOptions): Promise<readonly LspCall[]>;
+  callees(target: LspTarget, options: LspCallOptions): Promise<readonly LspCall[]>;
 }
 
 export interface ScopeMatch<T = JsonValue> {
@@ -120,6 +174,7 @@ export type Evaluator<T = JsonValue> = (
 
 export interface ProjectContext {
   readonly project: Project;
+  readonly goLsp: LspTools;
   readonly changedFiles?: ReadonlySet<string>;
   readonly changedLines?: ReadonlyMap<string, readonly LineRange[]>;
   trace(message: string, details?: JsonValue): void;

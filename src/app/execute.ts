@@ -6,6 +6,7 @@ import type {
   CheckResult,
   Grouping,
   JsonValue,
+  LspTools,
   PredicateResult,
   ProjectContext,
   Rule,
@@ -24,6 +25,7 @@ import type {
   RunContext,
   RunEvent,
 } from './ports.js';
+import { createRunLsp } from './lsp.js';
 import { mapConcurrent } from './concurrency.js';
 import { evaluateAi } from './evaluators.js';
 import { wholeFileScope } from './selection.js';
@@ -34,6 +36,15 @@ import {
   validateScopeMatch,
   validateScopeSubjects,
 } from './validate.js';
+
+function trackWork<T>(pending: Set<Promise<unknown>>, work: Promise<T>): Promise<T> {
+  pending.add(work);
+  void work.then(
+    () => { pending.delete(work); },
+    () => { pending.delete(work); },
+  );
+  return work;
+}
 
 function isEligibleRelativePath(filepath: string): boolean {
   if (filepath === '' || filepath.startsWith('/')) return false;
@@ -73,6 +84,46 @@ export async function executeRules(
   rules: readonly LoadedRule[],
   context: RunContext,
 ): Promise<readonly RuleReport[]> {
+  const lsp = createRunLsp(context.project, context.createLspBackend);
+  const abortLsp = (): void => { void lsp.close().catch(() => undefined); };
+  const startedWork = new Set<Promise<unknown>>();
+  const scheduleWork = <T>(work: Promise<T>): Promise<T> => {
+    startedWork.add(work);
+    void work.then(
+      () => { startedWork.delete(work); },
+      () => { startedWork.delete(work); },
+    );
+    return work;
+  };
+  const drainStartedWork = async (): Promise<void> => {
+    while (startedWork.size > 0) await Promise.allSettled([...startedWork]);
+  };
+  let failed = false;
+  try {
+    const reports = await executeRun(rules, context, lsp.tools, scheduleWork, abortLsp);
+    await drainStartedWork();
+    return reports;
+  } catch (error) {
+    failed = true;
+    abortLsp();
+    await drainStartedWork();
+    throw error;
+  } finally {
+    try {
+      await lsp.close();
+    } catch (error) {
+      if (!failed) throw error;
+    }
+  }
+}
+
+async function executeRun(
+  rules: readonly LoadedRule[],
+  context: RunContext,
+  lsp: LspTools,
+  scheduleWork: <T>(work: Promise<T>) => Promise<T>,
+  abortLsp: () => void,
+): Promise<readonly RuleReport[]> {
   let completedSelections = 0;
   let completedEvaluations = 0;
   const emit = (event: RunEvent): void => {
@@ -98,6 +149,7 @@ export async function executeRules(
 
   const projectContextFor = (name: string, evaluationId?: number): ProjectContext => ({
     project: context.project,
+    goLsp: lsp,
     ...(changedFiles === undefined ? {} : { changedFiles }),
     ...(changedLines === undefined ? {} : { changedLines }),
     trace: traceFor(name, evaluationId),
@@ -146,6 +198,7 @@ export async function executeRules(
     selection: Selection<T>,
     evaluationId?: number,
     changedOnly = false,
+    pendingWork?: Set<Promise<unknown>>,
   ): Promise<readonly ScopeSubject<T>[]> => {
     const exclude = selection.exclude ?? [];
     const candidates = await context.project.glob(selection.files);
@@ -168,6 +221,9 @@ export async function executeRules(
     }
 
     const scope = selection.scope;
+    const scheduler = pendingWork === undefined
+      ? scheduleWork
+      : <TWork>(work: Promise<TWork>) => trackWork(pendingWork, work);
     const collected = await mapConcurrent(chosen, context.concurrency, async filepath => {
       const source = await context.project.readText(filepath);
       const matches: readonly ScopeMatch<JsonValue>[] =
@@ -185,8 +241,7 @@ export async function executeRules(
         subjects.push({ kind: 'scope', filepath, ...valid } as unknown as ScopeSubject<T>);
       }
       return subjects;
-    });
-
+    }, scheduler);
     return collected.flat();
   };
 
@@ -214,12 +269,13 @@ export async function executeRules(
     const { name, rule } = plan;
     emit({ type: 'evaluation', evaluationId, name, subject });
     let trackedUsage: AiUsage | undefined;
-    let pendingAi: Set<Promise<CheckResult>> | undefined;
+    let pendingWork: Set<Promise<unknown>> | undefined;
     let accountingFailure: { readonly error: Error } | undefined;
     const retainAccountingFailure = (error: unknown): void => {
       if (accountingFailure !== undefined) return;
       const failure = error instanceof Error ? error : new Error(String(error));
       accountingFailure = { error: failure };
+      abortLsp();
       reportFailure(failure);
     };
     const throwIfAccountingFailed = (): void => {
@@ -249,19 +305,17 @@ export async function executeRules(
     const checkContext: CheckContext<JsonValue> = {
       ...projectContextFor(name, evaluationId),
       ruleName: name,
-      select: selection => selectFromRule(name, selection, evaluationId),
+      // Let the check catch a nested selection rejection. If it escapes, the
+      // enclosing check handler records it before aborting sibling work.
+      select: selection => selectFromRule(
+        name, selection, evaluationId, false, pendingWork ??= new Set<Promise<unknown>>(),
+      ),
       ai: options => {
         const call = evaluateAi(
           subject, options, { ...projectContextFor(name, evaluationId), ruleName: name }, runtimeOf(plan), observer,
         );
-        const pending = pendingAi ??= new Set<Promise<CheckResult>>();
-        pending.add(call);
-        // Observe both outcomes immediately; the check still receives the original promise.
-        void call.then(
-          () => { pending.delete(call); },
-          () => { pending.delete(call); },
-        );
-        return call;
+        const pending = pendingWork ??= new Set<Promise<unknown>>();
+        return trackWork(pending, call);
       },
     };
 
@@ -294,11 +348,12 @@ export async function executeRules(
         const cause = accountingFailure === undefined ? error : accountingFailure.error;
         const failure = cause instanceof Error ? cause : new Error(String(cause));
         reportFailure(failure);
+        abortLsp();
         throw failure;
       } finally {
-        // Promise.all may reject while sibling calls are still producing usage events.
-        while (pendingAi !== undefined && pendingAi.size > 0) {
-          await Promise.allSettled(pendingAi);
+        // The check can settle while sibling AI calls or selector workers still produce usage.
+        while (pendingWork !== undefined && pendingWork.size > 0) {
+          await Promise.allSettled(pendingWork);
         }
       }
       // A custom check may catch context.ai failures, but cannot discard accounting failures.
@@ -450,8 +505,11 @@ export async function executeRules(
   }
   context.emit?.({ type: 'progress', phase: 'evaluation', completed: 0, total: tasks.length });
 
-  const results = await mapConcurrent(tasks, context.concurrency, (task, _index, reportFailure) =>
-    evaluateSubject(task.plan, task.subject, task.evaluationId, reportFailure),
+  const results = await mapConcurrent(
+    tasks,
+    context.concurrency,
+    (task, _index, reportFailure) => evaluateSubject(task.plan, task.subject, task.evaluationId, reportFailure),
+    scheduleWork,
   );
   for (let index = 0; index < tasks.length; index += 1) {
     const task = tasks[index]!;

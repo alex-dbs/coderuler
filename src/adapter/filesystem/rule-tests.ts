@@ -2,12 +2,14 @@ import { lstat, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { Worker } from 'node:worker_threads';
+import { MessageChannel, Worker } from 'node:worker_threads';
 
-import type { LoadedRule } from '../../app/ports.js';
+import type { LoadedRule, LspBackendFactory } from '../../app/ports.js';
 import type { RuleTestCase, RuleTestResult } from '../../app/rule-tests.js';
 import { isRecord, validateJsonValue } from '../../app/validate.js';
 import type { RuleTestWorkerMessage, RuleTestWorkerOutcome, RuleTestWorkerRequest } from './rule-test-worker.js';
+import { createRuleTestLspHost } from './rule-test-lsp.js';
+import { createProject } from './project.js';
 import { getRuleDependencies, registerRuleDependencies } from './rule-resolution.js';
 
 // A JavaScript entry lets inherited tsx hooks resolve the source worker's .js import.
@@ -75,6 +77,13 @@ function addTestGroup(
 
 type TestActual = RuleTestResult['actual'];
 
+interface ActiveRuleTestLsp {
+  readonly channel: MessageChannel;
+  readonly host: { close(): Promise<void> };
+  transferred: boolean;
+  closePromise?: Promise<void>;
+}
+
 class RuleTestWorkerSession {
   private readonly worker = new Worker(WORKER_ENTRY);
   private nextId = 0;
@@ -83,6 +92,7 @@ class RuleTestWorkerSession {
   private onFailure: ((error: Error) => void) | undefined;
   private terminating = false;
   private termination: Promise<number> | undefined;
+  private activeLsp: ActiveRuleTestLsp | undefined;
 
   private readonly onError = (error: Error) => {
     if (this.terminating) return;
@@ -106,16 +116,33 @@ class RuleTestWorkerSession {
     if (this.failure !== undefined) throw this.failure;
   }
 
+  private closeLsp(active = this.activeLsp): Promise<void> {
+    if (active === undefined) return Promise.resolve();
+    if (active.closePromise !== undefined) return active.closePromise;
+    active.closePromise = (async () => {
+      try {
+        await active.host.close();
+      } finally {
+        active.channel.port1.close();
+        if (!active.transferred) active.channel.port2.close();
+        if (this.activeLsp === active) this.activeLsp = undefined;
+      }
+    })();
+    return active.closePromise;
+  }
+
   async run(
-    request: Omit<RuleTestWorkerRequest, 'id'>,
+    request: Omit<RuleTestWorkerRequest, 'id' | 'lspPort'>,
     deadline: number,
     onFailure: (error: Error) => void,
+    createBackend?: LspBackendFactory,
   ): Promise<TestActual | RuleTestWorkerOutcome> {
     this.onFailure = onFailure;
     this.assertHealthy();
     const id = this.nextId++;
     const result = Promise.withResolvers<TestActual | RuleTestWorkerOutcome>();
     let timer: NodeJS.Timeout | undefined;
+    let activeLsp: ActiveRuleTestLsp | undefined;
     const expire = () => {
       const remaining = deadline - performance.now();
       if (remaining <= 0) result.resolve('timeout');
@@ -131,17 +158,47 @@ class RuleTestWorkerSession {
       if (performance.now() >= deadline) result.resolve('timeout');
       else result.reject(error);
     };
+    let operationFailed = false;
     this.worker.on('message', onMessage);
     try {
       expire();
       if (performance.now() < deadline) {
-        this.worker.postMessage({ ...request, id } satisfies RuleTestWorkerRequest);
+        const channel = new MessageChannel();
+        try {
+          const host = createRuleTestLspHost(
+            channel.port1,
+            createProject(request.root, { excludeFiles: [request.ruleFile] }),
+            createBackend,
+          );
+          activeLsp = { channel, host, transferred: false };
+          this.activeLsp = activeLsp;
+          this.worker.postMessage(
+            { ...request, id, lspPort: channel.port2 } satisfies RuleTestWorkerRequest,
+            [channel.port2],
+          );
+          activeLsp.transferred = true;
+        } catch (error) {
+          if (activeLsp === undefined) {
+            channel.port1.close();
+            channel.port2.close();
+          }
+          throw error;
+        }
       }
       return await result.promise;
+    } catch (error) {
+      operationFailed = true;
+      throw error;
     } finally {
       clearTimeout(timer);
       this.worker.off('message', onMessage);
       this.rejectPending = undefined;
+      try {
+        await this.closeLsp(activeLsp);
+      } catch (error) {
+        if (!operationFailed) throw error;
+        if (activeLsp !== undefined) activeLsp.closePromise = Promise.resolve();
+      }
     }
   }
 
@@ -149,11 +206,26 @@ class RuleTestWorkerSession {
     if (this.termination === undefined) {
       this.terminating = true;
       this.rejectPending?.(new Error('Rule test worker stopped'));
-      this.termination = this.worker.terminate();
+      this.termination = (async () => {
+        let closeFailed = false;
+        let closeError: unknown;
+        try {
+          await this.closeLsp();
+        } catch (error) {
+          closeFailed = true;
+          closeError = error;
+        }
+        const code = await this.worker.terminate();
+        if (closeFailed) throw closeError;
+        return code;
+      })();
     }
-    await this.termination;
-    this.worker.off('error', this.onError);
-    this.worker.off('exit', this.onExit);
+    try {
+      await this.termination;
+    } finally {
+      this.worker.off('error', this.onError);
+      this.worker.off('exit', this.onExit);
+    }
   }
 }
 
@@ -176,6 +248,7 @@ async function runCase(
   session: RuleTestSession,
   onFailure: (error: unknown) => void,
   includeDisabled: boolean,
+  createLspBackend?: LspBackendFactory,
 ): Promise<RuleTestResult> {
   const started = performance.now();
   const deadline = started + timeoutMs;
@@ -202,7 +275,7 @@ async function runCase(
           root, ruleFile: entry.ruleFile, files: example.files, ai,
           ...(includeDisabled ? { includeDisabled: true } : {}),
           ...(dependencies === undefined ? {} : { dependencies }),
-        }, deadline, failCase);
+        }, deadline, failCase, createLspBackend);
         if (typeof outcome === 'string') actual = outcome;
         else {
           actual = outcome.actual;
@@ -241,6 +314,7 @@ export async function runRuleTests(
   concurrency = 1,
   includeAI = false,
   includeDisabled = false,
+  createLspBackend?: LspBackendFactory,
 ): Promise<readonly RuleTestResult[]> {
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) {
     throw new RangeError(`--concurrency must be a positive safe integer, received ${String(concurrency)}`);
@@ -300,7 +374,9 @@ export async function runRuleTests(
             }
             const group = groups[groupIndex]!;
             const example = validateCase(group.values[caseIndex], `${group.label}[${caseIndex}]`);
-            completed[index] = await runCase(rule, example, group.ai, timeoutMs, session, fail, includeDisabled);
+            completed[index] = await runCase(
+              rule, example, group.ai, timeoutMs, session, fail, includeDisabled, createLspBackend,
+            );
             if (failureObserved) return;
             while (completed[nextResult] !== undefined) {
               const result = completed[nextResult]!;
@@ -330,6 +406,10 @@ export async function runRuleTests(
     return results;
   } finally {
     await cancellation;
-    await Promise.all(sessions.map(stopSession));
+    try {
+      await Promise.all(sessions.map(stopSession));
+    } catch (error) {
+      if (!failureObserved) throw error;
+    }
   }
 }

@@ -1,0 +1,158 @@
+{
+  "seedCalleesDepth2": [
+    {
+      "filepath": "other/other.go",
+      "source": "func Shared() {}",
+      "lines": { "start": 3, "end": 3 },
+      "depth": 1
+    },
+    {
+      "filepath": "seed.go",
+      "source": "func First() {\n\tLeaf()\n}",
+      "lines": { "start": 16, "end": 18 },
+      "depth": 1
+    },
+    {
+      "filepath": "seed.go",
+      "source": "func Second() {\n\tLeaf()\n}",
+      "lines": { "start": 20, "end": 22 },
+      "depth": 1
+    },
+    {
+      "filepath": "seed.go",
+      "source": "func Shared() {}",
+      "lines": { "start": 30, "end": 30 },
+      "depth": 1
+    },
+    {
+      "filepath": "seed.go",
+      "source": "func Leaf() {\n\tDeep()\n}",
+      "lines": { "start": 24, "end": 26 },
+      "depth": 2
+    }
+  ],
+  "seedCalleesWithDependenciesDepth2": [
+    {
+      "filepath": "<dependency>/dep.go",
+      "source": "func External() {\n\tInner()\n}",
+      "lines": { "start": 3, "end": 5 },
+      "depth": 1
+    },
+    {
+      "filepath": "other/other.go",
+      "source": "func Shared() {}",
+      "lines": { "start": 3, "end": 3 },
+      "depth": 1
+    },
+    {
+      "filepath": "seed.go",
+      "source": "func First() {\n\tLeaf()\n}",
+      "lines": { "start": 16, "end": 18 },
+      "depth": 1
+    },
+    {
+      "filepath": "seed.go",
+      "source": "func Second() {\n\tLeaf()\n}",
+      "lines": { "start": 20, "end": 22 },
+      "depth": 1
+    },
+    {
+      "filepath": "seed.go",
+      "source": "func Shared() {}",
+      "lines": { "start": 30, "end": 30 },
+      "depth": 1
+    },
+    {
+      "filepath": "<dependency>/dep.go",
+      "source": "func Inner() {\n\tDeep()\n}",
+      "lines": { "start": 7, "end": 9 },
+      "depth": 2
+    },
+    {
+      "filepath": "seed.go",
+      "source": "func Leaf() {\n\tDeep()\n}",
+      "lines": { "start": 24, "end": 26 },
+      "depth": 2
+    }
+  ],
+  "seedCallersDepth2": [
+    {
+      "filepath": "seed.go",
+      "source": "func Caller() {\n\tSeed()\n}",
+      "lines": { "start": 32, "end": 34 },
+      "depth": 1
+    },
+    {
+      "filepath": "seed.go",
+      "source": "func Grandcaller() {\n\tCaller()\n}",
+      "lines": { "start": 36, "end": 38 },
+      "depth": 2
+    }
+  ],
+  "firstCallCalleesDepth1": [
+    {
+      "filepath": "seed.go",
+      "source": "func Leaf() {\n\tDeep()\n}",
+      "lines": { "start": 24, "end": 26 },
+      "depth": 1
+    }
+  ],
+  "cycleACalleesDepth3": [
+    {
+      "filepath": "seed.go",
+      "source": "func CycleB() {\n\tCycleA()\n}",
+      "lines": { "start": 48, "end": 50 },
+      "depth": 1
+    }
+  ],
+  "workerRunCalleesDepth2": [
+    {
+      "filepath": "seed.go",
+      "source": "func Second() {\n\tLeaf()\n}",
+      "lines": { "start": 20, "end": 22 },
+      "depth": 1
+    },
+    {
+      "filepath": "seed.go",
+      "source": "func Leaf() {\n\tDeep()\n}",
+      "lines": { "start": 24, "end": 26 },
+      "depth": 2
+    }
+  ],
+  "initializerCallersDepth2": [
+    {
+      "filepath": "initializers.go",
+      "source": "var _ = InitTarget()",
+      "lines": { "start": 4, "end": 4 },
+      "depth": 1
+    },
+    {
+      "filepath": "initializers.go",
+      "source": "var NamedInitializer = InitTarget()",
+      "lines": { "start": 5, "end": 5 },
+      "depth": 1
+    }
+  ],
+  "unicodeFirstCallCallerDepth1": [
+    {
+      "filepath": "seed.go",
+      "source": "func Seed() {\n\tFirst()\n\tSecond()\n\tShared()\n\tother.Shared()\n\tlspdep.External()\n}",
+      "lines": { "start": 8, "end": 14 },
+      "depth": 1
+    },
+    {
+      "filepath": "unicode.go",
+      "source": "func Unicode() { _ = \"😀\"; First() }",
+      "lines": { "start": 3, "end": 3 },
+      "depth": 1
+    }
+  ],
+  "unicodeFirstCalleesDepth1": [
+    {
+      "filepath": "seed.go",
+      "source": "func First() {\n\tLeaf()\n}",
+      "lines": { "start": 16, "end": 18 },
+      "depth": 1
+    }
+  ]
+}

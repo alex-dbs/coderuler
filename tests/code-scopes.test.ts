@@ -13,6 +13,7 @@ import { SourceLines, textLineSpan } from '../dist/adapter/scope/lines.js';
 import { createProject } from '../dist/adapter/filesystem/project.js';
 import { protobuf } from '../dist/adapter/scope/protobuf.js';
 import type { JsonValue, ProjectContext, ScopeMatch, ScopeSelector } from '../dist/index.js';
+import { createRunLsp } from '../dist/app/lsp.js';
 import { ROOT } from './support.ts';
 
 type LineSpan = NonNullable<ScopeMatch['lines']>;
@@ -31,7 +32,8 @@ function astGrepWith(options: Record<string, unknown>): ScopeSelector<JsonValue>
   return astGrep(options as unknown as AstGrepOptions);
 }
 
-const projectContext: ProjectContext = { project: createProject(ROOT), trace: () => {} };
+const project = createProject(ROOT);
+const projectContext: ProjectContext = { project, goLsp: createRunLsp(project).tools, trace: () => {} };
 async function select(
   selector: ScopeSelector<JsonValue>,
   filepath: string,

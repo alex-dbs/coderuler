@@ -24,6 +24,7 @@ import {
   type SourceFile,
   type Subject,
 } from '../dist/index.js';
+import { createRunLsp } from '../dist/app/lsp.js';
 import { evaluateAi } from '../dist/app/evaluators.js';
 import type { DecisionBackend, DecisionObserver, DecisionRuntime } from '../dist/app/ports.js';
 import {
@@ -94,6 +95,7 @@ interface TestContextOptions {
 
 class TestContext implements CheckContext<JsonValue> {
   readonly project: Project;
+  readonly goLsp: ProjectContext['goLsp'];
   readonly ruleName: string;
   readonly traces: CapturedTrace[] = [];
   readonly selections: unknown[] = [];
@@ -104,6 +106,7 @@ class TestContext implements CheckContext<JsonValue> {
 
   constructor(options: TestContextOptions = {}) {
     this.project = options.project ?? new MemoryProject();
+    this.goLsp = createRunLsp(this.project).tools;
     this.ruleName = options.ruleName ?? 'contract-rule';
     this.#subject = options.subject;
     this.#runtime = options.runtime;
@@ -134,6 +137,7 @@ class TestContext implements CheckContext<JsonValue> {
       options,
       {
         project: this.project,
+        goLsp: this.goLsp,
         ruleName: this.ruleName,
         trace: (message, details) => this.trace(message, details),
       },
@@ -171,7 +175,8 @@ function requestAt(backend: RecordingBackend, index = 0): DecisionRequest {
 }
 
 function projectContext(ruleName = 'contract-rule'): ProjectContext & { readonly ruleName: string } {
-  return { project: new MemoryProject(), ruleName, trace: () => {} };
+  const project = new MemoryProject();
+  return { project, goLsp: createRunLsp(project).tools, ruleName, trace: () => {} };
 }
 
 function scopeSubject(subject: Omit<ScopeSubject<JsonValue>, 'kind'>): ScopeSubject<JsonValue> {
@@ -329,7 +334,8 @@ test('Rule exposes its documented defaults', async () => {
   assert.deepStrictEqual(rule.settings, {});
   assert.equal(rule.group, 'scope');
 
-  const context: ProjectContext = { project: new MemoryProject(), trace: () => {} };
+  const project = new MemoryProject();
+  const context: ProjectContext = { project, goLsp: createRunLsp(project).tools, trace: () => {} };
   assert.equal(await rule.when(context), true);
   const subject = scopeSubject({ filepath: 'a.txt', id: '$', source: 'text' });
   assert.equal(await rule.filter(subject, context), true);
@@ -1053,7 +1059,7 @@ test('an input callback replaces the projected state', async () => {
         return { custom: context.project.root };
       },
     },
-    { project, ruleName: 'r', trace: () => {} },
+    { project, goLsp: createRunLsp(project).tools, ruleName: 'r', trace: () => {} },
     runtimeFor(backend),
   );
 

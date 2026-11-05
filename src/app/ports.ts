@@ -1,9 +1,11 @@
 import type {
   AiUsage,
+  Awaitable,
   CheckResult,
   GroupSubject,
   JsonValue,
   LineRange,
+  LspTools,
   Rule,
   RuleSettings,
   ScopeSubject,
@@ -27,6 +29,11 @@ export interface Project {
   readYaml(path: string): Promise<readonly JsonValue[]>;
   readCsv(path: string, options?: CsvOptions): Promise<readonly CsvRow[]>;
 }
+export interface LspBackend extends LspTools {
+  close(): Promise<void>;
+}
+
+export type LspBackendFactory = (project: Project, signal: AbortSignal) => Awaitable<LspBackend>;
 
 export interface CsvOptions {
   readonly headers?: boolean;
@@ -89,6 +96,7 @@ export interface DecisionRuntime {
 
 export interface RunContext {
   readonly project: Project;
+  readonly createLspBackend?: LspBackendFactory;
   readonly isTarget: (filepath: string) => boolean;
   readonly changedFiles?: ReadonlySet<string>;
   readonly changedLines?: ReadonlyMap<string, readonly LineRange[]>;
