@@ -97,6 +97,7 @@ class TestContext implements CheckContext<JsonValue> {
   readonly project: Project;
   readonly goLsp: ProjectContext['goLsp'];
   readonly rubyLsp: ProjectContext['rubyLsp'];
+  readonly typescriptLsp: ProjectContext['typescriptLsp'];
   readonly ruleName: string;
   readonly traces: CapturedTrace[] = [];
   readonly selections: unknown[] = [];
@@ -109,6 +110,7 @@ class TestContext implements CheckContext<JsonValue> {
     this.project = options.project ?? new MemoryProject();
     this.goLsp = createRunLsp(this.project).tools;
     this.rubyLsp = createRunLsp(this.project).tools;
+    this.typescriptLsp = createRunLsp(this.project).tools;
     this.ruleName = options.ruleName ?? 'contract-rule';
     this.#subject = options.subject;
     this.#runtime = options.runtime;
@@ -141,6 +143,7 @@ class TestContext implements CheckContext<JsonValue> {
         project: this.project,
         goLsp: this.goLsp,
         rubyLsp: this.rubyLsp,
+        typescriptLsp: this.typescriptLsp,
         ruleName: this.ruleName,
         trace: (message, details) => this.trace(message, details),
       },
@@ -183,6 +186,7 @@ function projectContext(ruleName = 'contract-rule'): ProjectContext & { readonly
     project,
     goLsp: createRunLsp(project).tools,
     rubyLsp: createRunLsp(project).tools,
+    typescriptLsp: createRunLsp(project).tools,
     ruleName,
     trace: () => {},
   };
@@ -340,6 +344,7 @@ test('Rule exposes its documented defaults', async () => {
     project,
     goLsp: createRunLsp(project).tools,
     rubyLsp: createRunLsp(project).tools,
+    typescriptLsp: createRunLsp(project).tools,
     trace: () => {},
   };
   assert.equal(await rule.when(context), true);
@@ -1069,6 +1074,7 @@ test('an input callback replaces the projected state', async () => {
       project,
       goLsp: createRunLsp(project).tools,
       rubyLsp: createRunLsp(project).tools,
+      typescriptLsp: createRunLsp(project).tools,
       ruleName: 'r',
       trace: () => {},
     },

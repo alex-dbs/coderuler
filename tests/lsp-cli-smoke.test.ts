@@ -4,6 +4,7 @@ import { after, test } from 'node:test';
 import { join } from 'node:path';
 
 import { createRubyLspFixture } from './ruby-lsp-support.ts';
+import { createTypescriptLspFixture } from './typescript-lsp-support.ts';
 import { createSandbox, ROOT, runCli, writeFile } from './support.ts';
 
 const sandbox = createSandbox('coderuler-lsp-cli-');
@@ -62,6 +63,49 @@ test('test runs both Ruby fixture examples with their declared outcomes', async 
   ], target);
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   assert.equal(result.stdout.match(/^.*PASS.*$/gm)?.length, 2, result.stdout);
+});
+
+test('TypeScript LSP check uses the default backend to resolve the TypeScript fixture', async () => {
+  const target = await createTypescriptLspFixture(sandbox.isolated('typescript-check'));
+  const result = await runCli([
+    'check', '.', '--rules', '.coderuler/typescript-definition.rule.ts', '--json', '--output-all',
+  ], target);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /"status":\s*"pass"/);
+});
+
+test('TypeScript LSP inspect uses the default backend to resolve the TypeScript fixture', async () => {
+  const target = await createTypescriptLspFixture(sandbox.isolated('typescript-inspect'));
+  const result = await runCli([
+    'inspect', '.coderuler/typescript-definition.rule.ts', '.', '--json',
+  ], target);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.equal(result.stderr, '');
+  assert.match(result.stdout, /"status":\s*"pass"/);
+});
+
+test('TypeScript LSP check reports the exact violation for an unresolved widget', async () => {
+  const target = await createTypescriptLspFixture(sandbox.isolated('typescript-check-violation'));
+  const usagePath = join(target.cwd, 'src', 'usage.ts');
+  const usage = readFileSync(usagePath, 'utf8');
+  assert.ok(usage.includes('new Widget()'), usage);
+  writeFile(usagePath, usage.replace('new Widget()', 'new UnknownWidget()'));
+  const result = await runCli([
+    'check', '.', '--rules', '.coderuler/typescript-definition.rule.ts', '--json', '--output-all',
+  ], target);
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+  assert.ok(result.stdout.includes('Widget must resolve to src/widget.ts'), result.stdout);
+});
+
+test('TypeScript LSP test reports both inline outcomes as passing cases', async () => {
+  const target = await createTypescriptLspFixture(sandbox.isolated('typescript-test'));
+  const result = await runCli([
+    'test', '.coderuler/typescript-definition.rule.ts', '--timeout', '60s',
+  ], target);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.equal(result.stdout.match(/^.*PASS.*$/gm)?.length, 2, result.stdout);
+  assert.ok(result.stdout.includes('Widget resolves to its definition'), result.stdout);
+  assert.ok(result.stdout.includes('an unknown widget does not resolve'), result.stdout);
 });
 
 const offlineGo = {

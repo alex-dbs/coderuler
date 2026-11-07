@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
-import { basename, isAbsolute, relative, resolve, sep } from 'node:path';
+import { basename, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse, type SgNode, type SgRoot } from '@ast-grep/napi';
 import {
@@ -263,7 +263,7 @@ export async function createLspBackend(
   const child = spawn(settings.command, [...(settings.args ?? [])], {
     cwd: root,
     env: settings.env,
-    shell: false,
+    shell: process.platform === 'win32' && settings.languageId === 'typescript',
     detached: usesProcessGroup,
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -537,7 +537,14 @@ export async function createLspBackend(
         index: createTextIndex(text),
       };
       await notify('textDocument/didOpen', () => connection!.sendNotification(DidOpenTextDocumentNotification.type, {
-        textDocument: { uri, languageId: settings.languageId, version: 1, text },
+        textDocument: {
+          uri,
+          languageId: settings.languageId === 'typescript' && extname(absolute) === '.tsx'
+            ? 'typescriptreact'
+            : settings.languageId,
+          version: 1,
+          text,
+        },
       }));
       return document;
     })();
@@ -956,5 +963,13 @@ export function createRubyLspBackend(project: Project, signal: AbortSignal): Pro
     args: [],
     languageId: 'ruby',
     initializationProgressToken: 'indexing-progress',
+  });
+}
+
+export function createTypescriptLspBackend(project: Project, signal: AbortSignal): Promise<LspBackend> {
+  return createLspBackend(project, signal, {
+    command: 'tsc',
+    args: ['--lsp', '--stdio'],
+    languageId: 'typescript',
   });
 }

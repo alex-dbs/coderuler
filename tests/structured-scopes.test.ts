@@ -62,6 +62,7 @@ const projectContext: ProjectContext = {
   project,
   goLsp: createRunLsp(project).tools,
   rubyLsp: createRunLsp(project).tools,
+  typescriptLsp: createRunLsp(project).tools,
   trace: () => {},
 };
 function collect<T>(

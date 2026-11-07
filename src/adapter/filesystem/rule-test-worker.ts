@@ -14,6 +14,7 @@ export interface RuleTestWorkerRequest {
   readonly id: number;
   readonly lspPort: MessagePort;
   readonly rubyLspPort: MessagePort;
+  readonly typescriptLspPort: MessagePort;
   readonly root: string;
   readonly ruleFile: string;
   readonly files: RuleTestCase['files'];
@@ -39,7 +40,7 @@ function fixturePath(root: string, filepath: string): string {
 }
 
 async function runCase(request: RuleTestWorkerRequest): Promise<RuleTestWorkerOutcome> {
-  const { lspPort, rubyLspPort, root, ruleFile, files, ai, dependencies, includeDisabled } = request;
+  const { lspPort, rubyLspPort, typescriptLspPort, root, ruleFile, files, ai, dependencies, includeDisabled } = request;
   try {
     for (const [filepath, source] of Object.entries(files)) {
       const target = fixturePath(root, filepath);
@@ -60,6 +61,8 @@ async function runCase(request: RuleTestWorkerRequest): Promise<RuleTestWorkerOu
       },
       createLspBackend: (_project, signal) => createRuleTestLspBackend(lspPort, signal),
       createRubyLspBackend: (_project, signal) => createRuleTestLspBackend(rubyLspPort, signal),
+      createTypescriptLspBackend: (_project, signal) =>
+        createRuleTestLspBackend(typescriptLspPort, signal),
     });
     const report = reports[0];
     if (reports.length !== 1 || report === undefined) throw new Error('Expected exactly one rule report');
@@ -75,7 +78,11 @@ async function runCase(request: RuleTestWorkerRequest): Promise<RuleTestWorkerOu
     try {
       lspPort.close();
     } finally {
-      rubyLspPort.close();
+      try {
+        rubyLspPort.close();
+      } finally {
+        typescriptLspPort.close();
+      }
     }
   }
 }

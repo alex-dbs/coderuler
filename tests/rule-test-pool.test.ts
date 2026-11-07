@@ -438,7 +438,7 @@ export const tests = [${cases(names.slice(2))}];`);
   for (const record of records) assert.equal(existsSync(record.root), false, record.root);
 });
 
-test('inline rule tests close one fresh parent-owned LSP backend per successful case', { timeout: 30_000 }, async () => {
+test('inline rule tests close fresh parent-owned Go, Ruby, and TypeScript backends per successful case', { timeout: 30_000 }, async () => {
   const target = sandbox.isolated('parent-lsp-success');
   const ruleFile = join(target.cwd, '.coderuler', 'lsp.rule.ts');
   const rules = await loadInlineRule(
@@ -448,14 +448,15 @@ test('inline rule tests close one fresh parent-owned LSP backend per successful 
       `async (_subject, context) => {
         await context.goLsp.hover({ filepath: 'inputs/one.txt', line: 1 });
         await context.rubyLsp.hover({ filepath: 'inputs/one.txt', line: 1 });
+        await context.typescriptLsp.hover({ filepath: 'inputs/one.txt', line: 1 });
         return pass();
       }`,
       cases(['first', 'second']),
     ),
   );
-  const openedRoots = { go: [] as string[], ruby: [] as string[] };
-  const closedRoots = { go: [] as string[], ruby: [] as string[] };
-  const rootsAtClose = { go: [] as boolean[], ruby: [] as boolean[] };
+  const openedRoots = { go: [] as string[], ruby: [] as string[], typescript: [] as string[] };
+  const closedRoots = { go: [] as string[], ruby: [] as string[], typescript: [] as string[] };
+  const rootsAtClose = { go: [] as boolean[], ruby: [] as boolean[], typescript: [] as boolean[] };
   const createBackend: LspBackendFactory = async project => {
     openedRoots.go.push(project.root);
     return lspBackend(() => {
@@ -470,23 +471,36 @@ test('inline rule tests close one fresh parent-owned LSP backend per successful 
       rootsAtClose.ruby.push(existsSync(project.root));
     }, async () => null);
   };
+  const createTypescriptBackend: LspBackendFactory = async project => {
+    openedRoots.typescript.push(project.root);
+    return lspBackend(() => {
+      closedRoots.typescript.push(project.root);
+      rootsAtClose.typescript.push(existsSync(project.root));
+    }, async () => null);
+  };
 
-  const results = await runRuleTests(rules, undefined, 10_000, 1, false, false, createBackend, createRubyBackend);
+  const results = await runRuleTests(rules, undefined, 10_000, 1, false, false, createBackend, createRubyBackend, createTypescriptBackend);
   assert.deepEqual(results.map(result => result.actual), ['pass', 'pass']);
   assert.equal(openedRoots.go.length, 2);
   assert.equal(openedRoots.ruby.length, 2);
+  assert.equal(openedRoots.typescript.length, 2);
   assert.equal(new Set(openedRoots.go).size, 2, 'each reused-worker case must get its own Go backend');
   assert.equal(new Set(openedRoots.ruby).size, 2, 'each reused-worker case must get its own Ruby backend');
+  assert.equal(new Set(openedRoots.typescript).size, 2, 'each reused-worker case must get its own TypeScript backend');
   assert.deepEqual(openedRoots.ruby, openedRoots.go, 'both hosts must use the same case project');
+  assert.deepEqual(openedRoots.typescript, openedRoots.go, 'all hosts must use the same case project');
   assert.deepEqual(closedRoots.go, openedRoots.go);
   assert.deepEqual(closedRoots.ruby, openedRoots.ruby);
+  assert.deepEqual(closedRoots.typescript, openedRoots.typescript);
   assert.deepEqual(rootsAtClose.go, [true, true], 'the Go host must close before its case root is removed');
   assert.deepEqual(rootsAtClose.ruby, [true, true], 'the Ruby host must close before its case root is removed');
+  assert.deepEqual(rootsAtClose.typescript, [true, true], 'the TypeScript host must close before its case root is removed');
   for (const root of openedRoots.go) assert.equal(existsSync(root), false, root);
   for (const root of openedRoots.ruby) assert.equal(existsSync(root), false, root);
+  for (const root of openedRoots.typescript) assert.equal(existsSync(root), false, root);
 });
 
-test('inline rule timeout closes pending Go and Ruby hosts before removing its root', { timeout: 20_000 }, async () => {
+test('inline rule timeout closes pending Go, Ruby, and TypeScript hosts before removing its root', { timeout: 20_000 }, async () => {
   const target = sandbox.isolated('parent-lsp-timeout');
   const ruleFile = join(target.cwd, '.coderuler', 'lsp.rule.ts');
   const rules = await loadInlineRule(
@@ -497,18 +511,27 @@ test('inline rule timeout closes pending Go and Ruby hosts before removing its r
         await Promise.all([
           context.goLsp.hover({ filepath: 'inputs/one.txt', line: 1 }),
           context.rubyLsp.hover({ filepath: 'inputs/one.txt', line: 1 }),
+          context.typescriptLsp.hover({ filepath: 'inputs/one.txt', line: 1 }),
         ]);
         return pass();
       }`,
       cases(['pending']),
     ),
   );
-  const started = Promise.withResolvers<{ go: string; ruby: string }>();
-  const roots = { go: undefined as string | undefined, ruby: undefined as string | undefined };
-  const closedRoots = { go: [] as string[], ruby: [] as string[] };
-  const rootsAtClose = { go: [] as boolean[], ruby: [] as boolean[] };
+  const started = Promise.withResolvers<{ go: string; ruby: string; typescript: string }>();
+  const typescriptRequestStarted = Promise.withResolvers<void>();
+  const roots = {
+    go: undefined as string | undefined,
+    ruby: undefined as string | undefined,
+    typescript: undefined as string | undefined,
+  };
+  const closedRoots = { go: [] as string[], ruby: [] as string[], typescript: [] as string[] };
+  const rootsAtClose = { go: [] as boolean[], ruby: [] as boolean[], typescript: [] as boolean[] };
+  const typescriptLifecycle: string[] = [];
   const onStarted = (): void => {
-    if (roots.go !== undefined && roots.ruby !== undefined) started.resolve({ go: roots.go, ruby: roots.ruby });
+    if (roots.go !== undefined && roots.ruby !== undefined && roots.typescript !== undefined) {
+      started.resolve({ go: roots.go, ruby: roots.ruby, typescript: roots.typescript });
+    }
   };
   const createBackend: LspBackendFactory = async (project, signal) => {
     roots.go = project.root;
@@ -526,21 +549,39 @@ test('inline rule timeout closes pending Go and Ruby hosts before removing its r
       rootsAtClose.ruby.push(existsSync(project.root));
     }, () => hoverUntilAbort(signal));
   };
+  const createTypescriptBackend: LspBackendFactory = async (project, signal) => {
+    roots.typescript = project.root;
+    signal.addEventListener('abort', () => typescriptLifecycle.push('abort'), { once: true });
+    onStarted();
+    return lspBackend(() => {
+      closedRoots.typescript.push(project.root);
+      rootsAtClose.typescript.push(existsSync(project.root));
+      typescriptLifecycle.push('close');
+    }, () => {
+      typescriptRequestStarted.resolve();
+      return hoverUntilAbort(signal);
+    });
+  };
   // This exercises the real worker-thread deadline, which cannot be driven by parent-side fake time.
-  const execution = runRuleTests(rules, undefined, 4_000, 1, false, false, createBackend, createRubyBackend);
+  const execution = runRuleTests(rules, undefined, 4_000, 1, false, false, createBackend, createRubyBackend, createTypescriptBackend);
   const startedOrFinished = await Promise.race([
     started.promise.then(projectRoots => ({ projectRoots })),
     execution.then(() => ({ finished: true }), error => ({ error })),
   ]);
-  assert.ok('projectRoots' in startedOrFinished, 'the case must reach both parent-owned LSP hosts before timeout');
+  assert.ok('projectRoots' in startedOrFinished, 'the case must reach all three parent-owned LSP hosts before timeout');
+  await typescriptRequestStarted.promise;
   const [result] = await execution;
   assert.equal(result?.actual, 'timeout');
   assert.deepEqual(closedRoots.go, [startedOrFinished.projectRoots.go]);
   assert.deepEqual(closedRoots.ruby, [startedOrFinished.projectRoots.ruby]);
+  assert.deepEqual(closedRoots.typescript, [startedOrFinished.projectRoots.typescript]);
   assert.deepEqual(rootsAtClose.go, [true]);
   assert.deepEqual(rootsAtClose.ruby, [true]);
+  assert.deepEqual(rootsAtClose.typescript, [true]);
+  assert.deepEqual(typescriptLifecycle, ['abort', 'close'], 'the pending TypeScript request must abort before its host closes');
   assert.equal(existsSync(startedOrFinished.projectRoots.go), false);
   assert.equal(existsSync(startedOrFinished.projectRoots.ruby), false);
+  assert.equal(existsSync(startedOrFinished.projectRoots.typescript), false);
 });
 
 test('inline sibling failure closes pending Go and Ruby hosts before removing its root', { timeout: 20_000 }, async context => {
