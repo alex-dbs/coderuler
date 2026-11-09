@@ -32,6 +32,7 @@ import type {
   ScopeSubject,
   SelectionContext,
   Subject,
+  SuppressionConfig,
   TokenUsage,
 } from '../dist/index.js';
 import { executeRules } from '../dist/app/execute.js';
@@ -90,6 +91,9 @@ class MemoryProject implements Project {
 
   async readYaml(): Promise<readonly JsonValue[]> {
     throw new Error('MemoryProject does not read YAML');
+  }
+  async readSuppressions(): Promise<SuppressionConfig> {
+    return new Map();
   }
 
   async readCsv(): Promise<readonly CsvRow[]> {

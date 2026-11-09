@@ -38,6 +38,12 @@ export type {
   ViolationLocation,
   WorkspaceSymbol,
 } from './app/rule.js';
+export type {
+  EvaluationResult,
+  SuppressionConfig,
+  SuppressionEntry,
+  SuppressedLocation,
+} from './app/suppressions.js';
 
 export { ai, pass, regex, violation } from './app/evaluators.js';
 export type { RegexOptions } from './app/evaluators.js';

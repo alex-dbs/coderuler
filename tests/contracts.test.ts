@@ -22,6 +22,7 @@ import {
   type ScopeSelector,
   type ScopeSubject,
   type SourceFile,
+  type SuppressionConfig,
   type Subject,
 } from '../dist/index.js';
 import { createRunLsp } from '../dist/app/lsp.js';
@@ -74,6 +75,9 @@ class MemoryProject implements Project {
 
   async readYaml(): Promise<readonly JsonValue[]> {
     throw new Error('MemoryProject does not read YAML');
+  }
+  async readSuppressions(): Promise<SuppressionConfig> {
+    return new Map();
   }
 
   async readCsv(): Promise<readonly CsvRow[]> {

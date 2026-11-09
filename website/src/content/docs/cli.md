@@ -103,6 +103,8 @@ coderuler check src --tags go security --exclude-tags experimental
 
 Concurrency must be a positive safe integer. Threshold must be a decimal between `0` and `1`. AI checks execute live during `check`, without a separate opt-in flag. See [CI and GitHub](/docs/ci/) before using PR checks or comments.
 
+Fully suppressed evaluations are hidden by default, like passes. Use `--output-all` to show their `[suppressed]` status, covered locations, and reasons. With `--output-all`, partial violations also show suppression details. See [Configuration](/docs/configuration/#violation-suppressions) to manage accepted violations.
+
 ## Inspect
 
 ```sh

@@ -23,7 +23,7 @@ Default-export a constructible class extending `Rule<T>` (`T = JsonValue`). Extr
 | `check: Evaluator<T>`                                                                   | Required   | Function-valued property, such as `check = regex(...)` or `check: Evaluator<T> = ...`, rather than a method. |
 
 
-Execution: load and validate all rules → apply `check` tag filters → enabled → `when` → select → validate subjects → filter → group → check → report. `Awaitable<T>` means `T | Promise<T>`.
+Execution: load and validate all rules → apply `check` tag filters → read root suppressions → enabled → `when` → select → validate subjects → filter → group → check → validate/normalize result → apply suppressions → report. Suppression leaves applicability and check execution unchanged, including AI calls. `Awaitable<T>` means `T | Promise<T>`.
 
 `files` and `exclude` must be dense arrays of nonempty strings, including on disabled rules. `tags`, when present, must be dense arrays of nonempty strings.
 
@@ -343,6 +343,26 @@ Return a nonblank string. A throw, rejected promise, blank string, or non-string
 Scalar AI classification supplies no offending-member attribution: scope AI can use its subject's lines, but grouped AI needs explicit locations from a custom check wrapping `context.ai(...)`; otherwise it uses the fallback comment.
 
 Results validate; supplied messages survive reporting. Violations without a message report rule/location without generated text. Return real probability/model/threshold metadata only; supplied probability/threshold must be finite in `[0, 1]`. Throw for execution errors. External libraries/providers may be called directly; no backend registry is required.
+
+## Violation suppressions
+
+Rules return `CheckResult` with status `pass` or `violation`; only the engine creates `EvaluationResult` with status `suppressed`. The engine applies suppressions after validating and normalizing a check result, before reporting it. A partial match remains a violation with uncovered locations active; a full match has status `suppressed` and records each covered location and reason. Only active violations reach `Rule.comment`; fully suppressed results do not create PR comments. Suppression does not change applicability, skip checks, hide execution errors, or avoid AI costs. There is no bypass setting.
+
+Each run reads `.coderuler/suppressions.yml` from its project root: the invocation root for `check`, the selected folder for `inspect`, and each isolated fixture root for rule tests. Rule-test fixtures do not inherit the invocation project's configuration. Use `coderuler inspect <rule> . --json` to find the exact rule name, scope IDs, and line ranges.
+
+```yaml
+suppressions:
+  field-naming:
+    - files: ["api/orders.proto"]
+      scope: "acme.Order.legacy_id"
+      reason: "Existing public contract"
+  no-console:
+    - files: ["src/legacy.js"]
+      lines: { start: 42, end: 45 }
+      reason: "Required diagnostic output"
+```
+
+`files` uses root-relative globs. `scope` is an exact selector ID; `lines` is an inclusive range that must contain the entire finding range. Use at most one selector; omitting both covers all findings in the matching files. Each entry needs a reason, and the first matching entry supplies it. Fully suppressed results and their reasons appear with `--output-all`; default check output omits them. Rules cannot return `suppressed`, and their applicability filters should not encode local exceptions.
 
 ### Context helpers
 

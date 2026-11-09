@@ -25,6 +25,8 @@ import type {
   RunContext,
   RunEvent,
 } from './ports.js';
+import { applySuppressions } from './suppressions.js';
+import type { EvaluationResult, SuppressionConfig } from './suppressions.js';
 import { createRunLsp } from './lsp.js';
 import { mapConcurrent } from './concurrency.js';
 import { evaluateAi } from './evaluators.js';
@@ -181,6 +183,12 @@ async function executeRun(
     });
     return error instanceof Error ? error : new Error(message);
   };
+  let suppressions: SuppressionConfig;
+  try {
+    suppressions = await context.project.readSuppressions();
+  } catch (error) {
+    throw fail(undefined, 'suppression', error);
+  }
 
   const statCache = new Map<string, Promise<{ readonly kind: 'file' | 'directory' } | undefined>>();
 
@@ -279,7 +287,7 @@ async function executeRun(
     subject: Subject<JsonValue>,
     evaluationId: number,
     reportFailure: (error: unknown) => void,
-  ): Promise<CheckResult> => {
+  ): Promise<EvaluationResult> => {
     plan.evaluationStartedAt ??= performance.now();
     const { name, rule } = plan;
     emit({ type: 'evaluation', evaluationId, name, subject });
@@ -378,12 +386,13 @@ async function executeRun(
     }
 
     const normalized: CheckResult = trackedUsage === undefined ? result : { ...result, usage: trackedUsage };
-    emit({ type: 'result', evaluationId, name, subject, result: normalized });
+    const effective = applySuppressions(suppressions, name, subject, normalized);
+    emit({ type: 'result', evaluationId, name, subject, result: effective });
     context.emit?.({
       type: 'progress', phase: 'evaluation', completed: ++completedEvaluations, total: tasks.length,
     });
     plan.evaluationFinishedAt = performance.now();
-    return normalized;
+    return effective;
   };
 
   const plans: Plan[] = [];

@@ -1,7 +1,8 @@
 import type { RuleReport, RunEvent } from '../../app/ports.js';
-import type { CheckResult, GroupSubject, JsonValue, ScopeSubject, Subject } from '../../app/rule.js';
-import type { InspectRenderer } from './reports.js';
+import type { EvaluationResult } from '../../app/suppressions.js';
+import type { GroupSubject, JsonValue, ScopeSubject, Subject } from '../../app/rule.js';
 import type { TextRedactor, TextWriter } from './text.js';
+import type { InspectRenderer } from './reports.js';
 import { createUsageTracker } from './inspect-usage.js';
 
 interface InspectJsonOptions {
@@ -60,12 +61,30 @@ function redactSubject(subject: Subject, redact: TextRedactor): Subject {
   return subject.kind === 'scope' ? redactScope(subject, redact) : redactGroup(subject, redact);
 }
 
-function redactResult(result: CheckResult, redact: TextRedactor): CheckResult {
+function redactResult(result: EvaluationResult, redact: TextRedactor): EvaluationResult {
+  const suppressedLocations = result.suppressedLocations?.map(suppressed => ({
+    location: {
+      ...suppressed.location,
+      filepath: redact(suppressed.location.filepath),
+      ...(suppressed.location.scopeId === undefined ? {} : { scopeId: redact(suppressed.location.scopeId) }),
+    },
+    reason: redact(suppressed.reason),
+  }));
+  if (result.status === 'suppressed') {
+    return {
+      ...result,
+      ...(suppressedLocations === undefined ? {} : { suppressedLocations }),
+      ...(result.message === undefined ? {} : { message: redact(result.message) }),
+      ...(result.model === undefined ? {} : { model: redact(result.model) }),
+      ...(result.usage === undefined ? {} : { usage: { ...result.usage } }),
+    };
+  }
   return {
     ...result,
     ...(result.message === undefined ? {} : { message: redact(result.message) }),
     ...(result.model === undefined ? {} : { model: redact(result.model) }),
     ...(result.usage === undefined ? {} : { usage: { ...result.usage } }),
+    ...(suppressedLocations === undefined ? {} : { suppressedLocations }),
   };
 }
 

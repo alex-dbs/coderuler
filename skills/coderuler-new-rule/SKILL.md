@@ -1,6 +1,6 @@
 ---
 name: coderuler-new-rule
-description: Create CodeRuler rules, including custom selection, filters and checks, inline or companion tests, and inspection.
+description: Create CodeRuler rules, including selection, checks, tests, inspection, and suppressing accepted violations.
 ---
 
 # Create a CodeRuler rule
@@ -135,6 +135,12 @@ Finally exercise normal evaluation:
 ```sh
 coderuler check . --rules .coderuler/k8s-replica-floor.rule.ts --output-all
 ```
+
+## 5. Record a valid exception
+
+After the project check, suppress only a finding the rule correctly identifies but the project accepts. Find its exact rule name and location with `coderuler inspect <rule> . --json`, then add a narrow entry to `.coderuler/suppressions.yml` with a short reason. Prefer a scope ID; use inclusive lines when a scope is unavailable or too broad.
+
+Rerun `coderuler check . --output-all` and confirm only the intended finding is suppressed. Fix a rule or fixture when its policy is wrong; never add a suppression just to pass a test. The engine applies suppressions between a valid check result and its report; this does not change applicability or skip checks and AI calls. See [violation suppressions](reference.md#violation-suppressions) for the YAML shape and root rules.
 
 ## Good and bad practices
 

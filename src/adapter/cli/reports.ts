@@ -9,6 +9,7 @@ import type { RuleTestResult } from '../../app/rule-tests.js';
 import type { AiUsage, JsonValue, ScopeSubject, Subject } from '../../app/rule.js';
 import { addUsage } from '../../app/usage.js';
 import type { ViolationComment } from '../../app/violation-comments.js';
+import type { SuppressedLocation } from '../../app/suppressions.js';
 import { createUsageTracker } from './inspect-usage.js';
 import { escapeText, type TextRedactor, type TextWriter } from './text.js';
 
@@ -432,14 +433,20 @@ export function createWalkthroughRenderer(options: WalkthroughOptions, inspectUs
           paint('    body:', 'gray', color),
           ...walkthroughPayload(event.body, redact, raw).map(line => paint(`  ${line}`, 'gray', color)),
         ]);
-      case 'result':
+      case 'result': {
+        const result = event.result;
         return section(card, 'Result', [
-          `  ${field('status', event.result.status, event.result.status === 'pass' ? 'green' : 'red')}`,
-          ...(event.result.message === undefined ? [] : [`  ${field('message', event.result.message)}`]),
-          ...(event.result.probability === undefined ? [] : [`  ${field('probability', String(event.result.probability))}`]),
-          ...(event.result.threshold === undefined ? [] : [`  ${field('threshold', String(event.result.threshold))}`]),
-          ...(event.result.model === undefined ? [] : [`  ${field('model', event.result.model)}`]),
+          `  ${field('status', result.status, result.status === 'pass' ? 'green' : result.status === 'suppressed' ? 'yellow' : 'red')}`,
+          ...(result.message === undefined ? [] : [`  ${field('message', result.message)}`]),
+          ...(result.probability === undefined ? [] : [`  ${field('probability', String(result.probability))}`]),
+          ...(result.threshold === undefined ? [] : [`  ${field('threshold', String(result.threshold))}`]),
+          ...(result.model === undefined ? [] : [`  ${field('model', result.model)}`]),
+          ...(result.suppressedLocations ?? []).flatMap(({ location, reason }) => [
+            `  ${field('suppressed location', `${location.filepath}${location.lines === undefined ? '' : `:${location.lines.start}-${location.lines.end}`}${location.scopeId === undefined ? '' : ` ${location.scopeId}`}`, 'dim')}`,
+            `  ${field('reason', reason)}`,
+          ]),
         ]);
+      }
       case 'trace':
         return section(card, 'Trace', [
           `  ${field('message', event.message)}`,
@@ -794,6 +801,19 @@ function formatDuration(durationMs: number): string {
   return `${durationMs.toFixed(2)}ms`;
 }
 
+function suppressionSummaryLines(
+  locations: readonly SuppressedLocation[] | undefined,
+  safe: (text: string) => string,
+  muted: (text: string) => string,
+): string[] {
+  return (locations ?? []).flatMap(({ location, reason }) => {
+    const target = `${safe(location.filepath)}${
+      location.lines === undefined ? '' : `:${location.lines.start}-${location.lines.end}`
+    }${location.scopeId === undefined ? '' : ` ${safe(location.scopeId)}`}`;
+    return [muted(`    Suppressed: ${target}`), `      ${safe(reason)}`];
+  });
+}
+
 export function renderCheckSummary(
   reports: readonly RuleReport[],
   redact: TextRedactor,
@@ -807,12 +827,17 @@ export function renderCheckSummary(
   const skipped = reports.filter(report => report.status === 'skipped');
   const verifications = reports.reduce((total, report) => total + report.evaluations.length, 0);
   const violations = countViolations(reports);
+  const suppressed = reports.reduce(
+    (total, report) => total + report.evaluations.filter(evaluation => evaluation.result.status === 'suppressed').length,
+    0,
+  );
   const lines = [
     [
       `Rules: ${reports.length}`,
       paint(`Skipped: ${skipped.length}`, skipped.length > 0 ? 'yellow' : 'dim', color),
       `Verifications: ${verifications}`,
       paint(`Violations: ${violations}`, violations > 0 ? 'red' : 'green', color),
+      ...(suppressed > 0 ? [paint(`Suppressed: ${suppressed}`, 'yellow', color)] : []),
       `Time: ${formatDuration(options.durationMs)}`,
     ].join('  '),
     '',
@@ -829,8 +854,7 @@ export function renderCheckSummary(
   const entries: {
     readonly name: string;
     readonly subject: Subject<JsonValue>;
-    readonly message: string | undefined;
-    readonly status: 'pass' | 'violation';
+    readonly result: RuleReport['evaluations'][number]['result'];
   }[] = [];
   for (const report of reports) {
     for (const evaluation of report.evaluations) {
@@ -838,8 +862,7 @@ export function renderCheckSummary(
       entries.push({
         name: report.name,
         subject: evaluation.subject,
-        message: evaluation.result.message,
-        status: evaluation.result.status,
+        result: evaluation.result,
       });
     }
   }
@@ -849,9 +872,14 @@ export function renderCheckSummary(
     const shown = outputAll ? entries : entries.slice(0, MAX_VIOLATIONS);
     for (const entry of shown) {
       const subject = entry.subject;
-      const prefix = entry.status === 'pass' ? `${paint('✓', 'green', color)} ` : '';
+      const result = entry.result;
+      const prefix = result.status === 'pass'
+        ? `${paint('✓', 'green', color)} `
+        : result.status === 'suppressed'
+          ? `${paint('[suppressed]', 'yellow', color)} `
+          : '';
       const ruleName = `${prefix}${paint(
-        name(entry.name), entry.status === 'violation' ? 'red' : 'green', color,
+        name(entry.name), result.status === 'violation' ? 'red' : result.status === 'suppressed' ? 'yellow' : 'green', color,
       )}`;
       if (subject.kind === 'group') {
         lines.push(
@@ -859,7 +887,8 @@ export function renderCheckSummary(
             `group ${subject.group.type} ${safe(subject.group.path)} (${subject.members.length} members)`,
           )}`,
         );
-        if (entry.message !== undefined) lines.push(`    ${safe(entry.message)}`);
+        if (result.message !== undefined) lines.push(`    ${safe(result.message)}`);
+        if (outputAll) lines.push(...suppressionSummaryLines(result.suppressedLocations, safe, muted));
         const members = subject.members.slice(0, MAX_GROUP_MEMBERS);
         for (const member of members) {
           lines.push(
@@ -885,7 +914,8 @@ export function renderCheckSummary(
         subject.lines === undefined ? '' : `:${subject.lines.start}-${subject.lines.end}`
       }`;
       lines.push(`  ${ruleName}: ${muted(location)}`);
-      if (entry.message !== undefined) lines.push(`    ${safe(entry.message)}`);
+      if (result.message !== undefined) lines.push(`    ${safe(result.message)}`);
+      if (outputAll) lines.push(...suppressionSummaryLines(result.suppressedLocations, safe, muted));
       lines.push(...excerptLines(subject, MAX_SOURCE_LINES, redact, color, outputAll));
     }
     if (!outputAll && entries.length > MAX_VIOLATIONS) {

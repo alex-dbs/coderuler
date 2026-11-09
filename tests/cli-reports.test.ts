@@ -450,6 +450,42 @@ test('passing output-all diagnostics preserve custom messages and redact before 
   assert.ok(!plain.includes('🚓'), plain);
 });
 
+test('summary shows suppression count and details only with output-all', () => {
+  const report: RuleReport = {
+    ...violation(scope('bad();')),
+    evaluations: [
+      {
+        subject: scope('bad();', 'src/active.ts'),
+        result: {
+          status: 'violation',
+          suppressedLocations: [{ location: { filepath: 'src/hidden.ts', scopeId: 'old_id', lines: { start: 4, end: 5 } }, reason: 'accepted\tsecret' }],
+        },
+      },
+      {
+        subject: scope('old();', 'src/hidden.ts'),
+        result: {
+          status: 'suppressed',
+          message: 'Existing finding',
+          suppressedLocations: [{ location: { filepath: 'src/hidden.ts', scopeId: 'old_id', lines: { start: 4, end: 5 } }, reason: 'accepted\tsecret' }],
+        },
+      },
+    ],
+  };
+  const plain = renderCheckSummary([report], identity, options);
+  assert.ok(plain.startsWith('Rules: 1  Skipped: 0  Verifications: 2  Violations: 1  Suppressed: 1  Time: 12.50ms'), plain);
+  assert.ok(!plain.includes('accepted'), plain);
+  assert.ok(!plain.includes('[suppressed]'), plain);
+
+  const all = renderCheckSummary([report], identity, { ...options, outputAll: true });
+  assert.ok(all.includes('unicode: src/active.ts'), all);
+  assert.ok(all.includes('[suppressed] unicode: src/hidden.ts:9-11'), all);
+  assert.ok(all.includes('Existing finding'), all);
+  assert.ok(all.includes('src/hidden.ts:4-5 old_id'), all);
+  assert.ok(all.includes('accepted\\u0009secret'), all);
+  const redacted = renderCheckSummary([report], createRedactor(['secret']), { ...options, outputAll: true });
+  assert.ok(redacted.includes('accepted\\u0009[REDACTED]'), redacted);
+});
+
 test('empty summaries include duration without inventing details', () => {
   const output = renderCheckSummary([], identity, { durationMs: 0, outputAll: true });
   assert.equal(output, 'Rules: 0  Skipped: 0  Verifications: 0  Violations: 0  Time: 0.00ms\n\nNo verifications were run.\n');
@@ -605,6 +641,46 @@ test('walkthrough status colors are opt-in and preserve plain card and setup con
   assert.ok(colored.includes('\u001b[2m'), colored);
   assert.ok(!colored.includes('\r'), colored);
 });
+test('walkthrough renders suppressed coverage and escaped reasons in yellow', () => {
+  const subject = scope('old();');
+  const secret = 'private';
+  const events: readonly RunEvent[] = [
+    { type: 'evaluation', evaluationId: 9, name: 'rule', subject },
+    {
+      type: 'result',
+      evaluationId: 9,
+      name: 'rule',
+      subject,
+      result: {
+        status: 'suppressed',
+        suppressedLocations: [{
+          location: { filepath: `src/${secret}.ts`, scopeId: 'legacy_id', lines: { start: 9, end: 11 } },
+          reason: `accepted\t${secret}`,
+        }],
+      },
+    },
+  ];
+  const render = (color = false): string => {
+    const chunks: string[] = [];
+    const renderer = createWalkthroughRenderer({
+      write: text => chunks.push(text),
+      headings: () => [],
+      redact: createRedactor([secret]),
+      color,
+    }, true);
+    events.forEach(renderer.emit);
+    renderer.finish();
+    return chunks.join('');
+  };
+  const plain = render();
+  const colored = render(true);
+  assert.ok(plain.includes('status: suppressed'), plain);
+  assert.ok(plain.includes('src/[REDACTED].ts:9-11 legacy_id'), plain);
+  assert.ok(plain.includes('accepted\\u0009[REDACTED]'), plain);
+  assert.ok(colored.includes('\u001b[33msuppressed\u001b[39m'), colored);
+  assert.equal(stripVTControlCharacters(colored), plain);
+});
+
 
 test('wire requests, structured responses and correlated traces retain complete JSON payloads', () => {
   const subject = scope('safe();');

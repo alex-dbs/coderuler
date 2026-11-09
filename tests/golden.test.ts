@@ -20,6 +20,7 @@ import type {
   ScopeSelector,
   ScopeSubject,
   Subject,
+  SuppressionConfig,
 } from '../dist/index.js';
 import { createProject } from '../dist/adapter/filesystem/project.js';
 import { createRuleLoader } from '../dist/adapter/filesystem/rules.js';
@@ -66,6 +67,9 @@ class GoldenProject implements Project {
 
   async readYaml(): Promise<readonly JsonValue[]> {
     throw new Error('GoldenProject does not read YAML');
+  }
+  async readSuppressions(): Promise<SuppressionConfig> {
+    return new Map();
   }
 
   async readCsv(): Promise<readonly CsvRow[]> {
