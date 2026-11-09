@@ -16,7 +16,7 @@ Default-export a constructible class extending `Rule<T>` (`T = JsonValue`). Extr
 | `scope?: ScopeSelector<T>`                                                              | Absent     | One whole-file scope per eligible file unless supplied.                                                      |
 | `settings: RuleSettings` | `{}` | Optional backend, model, threshold, and input/output USD-per-million token prices; see AI below. |
 | `group: Grouping`                                                                       | `'scope'`  | Groups surviving scopes before evaluation.                                                                   |
-| `comment?: string | callback` | Absent | Nonblank Markdown body for each GitHub finding; see below. |
+| `comment` (optional) | Absent | Nonblank Markdown string or callback for each GitHub finding; see below. |
 | `when(context: ProjectContext): Awaitable<PredicateResult>`                             | `true`     | Whole-rule applicability, once per enabled rule before parsing target sources.                               |
 | `select(context: SelectionContext): Awaitable<readonly ScopeSubject<T>[]>`              | Delegates  | Calls `context.select({ files, exclude, scope })`; override for custom selection.                            |
 | `filter(subject: ScopeSubject<T>, context: ProjectContext): Awaitable<PredicateResult>` | `true`     | Per-scope applicability before grouping.                                                                     |
@@ -322,10 +322,18 @@ Set `comment` to a nonblank Markdown string to use the same body for each findin
 The callback returns a string or a promise for a string. CodeRuler calls it once for each violating evaluation, after the check finishes. A grouped finding with many locations still gets one callback call. CodeRuler skips callbacks for passing evaluations and runs them only with `--auto-comment`.
 
 ```ts
-comment = function (subject, result) {
-  const target = subject.kind === 'scope' ? subject.filepath : subject.group.path;
-  return `**${this.group} ${target}**: ${result.message ?? 'Policy violation'}`;
-};
+import { Rule, violation, type CheckResult, type Subject } from '@alex-dbs/coderuler';
+
+type PolicyData = { name: string };
+
+class NamePolicy extends Rule<PolicyData> {
+  check = () => violation('Policy violation');
+
+  comment = function (this: Rule<PolicyData>, subject: Subject<PolicyData>, result: CheckResult) {
+    const target = subject.kind === 'scope' ? subject.filepath : subject.group.path;
+    return `**${this.group} ${target}**: ${result.message ?? 'Policy violation'}`;
+  };
+}
 ```
 
 A normal function receives the rule instance as `this`, typed as `Rule<T>`. An arrow function keeps its lexical `this`. Use it to access subclass-only fields.
