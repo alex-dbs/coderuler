@@ -98,8 +98,8 @@ export function validateRule(value: unknown, ruleFile: string): Rule<unknown> {
   validateSettings(settings, at);
 
   const comment = value['comment'];
-  if (comment !== undefined && (typeof comment !== 'string' || comment.trim() === '')) {
-    invalid(at, 'comment must be a non-blank string');
+  if (comment !== undefined && typeof comment !== 'function' && (typeof comment !== 'string' || comment.trim() === '')) {
+    invalid(at, 'comment must be a non-blank string or a function');
   }
 
   if (!isGrouping(value['group'])) {

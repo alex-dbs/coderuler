@@ -397,6 +397,39 @@ test('a separately defined Rule copy carries the same brand without being an ins
 });
 
 test('validateRule accepts structurally valid rules in every grouping and setting form', () => {
+  void (() => {
+    type RuleComment = NonNullable<Rule<{ name: string }>['comment']>;
+    const rule = null as unknown as Rule<{ name: string }>;
+
+    const comment: RuleComment = function (this: Rule<{ name: string }>, subject, result) {
+      let name: string | undefined;
+      if (subject.kind === 'scope') {
+        name = subject.data?.name;
+      } else {
+        name = subject.members[0]?.data?.name;
+      }
+      const message: string | undefined = result.message;
+      return `${this.group}: ${name ?? ''} ${message ?? ''}`;
+    };
+    rule.comment = comment;
+
+    const asyncComment: RuleComment = async (subject, result) => {
+      const name = subject.kind === 'scope' ? subject.data?.name : subject.members[0]?.data?.name;
+      const message: string | undefined = result.message;
+      return `${name ?? ''} ${message ?? ''}`;
+    };
+    rule.comment = asyncComment;
+
+    // @ts-expect-error comments must return a string
+    rule.comment = () => 42;
+    // @ts-expect-error comments must return a string promise
+    rule.comment = async () => 42;
+    // @ts-expect-error comments must return a string
+    rule.comment = () => undefined;
+    // @ts-expect-error comments must return a string promise
+    rule.comment = async () => undefined;
+  });
+
   const accepted: readonly Record<string, unknown>[] = [
     brandedRule(),
     brandedRule({ enabled: false }),
@@ -408,6 +441,8 @@ test('validateRule accepts structurally valid rules in every grouping and settin
     brandedRule({ group: { by: 'folder', level: -3 } }),
     brandedRule({ exclude: ['old/**'] }),
     brandedRule({ comment: 'Follow **this** policy.' }),
+    brandedRule({ comment: () => { throw new Error('comment callback must not run during validation'); } }),
+    brandedRule({ comment: async () => { throw new Error('comment callback must not run during validation'); } }),
     brandedRule({ settings: { backend: 'jev', model: 'jev-latest', threshold: 0 } }),
     brandedRule({ settings: { backend: 'jev', model: 'jev-latest', threshold: 1 } }),
     brandedRule({ settings: { backend: 'openai', model: 'gpt-6-luna' } }),
@@ -490,13 +525,25 @@ test('validateRule rejects malformed rules even when they are disabled', () => {
   for (const [label, mutate] of malformed) {
     const rule = brandedRule();
     mutate(rule);
-    expectThrows(label, () => validateRule(rule, RULE_FILE));
+    if (label.endsWith('comment')) {
+      assert.throws(() => validateRule(rule, RULE_FILE), {
+        message: `Invalid rule at ${RULE_FILE}: comment must be a non-blank string or a function`,
+      });
+    } else {
+      expectThrows(label, () => validateRule(rule, RULE_FILE));
+    }
   }
 
   for (const [label, mutate] of malformed) {
     const rule = brandedRule({ enabled: false });
     mutate(rule);
-    expectThrows(`disabled ${label}`, () => validateRule(rule, RULE_FILE));
+    if (label.endsWith('comment')) {
+      assert.throws(() => validateRule(rule, RULE_FILE), {
+        message: `Invalid rule at ${RULE_FILE}: comment must be a non-blank string or a function`,
+      });
+    } else {
+      expectThrows(`disabled ${label}`, () => validateRule(rule, RULE_FILE));
+    }
   }
 });
 

@@ -125,7 +125,7 @@ async function runCheck(
       if (options.autoComment === true) {
         await services.commentOnPullRequest(
           root,
-          renderViolationComments(reports, context.redact, rules),
+          await renderViolationComments(reports, context.redact, rules),
           checkout?.pullRequest,
         );
       }

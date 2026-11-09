@@ -97,14 +97,121 @@ test('scope violations infer their own range only when locations are omitted', a
   const implicit = await run(scopedRule(() => violation('Scope policy failed')));
   assert.equal(implicit.report.status, 'violation');
   assert.ok(implicit.report.evaluations.every(({ result }) => result.locations === undefined));
-  assert.deepEqual(renderViolationComments(implicit.reports, redact).map(comment => comment.locations), [
+  assert.deepEqual((await renderViolationComments(implicit.reports, redact)).map(comment => comment.locations), [
     [{ filepath: 'pkg/a.txt', lines: { start: 1, end: 3 } }],
     [{ filepath: 'pkg/a.txt', lines: { start: 7, end: 9 } }],
   ]);
 
   const suppressed = await run(scopedRule(() => violation('Do not infer blame', [])));
   assert.deepEqual(suppressed.report.evaluations.map(({ result }) => result.locations), [[], []]);
-  assert.deepEqual(renderViolationComments(suppressed.reports, redact).map(comment => comment.locations), [[], []]);
+  assert.deepEqual((await renderViolationComments(suppressed.reports, redact)).map(comment => comment.locations), [[], []]);
+});
+
+test('protobuf field comments preserve each field source location', async () => {
+  const source = 'syntax = "proto3";\nmessage Request {\n  string organization_id = 1;\n  string user_id = 2;\n}\n';
+  const project = fixture({ 'pkg/fields.proto': source });
+
+  const syncRule = new LocationRule(() => violation('Use trusted token data'));
+  syncRule.files = ['pkg/*.proto'];
+  syncRule.scope = scopes.protobuf<{ name: string }>({ path: '$.fields[*]' }) as ScopeSelector;
+  syncRule.comment = function (subject, result) {
+    assert.equal(subject.kind, 'scope');
+    if (subject.kind !== 'scope') throw new Error('Expected a protobuf field scope');
+    const data = subject.data as { name: string };
+    return `**${data.name}**: ${result.message}. [${data.name === 'organization_id' ? 'Organization' : 'User'} policy](https://example.invalid/${data.name === 'organization_id' ? 'organization' : 'user'})`;
+  };
+
+  const sync = await run(syncRule, project);
+  assert.deepEqual(sync.report.evaluations.map(({ result }) => result), [
+    { status: 'violation', message: 'Use trusted token data' },
+    { status: 'violation', message: 'Use trusted token data' },
+  ]);
+  assert.deepEqual(await renderViolationComments(sync.reports, redact, [
+    { name: 'location-policy', ruleFile: '.coderuler/location-policy.rule.ts', rule: syncRule as Rule<unknown> },
+  ]), [
+    {
+      body: '**organization_id**: Use trusted token data. [Organization policy](https://example.invalid/organization)',
+      locations: [{ filepath: 'pkg/fields.proto', lines: { start: 3, end: 3 } }],
+    },
+    {
+      body: '**user_id**: Use trusted token data. [User policy](https://example.invalid/user)',
+      locations: [{ filepath: 'pkg/fields.proto', lines: { start: 4, end: 4 } }],
+    },
+  ]);
+
+  const asyncRule = new LocationRule(() => violation('Use trusted token data'));
+  asyncRule.files = ['pkg/*.proto'];
+  asyncRule.scope = scopes.protobuf<{ name: string }>({ path: '$.fields[*]' }) as ScopeSelector;
+  asyncRule.comment = async function (subject, result) {
+    await Promise.resolve();
+    assert.equal(subject.kind, 'scope');
+    if (subject.kind !== 'scope') throw new Error('Expected a protobuf field scope');
+    const data = subject.data as { name: string };
+    return `**${data.name}**: ${result.message}. [${data.name === 'organization_id' ? 'Organization' : 'User'} policy](https://example.invalid/${data.name === 'organization_id' ? 'organization' : 'user'})`;
+  };
+
+  const asyncResult = await run(asyncRule, project);
+  assert.deepEqual(asyncResult.report.evaluations.map(({ result }) => result), [
+    { status: 'violation', message: 'Use trusted token data' },
+    { status: 'violation', message: 'Use trusted token data' },
+  ]);
+  assert.deepEqual(await renderViolationComments(asyncResult.reports, redact, [
+    { name: 'location-policy', ruleFile: '.coderuler/location-policy.rule.ts', rule: asyncRule as Rule<unknown> },
+  ]), [
+    {
+      body: '**organization_id**: Use trusted token data. [Organization policy](https://example.invalid/organization)',
+      locations: [{ filepath: 'pkg/fields.proto', lines: { start: 3, end: 3 } }],
+    },
+    {
+      body: '**user_id**: Use trusted token data. [User policy](https://example.invalid/user)',
+      locations: [{ filepath: 'pkg/fields.proto', lines: { start: 4, end: 4 } }],
+    },
+  ]);
+});
+
+test('group comments render once with all resolved member locations', async () => {
+  let callbackCalls = 0;
+  const rule = scopedRule(subject => {
+    if (subject.kind !== 'group') throw new Error('Expected a project group');
+    return violation('Group rejection', [
+      { filepath: subject.members[0]!.filepath, scopeId: 'head' },
+      { filepath: subject.members[1]!.filepath, scopeId: 'tail' },
+    ]);
+  }, 'project');
+  rule.comment = async function (subject, result) {
+    callbackCalls += 1;
+    assert.equal(this.group, 'project');
+    assert.equal(subject.kind, 'group');
+    if (subject.kind !== 'group') throw new Error('Expected a project group');
+    assert.equal(subject.group.path, '.');
+    assert.deepEqual(subject.members.map(member => member.id), ['head', 'tail']);
+    assert.equal(result.locations?.length, 2);
+    return `**${this.group} ${subject.group.path}**: ${subject.members.map(member => member.id).join(', ')} (${result.locations!.length} locations)`;
+  };
+
+  const result = await run(rule);
+  assert.deepEqual(await renderViolationComments(result.reports, redact, [
+    { name: 'location-policy', ruleFile: '.coderuler/location-policy.rule.ts', rule: rule as Rule<unknown> },
+  ]), [{
+    body: '**project .**: head, tail (2 locations)',
+    locations: [
+      { filepath: 'pkg/a.txt', lines: { start: 1, end: 3 } },
+      { filepath: 'pkg/a.txt', lines: { start: 7, end: 9 } },
+    ],
+  }]);
+  assert.equal(callbackCalls, 1);
+
+  const passing = scopedRule(() => pass(), 'project');
+  let passingCallbackCalls = 0;
+  passing.comment = () => {
+    passingCallbackCalls += 1;
+    throw new Error('Comment callback must not run for a passing evaluation');
+  };
+  const passingResult = await run(passing);
+  assert.deepEqual(await renderViolationComments(passingResult.reports, redact, [
+    { name: 'location-policy', ruleFile: '.coderuler/location-policy.rule.ts', rule: passing as Rule<unknown> },
+  ]), []);
+  assert.equal(passingCallbackCalls, 0);
 });
 
 test('scopeId-only and explicit subranges resolve into consumer-visible result locations', async () => {
@@ -130,7 +237,7 @@ test('scopeId-only and explicit subranges resolve into consumer-visible result l
     [{ filepath: 'pkg/a.txt', scopeId: 'head', lines: { start: 1, end: 2 } }],
     [{ filepath: 'pkg/a.txt', scopeId: 'tail', lines: { start: 7, end: 8 } }],
   ]);
-  assert.deepEqual(renderViolationComments(explicit.reports, redact).map(comment => comment.locations), [
+  assert.deepEqual((await renderViolationComments(explicit.reports, redact)).map(comment => comment.locations), [
     [{ filepath: 'pkg/a.txt', lines: { start: 1, end: 2 } }],
     [{ filepath: 'pkg/a.txt', lines: { start: 7, end: 8 } }],
   ]);
@@ -150,7 +257,7 @@ for (const group of ['scope', 'file', 'folder', 'project'] as const) {
     assert.deepEqual(failures[0]!.result.locations, [
       { filepath: 'pkg/a.txt', scopeId: ' ', lines: { start: 3, end: 3 } },
     ]);
-    assert.deepEqual(renderViolationComments(result.reports, redact).map(comment => comment.locations), [
+    assert.deepEqual((await renderViolationComments(result.reports, redact)).map(comment => comment.locations), [
       [{ filepath: 'pkg/a.txt', lines: { start: 3, end: 3 } }],
     ]);
     assert.equal(result.events.some(event => event.type === 'error'), false);
@@ -173,7 +280,7 @@ for (const group of ['scope', 'file', 'folder', 'project'] as const) {
       message: 'Whitespace identity fails',
       locations: [{ filepath: ' ', scopeId: ' ', lines: { start: 1, end: 1 } }],
     }]);
-    assert.deepEqual(renderViolationComments(result.reports, redact).map(comment => comment.locations), [
+    assert.deepEqual((await renderViolationComments(result.reports, redact)).map(comment => comment.locations), [
       [{ filepath: ' ', lines: { start: 1, end: 1 } }],
     ]);
     assert.equal(result.events.some(event => event.type === 'error'), false);
@@ -196,7 +303,7 @@ for (const group of ['file', 'folder', 'project'] as const) {
     assert.deepEqual(result.report.evaluations.map(({ result }) => result.locations), paths.map(filepath => [
       { filepath, scopeId: 'tail', lines: { start: 7, end: 9 } },
     ]));
-    assert.deepEqual(renderViolationComments(result.reports, redact).map(comment => comment.locations), paths.map(filepath => [
+    assert.deepEqual((await renderViolationComments(result.reports, redact)).map(comment => comment.locations), paths.map(filepath => [
       { filepath, lines: { start: 7, end: 9 } },
     ]));
   });
@@ -205,7 +312,7 @@ for (const group of ['file', 'folder', 'project'] as const) {
     const result = await run(scopedRule(() => violation('Group policy failed'), group));
     assert.equal(result.report.status, 'violation');
     assert.equal(result.report.evaluations[0]!.result.locations, undefined);
-    assert.deepEqual(renderViolationComments(result.reports, redact)[0]!.locations, []);
+    assert.deepEqual((await renderViolationComments(result.reports, redact))[0]!.locations, []);
   });
 }
 
@@ -322,7 +429,7 @@ test('locations without known member lines remain unanchored unless callers supp
     assert.deepEqual(result.report.evaluations[0]!.result.locations, [
       { filepath: 'pkg/a.txt', scopeId: 'virtual' },
     ]);
-    assert.deepEqual(renderViolationComments(result.reports, redact)[0]!.locations, []);
+    assert.deepEqual((await renderViolationComments(result.reports, redact))[0]!.locations, []);
 
     unanchored.check = () => violation('Caller knows source position', [
       { filepath: 'pkg/a.txt', scopeId: 'virtual', lines: { start: 50, end: 51 } },
@@ -628,7 +735,7 @@ for (const group of ['scope', 'file', 'folder', 'project'] as const) {
     ]);
     assert.ok(result.report.evaluations.filter(({ result }) => result.status === 'pass')
       .every(({ result }) => result.locations === undefined));
-    assert.deepEqual(renderViolationComments(result.reports, redact).flatMap(comment => comment.locations), [
+    assert.deepEqual((await renderViolationComments(result.reports, redact)).flatMap(comment => comment.locations), [
       { filepath: 'pkg/a.txt', lines: { start: 2, end: 2 } },
       { filepath: 'pkg/b.txt', lines: { start: 1, end: 1 } },
     ]);
@@ -645,7 +752,7 @@ test('regex preserves unanchored failing members without blaming passing ranged 
   const result = await run(rule, fixture({ 'pkg/a.txt': 'ok', 'pkg/b.txt': 'bad' }));
   assert.deepEqual(result.report.evaluations[0]!.result.locations, [{ filepath: 'pkg/b.txt', scopeId: 'member' }]);
   assert.equal(result.report.evaluations[0]!.result.message, undefined);
-  assert.deepEqual(renderViolationComments(result.reports, redact)[0]!.locations, []);
+  assert.deepEqual((await renderViolationComments(result.reports, redact))[0]!.locations, []);
 });
 
 test('passing regex evaluations preserve pass behavior without location metadata', async () => {
@@ -654,7 +761,7 @@ test('passing regex evaluations preserve pass behavior without location metadata
   const result = await run(rule, fixture({ 'pkg/a.txt': 'ok', 'pkg/b.txt': 'ok' }));
   assert.equal(result.report.status, 'pass');
   assert.deepEqual(result.report.evaluations[0]!.result, pass());
-  assert.deepEqual(renderViolationComments(result.reports, redact), []);
+  assert.deepEqual(await renderViolationComments(result.reports, redact), []);
 });
 
 test('AI scalar results use only scope fallback and never invent grouped attribution or extra calls', async () => {
@@ -670,7 +777,7 @@ test('AI scalar results use only scope fallback and never invent grouped attribu
     const result = await run(rule, fixture(), { backend });
     assert.equal(calls, result.report.evaluations.length);
     assert.ok(result.report.evaluations.every(({ result }) => result.locations === undefined));
-    const comments = renderViolationComments(result.reports, redact);
+    const comments = await renderViolationComments(result.reports, redact);
     assert.equal(comments.length, result.report.evaluations.length);
     assert.deepEqual(comments.map(comment => comment.locations), group === 'scope' ? [
       [{ filepath: 'pkg/a.txt', lines: { start: 1, end: 3 } }],
