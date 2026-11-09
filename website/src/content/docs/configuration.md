@@ -32,7 +32,7 @@ A shared Git repository is a good way to distribute company-wide rules across pr
 | `scope?: ScopeSelector<T>` | Absent | Select parts of a file instead of its whole source |
 | `settings: RuleSettings` | `{}` | AI backend, model, threshold, and token prices |
 | `group: Grouping` | `'scope'` | Decide which scopes a check sees together |
-| `comment?: string` | Absent | Nonblank Markdown override for GitHub finding bodies |
+| `comment?: string or callback` | Absent | Nonblank Markdown override for GitHub finding bodies |
 | `when(context)` | Returns `true` | Whole-rule applicability before file selection |
 | `select(context)` | Built-in selection | Return selected scope subjects |
 | `filter(subject, context)` | Returns `true` | Per-scope applicability before grouping |
@@ -83,6 +83,8 @@ Group checks receive `subject.kind === 'group'` and `subject.members`. One group
 
 `RuleSettings` supports `backend: 'jev'`, `model`, `threshold`, `inputCostPerMillion`, and `outputCostPerMillion`. See [AI checks](/docs/ai-checks/) for defaults and precedence.
 
-`comment` replaces the generated finding body during `check --diff --auto-comment` or `check --pr ... --auto-comment`. It does not change decisions or inline locations. Omit it to keep generated text. CodeRuler strips terminal controls and redacts credentials from overrides.
+`comment` can be a nonblank Markdown string or a callback. The callback receives the evaluated subject and normalized check result. It returns a string or a promise for a string, and runs once for each violating evaluation. A normal function receives the rule instance as `this`.
+
+The comment replaces the generated finding body during `check --diff --auto-comment` or `check --pr ... --auto-comment`. It does not change decisions or inline locations. Omit it to keep generated text. CodeRuler strips terminal controls and redacts credentials from comments.
 
 The class contracts are defined in [rule.ts](https://github.com/alex-dbs/coderuler/blob/main/src/app/rule.ts). The [CLI reference](/docs/cli/) lists command-level options.

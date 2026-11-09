@@ -671,16 +671,24 @@ export function countViolations(reports: readonly RuleReport[]): number {
   return total;
 }
 
-export function renderViolationComments(
+export async function renderViolationComments(
   reports: readonly RuleReport[],
   redact: TextRedactor,
   rules?: readonly LoadedRule[],
-): readonly ViolationComment[] {
-  const overrides = new Map<string, string>();
+): Promise<readonly ViolationComment[]> {
+  const overrides = new Map<string, {
+    readonly rule: LoadedRule['rule'];
+    readonly comment: NonNullable<LoadedRule['rule']['comment']>;
+  }>();
   if (rules !== undefined) {
     for (const entry of rules) {
       const comment = entry.rule.comment;
-      if (comment !== undefined) overrides.set(entry.name, redact(stripVTControlCharacters(comment)));
+      if (comment !== undefined) {
+        overrides.set(entry.name, {
+          rule: entry.rule,
+          comment: typeof comment === 'string' ? redact(stripVTControlCharacters(comment)) : comment,
+        });
+      }
     }
   }
   const safe = (text: string): string => escapeText(redact(stripVTControlCharacters(text)))
@@ -705,9 +713,7 @@ export function renderViolationComments(
     for (const { subject, result } of report.evaluations) {
       if (result.status !== 'violation') continue;
       let body: string;
-      if (override !== undefined) {
-        body = override;
-      } else {
+      if (override === undefined) {
         const label = subject.kind === 'scope'
           ? `scope ${location(subject)} (${safe(subject.id)})`
           : safe(`group ${subject.group.type} ${subject.group.path} (${subject.members.length} scopes)`);
@@ -720,6 +726,14 @@ export function renderViolationComments(
         }
         if (result.message !== undefined) lines.push(`  - ${safe(result.message)}`);
         body = `${lines.join('\n')}\n`;
+      } else if (typeof override.comment === 'string') {
+        body = override.comment;
+      } else {
+        const value: unknown = await override.comment.call(override.rule, subject, result);
+        if (typeof value !== 'string' || value.trim() === '') {
+          throw new Error(`Rule "${report.name}" comment result must be a non-blank string`);
+        }
+        body = redact(stripVTControlCharacters(value));
       }
       const candidates = result.locations
         ?? (subject.kind === 'scope' ? [subject] : []);

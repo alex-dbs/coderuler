@@ -29,14 +29,15 @@ interface Fixture extends Sandbox {
   readonly head: string;
 }
 
-const scoped = (check: string, options = '') => `import { Rule, pass, violation, regex } from '@alex-dbs/coderuler';
+const scoped = (check: string, options = '', privateData = 'DATA-SECRET') => `import { Rule, pass, violation, regex } from '@alex-dbs/coderuler';
 export default class FixtureRule extends Rule {
   files = ['src/*.txt'];
-  scope = file => [{ id: '$', source: file.source, data: { private: 'DATA-SECRET' }, captures: { private: 'CAPTURE-SECRET' }, lines: { start: 2, end: 3 } }];
+  scope = file => [{ id: '$', source: file.source, data: { private: ${JSON.stringify(privateData)} }, captures: { private: 'CAPTURE-SECRET' }, lines: { start: 2, end: 3 } }];
   ${options}
   check = ${check};
 }
 `;
+
 const implicit = scoped(`subject => subject.source.includes('BAD') ? violation(${JSON.stringify(MESSAGE)}) : pass('PASS-MESSAGE')`);
 const unlocatedGroup = scoped(`() => violation('unlocated group rejection')`, `group = 'folder';`);
 
@@ -196,6 +197,53 @@ for (const diff of ['--diff', '--diff-only']) {
 }
 
 const CUSTOM = '**Policy** — follow [the guide](https://example.invalid/guide) and keep `snake_case`.\n\n- mention @scope';
+for (const kind of ['sync', 'async'] as const) {
+  test(`subject-based comments (${kind})`, async context => {
+    const callback = `${kind === 'async' ? 'async ' : ''}function (subject, result) {
+      if (result.status !== 'violation') throw new Error('comment called for a passing result');
+      ${kind === 'async' ? 'await Promise.resolve();' : ''}
+      const token = ${JSON.stringify(TOKEN)};
+      const apiKey = ${JSON.stringify(API_KEY)};
+      return this.guidance + ' ' + subject.filepath + ': ' + subject.data.private + '. ' + result.message + ' '
+        + token.slice(0, 5) + ${JSON.stringify('\u001b[31m')} + token.slice(5) + ${JSON.stringify('\u001b[0m')} + ' '
+        + apiKey.slice(0, 5) + ${JSON.stringify('\u001b[31m')} + apiKey.slice(5) + ${JSON.stringify('\u001b[0m')};
+    }`;
+    const target = repository(`subject-comment-${kind}`, {
+      custom: scoped(
+        `subject => subject.source.includes('BAD') ? violation('Needs trusted data') : pass()`,
+        `guidance = '**Policy**'; comment = ${callback};`,
+        'field-specific guidance',
+      ),
+    });
+    const requests = await github(context, target);
+    const result = await check(target, ['--diff', '--base', target.base, '--auto-comment', '--json', '--output-all']);
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.stderr, '');
+    assert.equal(posts(requests).length, 1);
+    const payload = review(requests);
+    assert.deepEqual(payload.comments.map(({ path, body, start_line, line, side, start_side }) => ({
+      path, body, start_line, line, side, start_side,
+    })).sort((left, right) => left.path.localeCompare(right.path)), [
+      {
+        path: 'src/one.txt',
+        body: '**Policy** src/one.txt: field-specific guidance. Needs trusted data [REDACTED] [REDACTED]',
+        start_line: 2, line: 3, side: 'RIGHT', start_side: 'RIGHT',
+      },
+      {
+        path: 'src/two.txt',
+        body: '**Policy** src/two.txt: field-specific guidance. Needs trusted data [REDACTED] [REDACTED]',
+        start_line: 2, line: 3, side: 'RIGHT', start_side: 'RIGHT',
+      },
+    ]);
+    const report = JSON.parse(result.stdout).reports[0];
+    const failures = report.evaluations.filter(({ result: finding }: { result: { status: string } }) => finding.status === 'violation');
+    assert.deepEqual(failures.map(({ result: finding }: { result: { message: string } }) => finding.message), [
+      'Needs trusted data', 'Needs trusted data',
+    ]);
+    assert.ok(failures.every(({ result: finding }: { result: Record<string, unknown> }) => !Object.hasOwn(finding, 'comment')));
+    assert.equal(Object.hasOwn(report, 'comment'), false);
+  });
+}
 
 test('per-rule comments replace review bodies verbatim and preserve locations', async context => {
   const target = repository('custom-review', {
@@ -245,6 +293,104 @@ test('a commented group rule uses the comment as the whole fallback finding', as
   assert.equal(result.status, 1, result.stderr);
   assert.equal(posts(requests).length, 1);
   assert.equal(fallback(requests), `## CodeRuler violations\n\n${CUSTOM}\n`);
+});
+
+test('an async group callback uses group metadata for the fallback finding', async context => {
+  const target = repository('custom-async-fallback', {
+    grouped: scoped(`() => violation('group rejection')`, `group = 'folder'; comment = async function (subject, result) {
+      if (result.status !== 'violation' || subject.kind !== 'group') throw new Error('comment called for a non-group violation');
+      await Promise.resolve();
+      return '**' + this.group + ' ' + subject.group.path + '**: ' + result.message;
+    };`),
+  });
+  const requests = await github(context, target);
+  const result = await check(target, ['--diff', '--base', target.base, '--auto-comment']);
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.equal(posts(requests).length, 1);
+  assert.equal(fallback(requests), '## CodeRuler violations\n\n**folder src**: group rejection\n');
+});
+
+for (const kind of ['sync-throw', 'async-rejection'] as const) {
+  test(`${kind} comment failure stops publishing after an earlier result`, async context => {
+    const diagnostic = kind === 'sync-throw' ? TOKEN : API_KEY;
+    const failure = kind === 'sync-throw'
+      ? `throw new Error(${JSON.stringify(diagnostic)});`
+      : `return Promise.reject(new Error(${JSON.stringify(diagnostic)}));`;
+    const callback = `${kind === 'async-rejection' ? 'async ' : ''}function (subject, result) {
+      if (result.status !== 'violation') throw new Error('comment called for a passing result');
+      if (subject.filepath === 'src/two.txt') {
+        if (!this.commentResolved) throw new Error('src/one.txt comment did not resolve first');
+        ${failure}
+      }
+      this.commentResolved = true;
+      return 'resolved before the failure';
+    }`;
+    const target = repository(`comment-${kind}`, {
+      custom: scoped(`subject => subject.source.includes('BAD') ? violation('Needs trusted data') : pass()`, `comment = ${callback};`),
+    });
+    const requests = await github(context, target);
+    const result = await check(target, ['--diff', '--base', target.base, '--auto-comment', '--json', '--output-all']);
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /\[REDACTED\]/);
+    assert.equal(result.stderr.includes(TOKEN), false);
+    assert.equal(result.stderr.includes(API_KEY), false);
+    assert.ok(JSON.parse(result.stdout).reports[0].evaluations.some(({ result: finding }: { result: { message?: string } }) => finding.message === 'Needs trusted data'));
+    assert.deepEqual(posts(requests), []);
+  });
+}
+
+for (const [kind, invalid] of [
+  ['number', '42'],
+  ['undefined', 'undefined'],
+  ['empty', "''"],
+  ['whitespace', "' \\t\\n '"],
+] as const) {
+  test(`async comment rejects ${kind} results after an earlier result`, async context => {
+    const callback = `async function (subject, result) {
+      if (result.status !== 'violation') throw new Error('comment called for a passing result');
+      if (subject.filepath === 'src/two.txt') {
+        if (!this.commentResolved) throw new Error('src/one.txt comment did not resolve first');
+        return ${invalid};
+      }
+      this.commentResolved = true;
+      return 'resolved before the invalid result';
+    }`;
+    const target = repository(`comment-invalid-${kind}`, {
+      custom: scoped(`subject => subject.source.includes('BAD') ? violation('Needs trusted data') : pass()`, `comment = ${callback};`),
+    });
+    const requests = await github(context, target);
+    const result = await check(target, ['--diff', '--base', target.base, '--auto-comment', '--json', '--output-all']);
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /Rule "custom" comment result must be a non-blank string/);
+    assert.ok(JSON.parse(result.stdout).reports[0].evaluations.some(({ result: finding }: { result: { message?: string } }) => finding.message === 'Needs trusted data'));
+    assert.deepEqual(posts(requests), []);
+  });
+}
+
+test('a throwing callback is not invoked without --auto-comment', async context => {
+  const target = repository('comment-without-publish', {
+    custom: scoped(
+      `subject => subject.source.includes('BAD') ? violation('Needs trusted data') : pass()`,
+      `comment = function () { throw new Error(${JSON.stringify(`must not run ${TOKEN}`)}); };`,
+    ),
+  });
+  const requests = await github(context, target);
+  const result = await check(target, ['--diff', '--base', target.base, '--json', '--output-all']);
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stderr, '');
+  const reports = JSON.parse(result.stdout).reports;
+  assert.deepEqual(reports.map((report: { name: string; status: string }) => ({ name: report.name, status: report.status })), [
+    { name: 'custom', status: 'violation' },
+  ]);
+  const findings: { status?: string; message?: string; comment?: unknown }[] = reports[0].evaluations.map(
+    ({ result: finding }: { result: { status?: string; message?: string; comment?: unknown } }) => finding,
+  );
+  assert.deepEqual(findings.filter(finding => finding.status === 'violation').map(finding => finding.message), [
+    'Needs trusted data', 'Needs trusted data',
+  ]);
+  assert.ok(findings.every(finding => !Object.hasOwn(finding, 'comment')));
+  assert.deepEqual(posts(requests), []);
 });
 
 test('commented findings strip terminal controls before redaction and keep Markdown unescaped', async context => {

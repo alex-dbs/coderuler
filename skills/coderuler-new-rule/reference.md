@@ -16,7 +16,7 @@ Default-export a constructible class extending `Rule<T>` (`T = JsonValue`). Extr
 | `scope?: ScopeSelector<T>`                                                              | Absent     | One whole-file scope per eligible file unless supplied.                                                      |
 | `settings: RuleSettings` | `{}` | Optional backend, model, threshold, and input/output USD-per-million token prices; see AI below. |
 | `group: Grouping`                                                                       | `'scope'`  | Groups surviving scopes before evaluation.                                                                   |
-| `comment?: string` | Absent | Nonblank Markdown override for each GitHub finding body with `--auto-comment`; see below. |
+| `comment?: string | callback` | Absent | Nonblank Markdown body for each GitHub finding; see below. |
 | `when(context: ProjectContext): Awaitable<PredicateResult>`                             | `true`     | Whole-rule applicability, once per enabled rule before parsing target sources.                               |
 | `select(context: SelectionContext): Awaitable<readonly ScopeSubject<T>[]>`              | Delegates  | Calls `context.select({ files, exclude, scope })`; override for custom selection.                            |
 | `filter(subject: ScopeSubject<T>, context: ProjectContext): Awaitable<PredicateResult>` | `true`     | Per-scope applicability before grouping.                                                                     |
@@ -317,7 +317,20 @@ Explicit `lines` are absolute file coordinates: positive safe integers with incl
 
 With `locations` omitted, a scope violation uses its own source lines; a group violation does **not** automatically blame all members. Explicit `locations: []` disables automatic scope attribution. Without usable source lines (or a matching current PR diff anchor), `--auto-comment` reports the finding in an ordinary PR comment instead of guessing an inline location.
 
-Set `comment` on the rule to replace each generated GitHub finding body with your Markdown. Omit it to keep the generated body. CodeRuler strips terminal controls and redacts credentials from overrides. Inline locations and check results stay unchanged. The fallback comment keeps its shared `CodeRuler violations` heading.
+Set `comment` to a nonblank Markdown string to use the same body for each finding. You can also set a callback to build the body from the evaluated subject and its normalized `CheckResult`.
+
+The callback returns a string or a promise for a string. CodeRuler calls it once for each violating evaluation, after the check finishes. A grouped finding with many locations still gets one callback call. CodeRuler skips callbacks for passing evaluations and runs them only with `--auto-comment`.
+
+```ts
+comment = function (subject, result) {
+  const target = subject.kind === 'scope' ? subject.filepath : subject.group.path;
+  return `**${this.group} ${target}**: ${result.message ?? 'Policy violation'}`;
+};
+```
+
+A normal function receives the rule instance as `this`, typed as `Rule<T>`. An arrow function keeps its lexical `this`. Use it to access subclass-only fields.
+
+Return a nonblank string. A throw, rejected promise, blank string, or non-string result fails comment rendering. The CLI exits with status `2`. CodeRuler does not publish comments or use a generated body for that run. CodeRuler strips terminal controls and redacts credentials from resolved bodies. Markdown stays unescaped. The callback does not change check results or inline locations. Reports and JSON do not include computed bodies.
 
 Scalar AI classification supplies no offending-member attribution: scope AI can use its subject's lines, but grouped AI needs explicit locations from a custom check wrapping `context.ai(...)`; otherwise it uses the fallback comment.
 
