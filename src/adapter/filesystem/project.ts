@@ -7,6 +7,7 @@ import type { Project } from '../../app/ports.js';
 import { parseCsv } from '../scope/csv.js';
 import { parseJson } from '../scope/json.js';
 import { parseYaml } from '../scope/yaml.js';
+import { loadSuppressions } from './suppressions.js';
 
 const SKIPPED_ANY_DEPTH: ReadonlySet<string> = new Set([
   '.git',
@@ -259,6 +260,7 @@ export function createProject(root: string, options: ProjectOptions = {}): Proje
 
   return {
     root: resolvedRoot,
+    readSuppressions: () => loadSuppressions(resolvedRoot),
 
     glob: globFiles,
 

@@ -785,3 +785,49 @@ test('AI scalar results use only scope fallback and never invent grouped attribu
     ] : [[]]);
   }
 });
+
+test('suppressed group locations do not reach comments for active violations', async () => {
+  const project = fixture();
+  const configPath = join(project.root, '.coderuler', 'suppressions.yml');
+  writeFile(configPath, 'suppressions:\n  location-policy:\n    - files: ["pkg/a.txt"]\n      scope: head\n      reason: Accepted head scope\n');
+  const rule = scopedRule(subject => {
+    if (subject.kind !== 'group') throw new Error('Expected a project group');
+    return violation('Group rejection', [
+      { filepath: 'pkg/a.txt', scopeId: 'head' },
+      { filepath: 'pkg/a.txt', scopeId: 'tail' },
+    ]);
+  }, 'project');
+  let callbackCalls = 0;
+  rule.comment = function (subject, result) {
+    callbackCalls += 1;
+    assert.equal(subject.kind, 'group');
+    assert.deepEqual(result.locations, [{
+      filepath: 'pkg/a.txt', scopeId: 'tail', lines: { start: 7, end: 9 },
+    }]);
+    return 'Active finding only';
+  };
+  const selectedRule = {
+    name: 'location-policy',
+    ruleFile: '.coderuler/location-policy.rule.ts',
+    rule: rule as Rule<unknown>,
+  };
+
+  const partial = await run(rule, project);
+  assert.equal(partial.report.status, 'violation');
+  assert.equal(partial.report.evaluations[0]!.result.status, 'violation');
+  assert.deepEqual((await renderViolationComments(partial.reports, redact, [selectedRule])).map(comment => ({
+    body: comment.body,
+    locations: comment.locations,
+  })), [{
+    body: 'Active finding only',
+    locations: [{ filepath: 'pkg/a.txt', lines: { start: 7, end: 9 } }],
+  }]);
+  assert.equal(callbackCalls, 1);
+
+  writeFile(configPath, 'suppressions:\n  location-policy:\n    - files: ["pkg/a.txt"]\n      scope: head\n      reason: Accepted head scope\n    - files: ["pkg/a.txt"]\n      scope: tail\n      reason: Accepted tail scope\n');
+  const complete = await run(rule, project);
+  assert.equal(complete.report.status, 'pass');
+  assert.equal(complete.report.evaluations[0]!.result.status, 'suppressed');
+  assert.deepEqual(await renderViolationComments(complete.reports, redact, [selectedRule]), []);
+  assert.equal(callbackCalls, 1);
+});

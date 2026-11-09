@@ -1,7 +1,6 @@
 import type {
   AiUsage,
   Awaitable,
-  CheckResult,
   GroupSubject,
   JsonValue,
   LineRange,
@@ -13,6 +12,7 @@ import type {
   TokenPricing,
   TokenUsage,
 } from './rule.js';
+import type { EvaluationResult, SuppressionConfig } from './suppressions.js';
 
 export interface DiffChanges {
   readonly changedFiles: ReadonlySet<string>;
@@ -28,6 +28,7 @@ export interface Project {
   readJson(path: string): Promise<JsonValue>;
   readYaml(path: string): Promise<readonly JsonValue[]>;
   readCsv(path: string, options?: CsvOptions): Promise<readonly CsvRow[]>;
+  readSuppressions(): Promise<SuppressionConfig>;
 }
 export interface LspBackend extends LspTools {
   close(): Promise<void>;
@@ -109,7 +110,7 @@ export interface RunContext {
 
 export interface RuleEvaluation {
   readonly subject: Subject;
-  readonly result: CheckResult;
+  readonly result: EvaluationResult;
 }
 
 export interface RuleReport {
@@ -180,7 +181,7 @@ export type RunEvent =
       readonly evaluationId: number;
       readonly name: string;
       readonly subject: Subject;
-      readonly result: CheckResult;
+      readonly result: EvaluationResult;
     }
   | {
       readonly type: 'trace';

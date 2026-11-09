@@ -55,6 +55,30 @@ An explicit target inside an excluded directory fails. Custom selectors and proj
 
 For `check` and `validate`, run the command from the intended project root. A `check` target narrows files without redefining that root. For `inspect`, the resolved folder argument becomes the inspected root.
 
+## Violation suppressions
+
+Add accepted exceptions to `.coderuler/suppressions.yml` in the execution project's root:
+
+```yaml
+suppressions:
+  field-naming:
+    - files: ["api/orders.proto"]
+      scope: "acme.Order.legacy_id"
+      reason: "Existing public contract"
+  no-console:
+    - files: ["src/legacy.js"]
+      lines: { start: 42, end: 45 }
+      reason: "Required diagnostic output"
+    - files: ["generated/**"]
+      reason: "Generated source"
+```
+
+Rule keys are exact filename stems. Each entry needs nonblank file globs and a reason. It can cover a whole matching file, one exact scope ID, or a line range. A line range must inclusively contain the full finding range. The first matching entry supplies the reason.
+
+Scope IDs stay stable when unrelated lines or array items move. Prefer a named ID over line numbers or array indexes. For Avro fields, use a JSON selector such as `scopes.json({ path: '$.fields[*]', key: '$.name' })` so each field ID comes from its name.
+
+The globs use the same project-relative `path.matchesGlob` rules as file selection. Suppressions apply after evaluation, so they do not avoid AI calls.
+
 ## Grouping
 
 ```ts

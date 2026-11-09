@@ -222,14 +222,20 @@ interface ViolationLocationShape {
   readonly lines?: { readonly start: number; readonly end: number };
 }
 
+interface SuppressedLocationShape {
+  readonly location: ViolationLocationShape;
+  readonly reason: string;
+}
+
 export interface CheckResultShape {
-  readonly status: 'pass' | 'violation';
+  readonly status: 'pass' | 'violation' | 'suppressed';
   readonly message?: string;
   readonly probability?: number;
   readonly threshold?: number;
   readonly model?: string;
   readonly usage?: AiUsage;
   readonly locations?: readonly ViolationLocationShape[];
+  readonly suppressedLocations?: readonly SuppressedLocationShape[];
 }
 
 export interface ScopeSubjectShape {
@@ -264,7 +270,7 @@ export interface CheckReportShape {
   readonly evaluations: readonly CheckEvaluationShape[];
 }
 
-function toViolationLocation(value: unknown, where: string): ViolationLocationShape {
+function toViolationLocation(value: unknown, where: string, allowFileOnly = false): ViolationLocationShape {
   const mapping = asMapping(value, where);
   const filepath = asString(mapping['filepath'], `${where}.filepath`);
   if (filepath.length === 0) throw new Error(`${where}.filepath must not be empty`);
@@ -283,7 +289,7 @@ function toViolationLocation(value: unknown, where: string): ViolationLocationSh
     }
     location.lines = { start, end };
   }
-  if (location.scopeId === undefined && location.lines === undefined) {
+  if (!allowFileOnly && location.scopeId === undefined && location.lines === undefined) {
     throw new Error(`${where} must include scopeId or lines`);
   }
   return location;
@@ -292,10 +298,12 @@ function toViolationLocation(value: unknown, where: string): ViolationLocationSh
 function toCheckResult(value: unknown, where: string): CheckResultShape {
   const mapping = asMapping(value, where);
   const status = mapping['status'];
-  if (status !== 'pass' && status !== 'violation') throw new Error(`${where}.status must be pass or violation`);
+  if (status !== 'pass' && status !== 'violation' && status !== 'suppressed') {
+    throw new Error(`${where}.status must be pass, violation, or suppressed`);
+  }
   const result: {
-    status: 'pass' | 'violation'; message?: string; probability?: number; threshold?: number; model?: string; usage?: AiUsage;
-    locations?: readonly ViolationLocationShape[];
+    status: 'pass' | 'violation' | 'suppressed'; message?: string; probability?: number; threshold?: number; model?: string; usage?: AiUsage;
+    locations?: readonly ViolationLocationShape[]; suppressedLocations?: readonly SuppressedLocationShape[];
   } = { status };
   const message = mapping['message'];
   if (message !== undefined) result.message = asString(message, `${where}.message`);
@@ -306,6 +314,21 @@ function toCheckResult(value: unknown, where: string): CheckResultShape {
     result.locations = locations.map((location: unknown, index: number) =>
       toViolationLocation(location, `${where}.locations[${index}]`),
     );
+  }
+  const suppressedLocations = mapping['suppressedLocations'];
+  if (suppressedLocations !== undefined) {
+    if (status === 'pass') throw new Error(`${where}.suppressedLocations are only valid for violations or suppressed results`);
+    if (!Array.isArray(suppressedLocations)) throw new Error(`${where}.suppressedLocations must be an array`);
+    result.suppressedLocations = suppressedLocations.map((suppressed: unknown, index: number) => {
+      const entry = asMapping(suppressed, `${where}.suppressedLocations[${index}]`);
+      return {
+        location: toViolationLocation(entry['location'], `${where}.suppressedLocations[${index}].location`, true),
+        reason: asString(entry['reason'], `${where}.suppressedLocations[${index}].reason`),
+      };
+    });
+  }
+  if (status === 'suppressed' && result.suppressedLocations === undefined) {
+    throw new Error(`${where}.suppressedLocations are required for suppressed results`);
   }
   const probability = mapping['probability'];
   if (probability !== undefined) result.probability = asNumber(probability, `${where}.probability`);

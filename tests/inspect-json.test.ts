@@ -243,6 +243,48 @@ for (const format of ['json', 'jsonl'] as const) {
     assert.equal(chunks.join(''), output);
   });
 
+  test(`inspect ${format} redacts suppression metadata and preserves ranges`, () => {
+    const chunks: string[] = [];
+    const redact = createRedactor(['secret']);
+    const renderer = createInspectJsonRenderer({ write: text => chunks.push(text), redact, format });
+    const subject: ScopeSubject = {
+      kind: 'scope', filepath: 'src/file.ts', id: 'scope', source: 'x', lines: { start: 3, end: 5 },
+    };
+    const result = {
+      status: 'suppressed' as const,
+      message: 'accepted',
+      suppressedLocations: [{
+        location: { filepath: 'src/secret.ts', scopeId: 'secret.scope', lines: { start: 3, end: 5 } },
+        reason: 'secret reason',
+      }],
+    };
+    const event: RunEvent = { type: 'result', evaluationId: 1, name: 'rule', subject, result };
+    const report: RuleReport = {
+      name: 'rule', ruleFile: 'rule.ts', status: 'pass', durationMs: 1,
+      evaluations: [{ subject, result }],
+    };
+    renderer.emit(event);
+    renderer.finish([report]);
+    const expected = {
+      ...result,
+      suppressedLocations: [{
+        location: { filepath: 'src/[REDACTED].ts', scopeId: '[REDACTED].scope', lines: { start: 3, end: 5 } },
+        reason: '[REDACTED] reason',
+      }],
+    };
+    if (format === 'json') {
+      const document = JSON.parse(chunks.join('')) as { events: RunEvent[]; reports: RuleReport[] };
+      assert.deepEqual(document.events[0], { ...event, result: expected });
+      assert.deepEqual(document.reports[0]!.evaluations[0]!.result, expected);
+      assert.equal(JSON.stringify(document).includes('secret'), false);
+    } else {
+      const records = chunks.map(chunk => JSON.parse(chunk) as { type: string; event?: RunEvent; report?: RuleReport });
+      assert.deepEqual(records[0]!.event, { ...event, result: expected });
+      assert.deepEqual(records[1]!.report!.evaluations[0]!.result, expected);
+      assert.equal(JSON.stringify(records).includes('secret'), false);
+    }
+  });
+
   test(`inspect ${format} handles preparation failure before any event and empty successful runs`, () => {
     for (const error of [undefined, '', 'selector unavailable']) {
       const chunks: string[] = [];
