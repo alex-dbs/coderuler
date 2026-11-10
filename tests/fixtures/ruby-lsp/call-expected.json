@@ -1,0 +1,287 @@
+{
+  "originCalleesDepth2": [
+    {
+      "name": "left",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def left\n    leaf\n  end",
+      "lines": { "start": 9, "end": 11 }
+    },
+    {
+      "name": "right",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def right\n    leaf\n  end",
+      "lines": { "start": 13, "end": 15 }
+    },
+    {
+      "name": "leaf",
+      "path": "lib/call_graph.rb",
+      "depth": 2,
+      "source": "def leaf\n  end",
+      "lines": { "start": 17, "end": 18 }
+    }
+  ],
+  "leafCallersDepth2": [
+    {
+      "name": "left",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def left\n    leaf\n  end",
+      "lines": { "start": 9, "end": 11 }
+    },
+    {
+      "name": "right",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def right\n    leaf\n  end",
+      "lines": { "start": 13, "end": 15 }
+    },
+    {
+      "name": "origin",
+      "path": "lib/call_graph.rb",
+      "depth": 2,
+      "source": "def origin\n    left\n    right\n  end",
+      "lines": { "start": 4, "end": 7 }
+    }
+  ],
+  "cycleAlphaCalleesDepth4": [
+    {
+      "name": "beta",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def beta\n    gamma\n  end",
+      "lines": { "start": 26, "end": 28 }
+    },
+    {
+      "name": "gamma",
+      "path": "lib/call_graph.rb",
+      "depth": 2,
+      "source": "def gamma\n    alpha\n  end",
+      "lines": { "start": 30, "end": 32 }
+    }
+  ],
+  "redRunCallers": [
+    {
+      "name": "red_entry",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def red_entry\n    RedWorker.new.run\n  end",
+      "lines": { "start": 54, "end": 56 }
+    }
+  ],
+  "blueRunCallers": [
+    {
+      "name": "blue_entry",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def blue_entry\n    BlueWorker.new.run\n  end",
+      "lines": { "start": 58, "end": 60 }
+    }
+  ],
+  "redEntryCalleesDepth2": [
+    {
+      "name": "run",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def run\n    red_task\n  end",
+      "lines": { "start": 36, "end": 38 }
+    },
+    {
+      "name": "red_task",
+      "path": "lib/call_graph.rb",
+      "depth": 2,
+      "source": "def red_task\n  end",
+      "lines": { "start": 40, "end": 41 }
+    }
+  ],
+  "bareTargetCallers": [
+    {
+      "name": "bare_entry",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def bare_entry\n    bare_target\n  end",
+      "lines": { "start": 64, "end": 66 }
+    }
+  ],
+  "localTargetCallers": [],
+  "singletonEntryCallees": [
+    {
+      "name": "endless_target",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def self.endless_target = :done",
+      "lines": { "start": 85, "end": 85 }
+    }
+  ],
+  "endlessTargetCallers": [
+    {
+      "name": "singleton_entry",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def self.singleton_entry\n    endless_target\n  end",
+      "lines": { "start": 81, "end": 83 }
+    }
+  ],
+  "outerCallees": [
+    {
+      "name": "inner",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def inner\n  end",
+      "lines": { "start": 96, "end": 97 }
+    }
+  ],
+  "nestedBodyLineOnlyCallees": [
+    {
+      "name": "nested_leaf",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def nested_leaf\n  end",
+      "lines": { "start": 99, "end": 100 }
+    }
+  ],
+  "blockEntryCallees": [
+    {
+      "name": "block_leaf",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def block_leaf\n  end",
+      "lines": { "start": 110, "end": 111 }
+    }
+  ],
+  "blockEntryCalleesWithDependencies": [
+    {
+      "name": "block_leaf",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def block_leaf\n  end",
+      "lines": { "start": 110, "end": 111 }
+    }
+  ],
+  "baseSaveCallers": [
+    {
+      "name": "save",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def save(value)\n    super\n  end",
+      "lines": { "start": 120, "end": 122 }
+    },
+    {
+      "name": "save",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def save(value)\n    super(value)\n  end",
+      "lines": { "start": 126, "end": 128 }
+    }
+  ],
+  "childSaveCallees": [
+    {
+      "name": "save",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def save(value)\n  end",
+      "lines": { "start": 115, "end": 116 }
+    }
+  ],
+  "forwardingSaveCallees": [
+    {
+      "name": "save",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def save(value)\n  end",
+      "lines": { "start": 115, "end": 116 }
+    }
+  ],
+  "ambiguousCallSiteCallees": [
+    {
+      "name": "candidate_one_leaf",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def candidate_one_leaf\n  end",
+      "lines": { "start": 136, "end": 137 }
+    },
+    {
+      "name": "candidate_two_leaf",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def candidate_two_leaf\n  end",
+      "lines": { "start": 145, "end": 146 }
+    }
+  ],
+  "unicodeCallSiteCallers": [
+    {
+      "name": "unicode_entry",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def unicode_entry\n    \"😀\"; unicode_leaf\n  end",
+      "lines": { "start": 154, "end": 156 }
+    }
+  ],
+  "unicodeOffsetCallers": [
+    {
+      "name": "c",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def c; x; end",
+      "lines": { "start": 199, "end": 199 }
+    }
+  ],
+  "dependencyCalleesDefault": [],
+  "dependencyCalleesOptIn": [
+    {
+      "name": "remote_execute",
+      "path": "<dependency>/lib/support_widget.rb",
+      "depth": 1,
+      "source": "def remote_execute\n    remote_leaf\n  end",
+      "lines": { "start": 2, "end": 4 }
+    },
+    {
+      "name": "remote_leaf",
+      "path": "<dependency>/lib/support_widget.rb",
+      "depth": 2,
+      "source": "def remote_leaf\n  end",
+      "lines": { "start": 6, "end": 7 }
+    }
+  ],
+  "dependencyCallersDefault": [],
+  "dependencyCallersOptIn": [
+    {
+      "name": "dependency_entry",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def dependency_entry\n    SupportWidget.new.remote_execute\n  end",
+      "lines": { "start": 163, "end": 165 }
+    }
+  ],
+  "dependencySinkCallersDefault": [],
+  "dependencySinkCallersOptIn": [
+    {
+      "name": "remote_call_project",
+      "path": "<dependency>/lib/support_widget.rb",
+      "depth": 1,
+      "source": "def remote_call_project\n    DependencyEntrypoint.new.dependency_sink\n  end",
+      "lines": { "start": 9, "end": 11 }
+    }
+  ],
+  "propertyAssignmentCallees": [
+    {
+      "name": "rhs_helper",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def rhs_helper\n  end",
+      "lines": { "start": 188, "end": 189 }
+    }
+  ],
+  "propertyGetterCallers": [
+    {
+      "name": "read_entry",
+      "path": "lib/call_graph.rb",
+      "depth": 1,
+      "source": "def read_entry\n    self.value\n  end",
+      "lines": { "start": 184, "end": 186 }
+    }
+  ],
+  "propertyAssignmentSiteCallees": [],
+  "emptyNonMethodCallees": []
+}

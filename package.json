@@ -46,7 +46,7 @@
     "skills/coderuler-new-rule"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node -e \"const fs = require('node:fs'); fs.mkdirSync('dist/adapter/lsp', { recursive: true }); for (const file of ['ruby-calls.rb', 'coderuler-ruby-lsp-compat.rb']) fs.copyFileSync('src/adapter/lsp/' + file, 'dist/adapter/lsp/' + file);\"",
     "dev": "npx tsx src/cli.ts",
     "start": "node dist/cli.js",
     "test": "npm run build && node --test --test-concurrency=4 tests/*.test.ts",

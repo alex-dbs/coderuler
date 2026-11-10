@@ -693,24 +693,23 @@ if (process.platform !== 'win32') {
   });
 }
 
-test('Ruby positive-depth call hierarchy rejects before resolving either target shape', { timeout: 10_000 }, async () => {
-  const fixture = await makeProject('puts 1\n', 'main.rb');
-  const progressPath = join(fixture.root, 'indexing.progress');
-  const releasePath = join(fixture.root, 'unused-release');
+test('non-Ruby positive-depth call hierarchy rejects when the provider is unavailable', { timeout: 10_000 }, async () => {
+  const fixture = await makeProject();
+  const requestMarker = join(fixture.root, 'definition.requested');
   const exitPath = join(fixture.root, 'child.exited');
   let backend: LspBackend | undefined;
   try {
     backend = await createLspBackend(
       fixture.project,
       new AbortController().signal,
-      rubyServerOptions(
+      serverOptions(
         process.execPath,
-        nodeArgs(rubyProgressPeerScript(
+        nodeArgs(protocolPeerScript(
           fixture.pidPath,
           exitPath,
-          progressPath,
-          releasePath,
-          'early',
+          'hang-definition',
+          requestMarker,
+          pathToFileURL(fixture.sourcePath).href,
         )),
         2_000,
       ),
@@ -718,8 +717,8 @@ test('Ruby positive-depth call hierarchy rejects before resolving either target 
 
     for (const method of ['callers', 'callees'] as const) {
       for (const target of [
-        { filepath: 'main.rb', line: 1, column: 1 },
-        { filepath: 'main.rb', line: 1 },
+        { filepath: 'main.go', line: 3, column: 6 },
+        { filepath: 'main.go', line: 3 },
       ]) {
         await assert.rejects(
           backend[method](target, { depth: 1 }),
