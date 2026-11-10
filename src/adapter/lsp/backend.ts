@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
-import { basename, extname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { basename, delimiter, dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse, type SgNode, type SgRoot } from '@ast-grep/napi';
 import {
@@ -49,6 +49,7 @@ import type { LspCall, LspCallOptions, LspOptions, LspReferenceOptions, LspTarge
 import type { LspBackend, Project } from '../../app/ports.js';
 import { resolveAstGrepLanguage } from '../scope/astgrep-languages.js';
 import { textLineSpan, type LineSpan } from '../scope/lines.js';
+import { createRubyCallGraph } from './ruby-call-graph.js';
 
 interface DeclarationResult {
   readonly source: string;
@@ -260,9 +261,23 @@ export async function createLspBackend(
   const rootUri = pathToFileURL(root).href;
   const workspaceFolder: WorkspaceFolder = { uri: rootUri, name: basename(root) };
   const usesProcessGroup = settings.languageId === 'ruby' && process.platform !== 'win32';
+  const childEnv = settings.languageId === 'ruby'
+    ? { ...(settings.env ?? process.env) }
+    : settings.env;
+  if (settings.languageId === 'ruby') {
+    const compatDirectory = dirname(fileURLToPath(new URL('./coderuler-ruby-lsp-compat.rb', import.meta.url)));
+    const rubyLib = childEnv!.RUBYLIB;
+    const rubyOpt = childEnv!.RUBYOPT;
+    childEnv!.RUBYLIB = rubyLib === undefined || rubyLib === ''
+      ? compatDirectory
+      : `${compatDirectory}${delimiter}${rubyLib}`;
+    childEnv!.RUBYOPT = rubyOpt === undefined || rubyOpt === ''
+      ? '-rcoderuler-ruby-lsp-compat'
+      : `${rubyOpt} -rcoderuler-ruby-lsp-compat`;
+  }
   const child = spawn(settings.command, [...(settings.args ?? [])], {
     cwd: root,
-    env: settings.env,
+    env: childEnv,
     shell: process.platform === 'win32' && settings.languageId === 'typescript',
     detached: usesProcessGroup,
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -277,7 +292,6 @@ export async function createLspBackend(
   let closePromise: Promise<void> | undefined;
   let connection: ProtocolConnection | undefined;
   let capabilities: ServerCapabilities | undefined;
-  let rubyPositionNeedsSurrogateAdjustment = false;
   const controller = new AbortController();
   const documentPromises = new Map<string, Promise<Document>>();
   const symbolPromises = new Map<string, Promise<readonly DocumentSymbol[] | readonly SymbolInformation[]>>();
@@ -474,11 +488,6 @@ export async function createLspBackend(
       workspaceFolders: [workspaceFolder],
     }));
     capabilities = initializeResult.capabilities;
-    // Ruby LSP 0.26.11 counts a preceding surrogate pair as one cursor unit.
-    rubyPositionNeedsSurrogateAdjustment =
-      settings.languageId === 'ruby' &&
-      initializeResult.serverInfo?.name === 'Ruby LSP' &&
-      initializeResult.serverInfo.version === '0.26.11';
     await notify('initialized', () => connection!.sendNotification(InitializedNotification.type, {}));
     initialized = true;
     if (readiness !== undefined) await bounded('$/progress', () => readiness.promise);
@@ -562,25 +571,9 @@ export async function createLspBackend(
     return documentForPath(canonicalPathFromUri(uri), includeDependencies);
   };
 
-  const positionForTarget = (document: Document, line: number, column: number): Position => {
-    const position = document.index.position(line, column);
-    if (!rubyPositionNeedsSurrogateAdjustment) return position;
-    const start = document.index.lineStarts[position.line]!;
-    const end = start + position.character;
-    let surrogatePairs = 0;
-    for (let index = start; index + 1 < end; index += 1) {
-      const code = document.text.charCodeAt(index);
-      const next = document.text.charCodeAt(index + 1);
-      if (code >= 0xd800 && code <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
-        surrogatePairs += 1;
-        index += 1;
-      }
-    }
-    if (surrogatePairs === 0) return position;
-    const character = position.character + surrogatePairs;
-    const lineLength = document.index.lineEnds[position.line]! - start;
-    return character > lineLength ? position : { ...position, character };
-  };
+  const positionForTarget = (document: Document, line: number, column: number): Position =>
+    document.index.position(line, column);
+
   const filterLocations = (result: unknown, includeDependencies: boolean): readonly Location[] =>
     normalizeLocations(result).filter(location => isAllowedUri(location.uri, includeDependencies));
 
@@ -695,6 +688,9 @@ export async function createLspBackend(
         };
       }
     }
+    if (settings.languageId === 'ruby' && rangeStrictlyContains(item.range, item.selectionRange)) {
+      return { ...declarationFromRange(document, item.range), range: item.range };
+    }
     const documentSymbolProvider = capabilities?.documentSymbolProvider;
     if (documentSymbolProvider !== undefined && documentSymbolProvider !== false) {
       const symbols = await symbolQuery(document, includeDependencies);
@@ -789,11 +785,42 @@ export async function createLspBackend(
     }
     return sortCandidates(astCandidates);
   };
+  const supportsNativeCallHierarchy =
+    capabilities?.callHierarchyProvider !== undefined && capabilities.callHierarchyProvider !== false;
+  const rubyCallGraph = settings.languageId === 'ruby' && !supportsNativeCallHierarchy
+    ? createRubyCallGraph({
+      project,
+      root,
+      signal: controller.signal,
+      timeoutMs,
+      ...(settings.env === undefined ? {} : { env: settings.env }),
+      documentForPath: async (filepath, includeDependencies) => {
+        const document = await documentForPath(filepath, includeDependencies);
+        return {
+          uri: document.uri,
+          text: document.text,
+          lineCount: document.index.lineCount,
+          position: (line, column) => document.index.position(line, column),
+          offset: position => document.index.offset(position),
+        };
+      },
+      resolveDefinitions: async (uri, position, includeDependencies) => {
+        const document = await documentForUri(uri, includeDependencies);
+        const correctedPosition = positionForTarget(document, position.line + 1, position.character + 1);
+        const result = await request(DefinitionRequest.type, 'textDocument/definition', {
+          textDocument: { uri: document.uri },
+          position: correctedPosition,
+        }, 'definitionProvider');
+        return filterLocations(result, includeDependencies);
+      },
+    })
+    : undefined;
 
   const prepareRoots = async (
     target: LspTarget,
     includeDependencies: boolean,
   ): Promise<readonly CallHierarchyItem[]> => {
+    if (rubyCallGraph !== undefined) return rubyCallGraph.roots(target, includeDependencies);
     assertCapability('textDocument/prepareCallHierarchy', 'callHierarchyProvider');
     const document = await documentForPath(target.filepath, includeDependencies);
     let position: Position;
@@ -842,9 +869,28 @@ export async function createLspBackend(
     for (let cursor = 0; cursor < queue.length; cursor += 1) {
       const current = queue[cursor]!;
       if (current.depth >= options.depth) continue;
-      const response: readonly (CallHierarchyIncomingCall | CallHierarchyOutgoingCall)[] = direction === 'callers'
-        ? (await request(CallHierarchyIncomingCallsRequest.type, 'callHierarchy/incomingCalls', { item: current.item }, 'callHierarchyProvider')) ?? []
-        : (await request(CallHierarchyOutgoingCallsRequest.type, 'callHierarchy/outgoingCalls', { item: current.item }, 'callHierarchyProvider')) ?? [];
+      let response: readonly (CallHierarchyIncomingCall | CallHierarchyOutgoingCall)[];
+      if (rubyCallGraph !== undefined) {
+        if (direction === 'callers') {
+          response = await rubyCallGraph.incoming(current.item, includeDependencies);
+        } else {
+          response = await rubyCallGraph.outgoing(current.item, includeDependencies);
+        }
+      } else if (direction === 'callers') {
+        response = (await request(
+          CallHierarchyIncomingCallsRequest.type,
+          'callHierarchy/incomingCalls',
+          { item: current.item },
+          'callHierarchyProvider',
+        )) ?? [];
+      } else {
+        response = (await request(
+          CallHierarchyOutgoingCallsRequest.type,
+          'callHierarchy/outgoingCalls',
+          { item: current.item },
+          'callHierarchyProvider',
+        )) ?? [];
+      }
       for (const edge of response) {
         const item = direction === 'callers'
           ? (edge as CallHierarchyIncomingCall).from
@@ -951,7 +997,10 @@ export async function createLspBackend(
     if (closePromise !== undefined) return closePromise;
     closing = true;
     controller.abort(new Error('LSP session is closed'));
-    closePromise = cleanup(initialized && terminalError === undefined);
+    closePromise = Promise.all([
+      cleanup(initialized && terminalError === undefined),
+      rubyCallGraph?.close() ?? Promise.resolve(),
+    ]).then(() => undefined);
     return closePromise;
   };
 
