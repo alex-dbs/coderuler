@@ -7,15 +7,16 @@ interface Props extends HTMLAttributes<'figure'> {
   code: string;
   filename: string;
   transformers?: ComponentProps<typeof Code>['transformers'];
+  copyable?: boolean;
 }
 
-const { code, filename, transformers, class: className, 'aria-label': ariaLabel, ...attributes } = Astro.props;
+const { code, filename, transformers, copyable = true, class: className, 'aria-label': ariaLabel, ...attributes } = Astro.props;
 ---
 
 <figure class:list={['rule-code', className]} {...attributes}>
   <figcaption class="rule-code-header">
     <span>{filename}</span>
-    <button class="rule-code-copy" type="button" data-copy={code} data-rule-copy hidden aria-label={`Copy ${filename}`}><span data-copy-label>Copy rule</span></button>
+    {copyable && <button class="rule-code-copy" type="button" data-copy={code} data-rule-copy hidden aria-label={`Copy ${filename}`}><span data-copy-label>Copy rule</span></button>}
   </figcaption>
   <Code code={code} lang="typescript" theme="material-theme-palenight" transformers={transformers} data-copy-disabled aria-label={ariaLabel ?? `${filename} complete rule`} tabindex="0" />
   <slot name="footer" />
