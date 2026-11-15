@@ -33,9 +33,18 @@ Test cases can live in the rule module or in a sibling `.test` module. For examp
 
 For a deterministic rule, export named `tests` with `.passes()` and `.violates()` cases. For an AI rule, put every test case in `aiTests` and do not add a separate `tests` export. Omit `.skips()` assertions when creating a rule: skipped inputs never reach the check and provide no evidence of policy behavior.
 
-For an AI rule, use `instruction` to state what compliant code does, beginning with a direct requirement. Add only applicability boundaries or real exceptions needed to define the policy; keep one policy per rule. Keep reporting language in `violationMessage`, examples in `examples`, and test cases in `aiTests`—not in the instruction. See [AI instruction style](reference.md#ai-instruction-style).
+For an AI rule, use `instruction` to state what compliant code does. Begin with a direct requirement. Add only applicability boundaries or real exceptions that define the policy. Keep one policy per rule. Put reporting language in `violationMessage`, examples in `examples`, and test cases in `aiTests`. Make violation messages actionable and name the required correction. See [AI instruction style](reference.md#ai-instruction-style).
 
-Keep Jev's input to the smallest scope that still supports a correct decision. For function-local code rules, use `scopes.astGrep` to select one function or method per scope and filter for relevant syntax, such as pointer dereferences.
+Keep Jev's input to the smallest scope that supports a correct decision. For syntax-based selection, assign the selector directly to the rule's `scope` property. For Go structs, use:
+
+```ts
+scope = scopes.astGrep({
+  language: 'go',
+  rule: { kind: 'type_spec', has: { kind: 'struct_type' } },
+});
+```
+
+For function-local code rules, select one function or method per scope. Filter for relevant syntax, such as pointer dereferences.
 
 Run the relevant cases before the policy change and require an assertion mismatch for the intended violation, not a loading error. Implement the policy, then require every case to pass.
 
@@ -142,12 +151,3 @@ After the project check, suppress only a finding the rule correctly identifies b
 
 Rerun `coderuler check . --output-all` and confirm only the intended finding is suppressed. Fix a rule or fixture when its policy is wrong; never add a suppression just to pass a test. The engine applies suppressions between a valid check result and its report; this does not change applicability or skip checks and AI calls. See [violation suppressions](reference.md#violation-suppressions) for the YAML shape and root rules.
 
-## Good and bad practices
-
-| Prefer | Avoid |
-| --- | --- |
-| Narrow selection, applicability in `when`/`filter`, policy in `check` | Repeating guards in the check or filtering out the violations the rule should report |
-| A function-valued `check = ...` or typed `check: Evaluator<T> = ...` | A `check(...)` method instead of the required property |
-| Actionable violations naming the field/value and required correction | Generic messages with no location-specific reason |
-| Pure per-subject decisions and local state | Results depending on concurrent check order or mutable module caches |
-| Real failing-before/passing-after datasets and an inspected applicable subject | Merely validating imports, running without selected subjects, or treating a skip as a pass |

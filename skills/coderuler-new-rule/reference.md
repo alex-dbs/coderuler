@@ -1,4 +1,4 @@
- # Rule API reference
+# Rule API reference
 
 Read the branch needed for the rule; use [SKILL.md](SKILL.md) for the authoring, test, and inspection workflow. All imports below use the public `@alex-dbs/coderuler` SDK.
 
@@ -14,9 +14,9 @@ Default-export a constructible class extending `Rule<T>` (`T = JsonValue`). Extr
 | `exclude: readonly string[]`                                                            | `[]`       | Root-relative globs; exclusion wins.                                                                         |
 | `tags?: readonly string[]`                                                              | Absent     | Labels for `check --tags` and `--exclude-tags`.                                                              |
 | `scope?: ScopeSelector<T>`                                                              | Absent     | One whole-file scope per eligible file unless supplied.                                                      |
-| `settings: RuleSettings` | `{}` | Optional backend, model, threshold, and input/output USD-per-million token prices; see AI below. |
+| `settings: RuleSettings`                                                                | `{}`       | Optional backend, model, threshold, and input/output USD-per-million token prices; see AI below.             |
 | `group: Grouping`                                                                       | `'scope'`  | Groups surviving scopes before evaluation.                                                                   |
-| `comment` (optional) | Absent | Nonblank Markdown string or callback for each GitHub finding; see below. |
+| `comment` (optional)                                                                    | Absent     | Nonblank Markdown string or callback for each GitHub finding; see below.                                     |
 | `when(context: ProjectContext): Awaitable<PredicateResult>`                             | `true`     | Whole-rule applicability, once per enabled rule before parsing target sources.                               |
 | `select(context: SelectionContext): Awaitable<readonly ScopeSubject<T>[]>`              | Delegates  | Calls `context.select({ files, exclude, scope })`; override for custom selection.                            |
 | `filter(subject: ScopeSubject<T>, context: ProjectContext): Awaitable<PredicateResult>` | `true`     | Per-scope applicability before grouping.                                                                     |
@@ -41,7 +41,7 @@ Good: explain an out-of-domain scope with a filter reason. Bad: return `pass()` 
 | `scopes.yaml<T>({ path?, key? }?)`                               | Same options/default as JSON. Selects every nonempty document in order; aliases/merge keys resolve with a bounded alias count. ID is `<doc-index>:<pointer-or-key>`. Empty/comment-only documents are omitted without renumbering.                                                                                                                                    |
 | `scopes.csv({ headers?, delimiter?, key? }?)`                    | `headers: boolean = true`, `delimiter: string = ','`, `key?: string`. Header mode yields string records; otherwise string arrays. IDs are `row:<n>` (1-based data record) or the nonblank, unique key-column value. `key` requires headers and an existing column. Quoting, multiline records, BOM, and line-ending variants are supported; record widths are strict. |
 | `scopes.astGrep({ language, rule, constraints?, utils?, tsx? })` | Required language string and native ast-grep query; optional metavariable constraints and reusable query utilities. Returns source/captures/line spans, not parsed `data`; queries validate at factory construction.                                                                                                                                                  |
-| `scopes.protobuf<T>({ path? }?)`                                 | String `path` defaults to `$.rpcs[*]`. Reads declarations and their options from one file; see [Protobuf data](#protobuf-data).                                                                                                                                                                                                                                         |
+| `scopes.protobuf<T>({ path? }?)`                                 | String `path` defaults to `$.rpcs[*]`. Reads declarations and their options from one file; see [Protobuf data](#protobuf-data).                                                                                                                                                                                                                                       |
 
 
 JSON/YAML `path` addresses the document; `key` is a JSONPath evaluated against each selected value and must produce exactly one string or finite number. All structured paths are nonempty `$`-rooted JSONPath; executable expressions are rejected and evaluation errors propagate. Protobuf paths may select any node of the protobuf document.
@@ -76,17 +76,17 @@ Choose a language matching the source; common JavaScript/TypeScript, markup, and
 
 `language: 'typescript'` (alias `'ts'`) uses TSX for `.tsx`, TypeScript otherwise (including `.ts`, `.mts`, `.cts`). Explicit `'tsx'` always uses TSX. Both TypeScript query variants validate eagerly; a TypeScript-only kind needs a TSX-compatible replacement:
 
-```ts
-import { scopes } from '@alex-dbs/coderuler';
+Assign a TSX-aware query directly to the rule's `scope` property:
 
-const assertions = scopes.astGrep({
+```ts
+scope = scopes.astGrep({
   language: 'typescript',
   rule: { any: [{ kind: 'as_expression' }, { kind: 'type_assertion' }] },
   tsx: { rule: { kind: 'as_expression' } },
 });
 ```
 
-`tsx: { rule, constraints?, utils? }` is valid only with TypeScript selection and replaces the **complete** query; repeat any needed constraints/utilities. Captures follow the selected query: metavariables provide strings or string arrays, and supported named declarations/Go receivers provide identity captures. Good: query syntax with AST structure. Bad: infer code semantics from line-oriented regular expressions or assume `tsx` merges options.
+`tsx: { rule, constraints?, utils? }` is valid only with TypeScript selection and replaces the complete query. Repeat any needed constraints and utilities. Captures follow the selected query: metavariables provide strings or string arrays, and supported named declarations or Go receivers provide identity captures. Select code by its AST structure.
 
 ### Protobuf data
 
@@ -131,13 +131,15 @@ Adjacent string literals concatenate. Booleans stay booleans. Safe integers and 
 
 Common paths:
 
-| Data | Path |
-| --- | --- |
-| HTTP URLs | `$.rpcs[*].options['google.api.http']..['get','put','post','delete','patch']` |
-| Custom HTTP path | `$.rpcs[*].options['google.api.http']..custom.path` |
-| Field validation | `$.fields[*].options['validate.rules']` |
-| Deprecated RPCs | `$.rpcs[*].options.deprecated` |
-| File Go package | `$.options.go_package` |
+
+| Data             | Path                                                                          |
+| ---------------- | ----------------------------------------------------------------------------- |
+| HTTP URLs        | `$.rpcs[*].options['google.api.http']..['get','put','post','delete','patch']` |
+| Custom HTTP path | `$.rpcs[*].options['google.api.http']..custom.path`                           |
+| Field validation | `$.fields[*].options['validate.rules']`                                       |
+| Deprecated RPCs  | `$.rpcs[*].options.deprecated`                                                |
+| File Go package  | `$.options.go_package`                                                        |
+
 
 IDs select declarations directly; selecting a nested node adds `:/<pointer suffix>` to its declaration ID. Other nodes use their JSONPath pointer as the ID, and the root ID is `$`. Source spans cover the whole file at the root; declarations run from their first token through `;` or `}`, with RPC semicolons included. Name spans cover the name token. Option spans cover their entries; scalar spans cover their tokens, message and list spans include their delimiters, and combined or repeated values span all contributing entries. A node without its own span uses the nearest ancestor span. Line spans are 1-based and inclusive. Malformed syntax fails selection with an error.
 
@@ -367,11 +369,12 @@ suppressions:
 ### Context helpers
 
 
-| Context                                                | Available members                                                                 |
-| ------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| Context                                                | Available members                                                                                                                                  |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ProjectContext`                                       | `project`; optional `changedFiles: ReadonlySet<string>` and `changedLines: ReadonlyMap<string, readonly LineRange[]>`; `trace(message, details?)`. |
-| `SelectionContext extends ProjectContext`              | `select<T>(selection: Selection<T>): Promise<readonly ScopeSubject<T>[]>`.        |
-| `CheckContext<T = JsonValue> extends SelectionContext` | `readonly ruleName: string`; `ai(options: AiOptions<T>): Promise<CheckResult>`. |
+| `SelectionContext extends ProjectContext`              | `select<T>(selection: Selection<T>): Promise<readonly ScopeSubject<T>[]>`.                                                                         |
+| `CheckContext<T = JsonValue> extends SelectionContext` | `readonly ruleName: string`; `ai(options: AiOptions<T>): Promise<CheckResult>`.                                                                    |
+
 
 `changedFiles` contains paths that changed in the project. `changedLines` maps changed paths to added or replaced lines. These values are absent outside `--diff` and `--pr` runs. In those runs, an empty set means no changed files. An empty map means no exact line ranges are available. A missing entry for a path means line data is unavailable, for example for binary or conversion-attributed files. An entry with `[]` means the file changed but has no added lines.
 
@@ -455,7 +458,7 @@ Default input is `String(data)` for scalar/null data, otherwise source text. `in
 `ai<T = JsonValue>(options: AiOptions<T>): Evaluator<T>` accepts exactly one of `rule` or `instruction`:
 
 - `rule: string`: nonempty policy text. This option is deprecated; use `instruction` for new rules.
-- `instruction: string`: nonempty text describing the expected behavior of the selected code. Write a direct requirement that the selected provider can judge as respected or broken.
+- `instruction: string`: nonempty text describing the expected behavior of the selected code. Write a direct requirement that the selected provider can judge as respected or broken. Straight to the point: be concise, the smaller and straight to the point gives better results. Example: `A class shouldnt try to do everything. Instead, it should serve a single stakeholder or "actor" whose requirements drive changes to that specific feature.` is better than `Investigate only the provided go class and check that the class is bla bla bla`. Straight to the point!  
 - `examples?: { readonly good?: readonly string[]; readonly bad?: readonly string[] }`: conditioning examples, dense arrays of nonempty strings; omitted/empty lists are valid.
 - `violationMessage?: string`: nonempty reporting-only message, not sent as instructions.
 - `input?: (subject: Subject<T>, context: ProjectContext) => Awaitable<JsonValue>`: replace the default projection; output validates as JSON-compatible.
@@ -481,7 +484,6 @@ Compare wording with the policy and dataset held fixed:
 5. Keep wording that improves separation without changing the policy or introducing wrong decisions. Repeat a close comparison before treating a small gain as reliable.
 
 `PASS` in test output means the expected result matched. A passing violation test still needs a low AI score. Do not lower the threshold, relabel fixtures, or copy test cases into the instruction to improve the comparison. Results on a tuning dataset do not prove performance on unseen code.
-
 
 This rule checks Go pointer dereferences, including nested fields:
 
@@ -583,7 +585,6 @@ Inside a custom check, `return context.ai({ instruction: '...' })` evaluates its
 `RuleSettings.backend` supports `'jev'` and `'openai'`; Jev is the default. Set `model`, threshold, `inputCostPerMillion`, or `outputCostPerMillion` in `settings` to override defaults. Both providers use a threshold of `0.4`; AI passes only when probability is **strictly greater** than threshold, and equality violates. Threshold precedence is CLI override → rule setting → `RK_THRESHOLD` → `0.4`. Backend precedence is rule setting → `RK_BACKEND` → `jev`. Model precedence is rule setting → selected provider's model variable → provider default. Jev uses `TYPESAFE_DEFAULT_MODEL` (default `jev-latest`) and `TYPESAFE_API_KEY`; OpenAI uses `OPENAI_DEFAULT_MODEL` (default `gpt-6-luna`) and `OPENAI_API_KEY`. The base URL variables are `TYPESAFE_BASE_URL` and `OPENAI_BASE_URL`, defaulting to `https://api.typesafe.ai` and `https://api.openai.com/v1`. Provider configuration and credentials are read only when an AI call selects that backend. Deterministic, skipped, and filtered paths need no key.
 
 Inspection reports per-verification `usage: AiUsage` and a final recap: `calls`, `unreportedCalls`, `inputTokens`, `outputTokens`, `inputCost`, and `outputCost` (USD). Counts come from provider responses; missing counts remain unreported and totals cover reported calls only. Default input prices are `$0.042` per million tokens for Jev and `$0.10` for OpenAI; both output prices default to `$0`. Price precedence is inspection override → rule setting → `RK_INPUT_COST_PER_MILLION` / `RK_OUTPUT_COST_PER_MILLION` → selected provider default. Prices change estimates, not decisions.
-
 
 ## Project readers
 

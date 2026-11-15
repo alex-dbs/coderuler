@@ -4,6 +4,7 @@ import goRuleSource from '../../../.coderuler.examples/go-dereference-guard.rule
 import goAppRuleSource from '../../../.coderuler.examples/go-app-no-infrastructure.rule.ts?raw';
 import serviceRuleSource from '../../../.coderuler.examples/service-proto.rule.ts?raw';
 import jsonSchemaRuleSource from '../../../.coderuler.examples/json-schema-config.rule.ts?raw';
+import goSingleResponsibilityExample from '../../../tests/manual/srp/violation.go?raw';
 import Violation from './Violation.astro';
 import { sitePath } from '../lib/paths';
 import '../styles/rule-examples.css';
@@ -60,6 +61,33 @@ const goAppRule = goAppRuleSource
 
 const serviceRule = serviceRuleSource.split('\nfunction proto')[0].trim();
 const jsonSchemaRule = jsonSchemaRuleSource.split('\nexport const tests')[0].trim();
+const goSingleResponsibilityRule = `import { Rule, ai, scopes } from '@alex-dbs/coderuler';
+
+export default class GoSingleResponsibility extends Rule {
+  files = ['**/*.go'];
+  exclude = ['**/*_test.go'];
+  scope = scopes.astGrep({
+    language: 'go',
+    rule: { kind: 'type_spec', has: { kind: 'struct_type' } },
+  });
+
+  check = ai({
+    instruction: \`Single Responsibility Principle: A class shouldnt try 
+    to do everything. Instead, it should serve a single stakeholder or 
+    "actor" whose requirements drive changes to that specific feature.\`,
+    input: async (subject, { project }) => {
+    /* A bit of astGrep roundtrip to fetch all methods from the struct */
+    /* Expected request sent to Jev:
+      {
+        "struct": "type TOTO struct {  }",
+        "methods": [
+          "func (t TOTO) GetUser(id string) (string, bool)",
+          "func (t TOTO) SendEmail(to, subject, body string) error"
+        ]
+      }
+    */
+  });
+}`;
 const invalidConfig = `{
   "port": "8080"
 }`;
@@ -115,6 +143,7 @@ func Find(ctx context.Context, db *sql.DB, id string) (Account, error) {
   <div class="rule-example-tabs" role="tablist" aria-label="Repository rule examples" data-rule-tablist hidden>
     <button id="rule-tab-http" type="button" role="tab" aria-selected="true" aria-controls="rule-panel-http" tabindex="0" data-rule-tab>Security</button>
     <button id="rule-tab-go-app" type="button" role="tab" aria-selected="false" aria-controls="rule-panel-go-app" tabindex="-1" data-rule-tab>Architecture</button>
+    <button id="rule-tab-go-srp" type="button" role="tab" aria-selected="false" aria-controls="rule-panel-go-srp" tabindex="-1" data-rule-tab>Clean code</button>
     <button id="rule-tab-go" type="button" role="tab" aria-selected="false" aria-controls="rule-panel-go" tabindex="-1" data-rule-tab>Bug finding</button>
     <button id="rule-tab-service" type="button" role="tab" aria-selected="false" aria-controls="rule-panel-service" tabindex="-1" data-rule-tab>Conventions</button>
     <button id="rule-tab-json-schema" type="button" role="tab" aria-selected="false" aria-controls="rule-panel-json-schema" tabindex="-1" data-rule-tab>Configuration</button>
@@ -155,6 +184,22 @@ func Find(ctx context.Context, db *sql.DB, id string) (Account, error) {
     </div>
     <RuleCode code={goAppRule} filename="go-app-no-infrastructure.rule.ts" class="rule-example-code" aria-label="Go application architecture rule excerpt">
       <a slot="footer" class="rule-source-link" href={`${source}go-app-no-infrastructure.rule.ts`}>Read the full source policy <span aria-hidden="true">↗</span></a>
+    </RuleCode>
+  </article>
+  <article id="rule-panel-go-srp" class="rule-example" aria-labelledby="go-srp-example-title" data-rule-example="go-srp" data-rule-panel>
+    <div class="rule-example-copy">
+      <h3 id="go-srp-example-title">Single responsibility</h3>
+      <p>AI generates a lot of code that does not follow the single responsibility principle. Code review can miss these issues, unless you specifically ask the model to check it. Which is what that rule does.</p>
+      <Violation
+        rule="go-single-responsibility"
+        file="tests/manual/srp/violation.go"
+        message="Split this struct so each type has one responsibility."
+        source={goSingleResponsibilityExample}
+        highlightLine={5}
+      />
+    </div>
+    <RuleCode code={goSingleResponsibilityRule} filename="go-single-responsibility.rule.ts" class="rule-example-code" aria-label="Go single responsibility rule">
+      <a slot="footer" class="rule-source-link" href={`${source}go-single-responsibility.rule.ts`}>Read the full source policy <span aria-hidden="true">↗</span></a>
     </RuleCode>
   </article>
 
