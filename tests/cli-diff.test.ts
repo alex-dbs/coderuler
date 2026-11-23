@@ -193,14 +193,14 @@ test('diff compares the explicit base directly with committed, staged, unstaged 
   ]);
 });
 
-test('scope and file groups retain every current scope in a changed file', async () => {
+test('diff scope rules check changed lines while file groups keep every member', async () => {
   const target = repository('whole-scopes');
   const fields = "scope = scopes.json({ path: '$.items[*]' });";
   rule(target, 'scoped', fields, 'src/*.json');
   rule(target, 'file-group', `${fields}\n  group = 'file';`, 'src/*.json');
-  files(target, { 'src/changed.json': '{"items":["before","BAD unchanged"]}\n' });
+  files(target, { 'src/changed.json': '{\n  "items": [\n    "before",\n    "BAD unchanged"\n  ]\n}\n' });
   commit(target);
-  files(target, { 'src/changed.json': '{"items":["after","BAD unchanged"]}\n' });
+  files(target, { 'src/changed.json': '{\n  "items": [\n    "after",\n    "BAD unchanged"\n  ]\n}\n' });
 
   const reports = await check(target, '--diff-only');
   assert.deepEqual(reports.map(report => ({
@@ -211,8 +211,44 @@ test('scope and file groups retain every current scope in a changed file', async
       : [subject.data]),
   })), [
     { name: 'file-group', kinds: ['group'], data: ['after', 'BAD unchanged'] },
-    { name: 'scoped', kinds: ['scope', 'scope'], data: ['after', 'BAD unchanged'] },
+    { name: 'scoped', kinds: ['scope'], data: ['after'] },
   ]);
+});
+
+test('diff checks only the changed route in a protobuf service', async () => {
+  const target = repository('protobuf-route');
+  writeFile(join(target.cwd, '.coderuler', 'route.rule.ts'), `import { Rule, regex, scopes } from '@alex-dbs/coderuler';
+export default class ServiceRoutePrefix extends Rule {
+  files = ['proto/**/*.proto'];
+  scope = scopes.protobuf({ path: "$.rpcs[*].options['corp.http.route']..['get','put','post','delete','patch']" });
+  check = regex({ pattern: /^\\/internal\\//, violationMessage: 'Service routes must start with /internal.' });
+}
+`);
+  const rpc = (name: string, route: string) => [
+    `  rpc ${name}(${name}Request) returns (${name}Response) {`,
+    `    option (corp.http.route) = {post: "${route}"};`,
+    '  }',
+  ];
+  files(target, { 'proto/svc/internal/v1/service.proto': [
+    'syntax = "proto3";', '', 'package corp.svc.internal.v1;', '',
+    'service SessionService {', ...rpc('First', '/v1/first'), ...rpc('Second', '/v1/second'), '}', '',
+  ].join('\n') });
+  commit(target);
+  files(target, { 'proto/svc/internal/v1/service.proto': [
+    'syntax = "proto3";', '', 'package corp.svc.internal.v1;', '',
+    'service SessionService {', ...rpc('Added', '/v1/added'), ...rpc('First', '/v1/first'), ...rpc('Second', '/v1/second'), '}', '',
+  ].join('\n') });
+
+  const diff = await runCli(['check', '.', '--diff-only', '--json', '--output-all'], target);
+  assert.equal(diff.status, 1, diff.stderr);
+  const [changed] = parseCheckOutput(diff, 'diff');
+  assert.deepEqual(changed?.evaluations.map(({ subject, result }) => [subject.kind === 'scope' ? subject.lines : null, result.status]), [
+    [{ start: 7, end: 7 }, 'violation'],
+  ]);
+
+  const full = await runCli(['check', '.', '--json', '--output-all'], target);
+  const [all] = parseCheckOutput(full, 'full');
+  assert.deepEqual(all?.evaluations.flatMap(({ subject, result }) => result.status === 'violation' && subject.kind === 'scope' ? [subject.lines?.start] : []), [7, 10, 13]);
 });
 
 test('case-only file renames evaluate physical scope, custom-selector and file-group subjects', async t => {

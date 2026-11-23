@@ -4,6 +4,7 @@ import type {
   AiUsage,
   CheckContext,
   CheckResult,
+  GroupSubject,
   Grouping,
   JsonValue,
   LspTools,
@@ -149,6 +150,20 @@ async function executeRun(
   const changedPaths = changedFiles === undefined
     ? undefined
     : [...changedFiles].filter(filepath => isEligibleRelativePath(filepath) && context.isTarget(filepath));
+  const touchesChange = (subject: ScopeSubject<JsonValue>): boolean => {
+    if (changedFiles === undefined) return true;
+    if (!changedFiles.has(subject.filepath)) return false;
+    const ranges = changedLines?.get(subject.filepath);
+    const lines = subject.lines;
+    return ranges === undefined || lines === undefined
+      || ranges.some(range => range.start <= lines.end && lines.start <= range.end);
+  };
+  const groupChanged = (subject: GroupSubject<JsonValue>, paths: readonly string[]): boolean => {
+    const { path } = subject.group;
+    return subject.members.some(touchesChange) || paths.some(filepath =>
+      (path === '.' || filepath === path || filepath.startsWith(`${path}/`))
+      && (changedLines?.get(filepath)?.length ?? 0) === 0);
+  };
 
   const traceFor =
     (name: string, evaluationId?: number) =>
@@ -476,6 +491,10 @@ async function executeRun(
     const kept: ScopeSubject<JsonValue>[] = [];
     try {
       for (const subject of selected) {
+        if (rule.group === 'scope' && !touchesChange(subject)) {
+          emit({ type: 'scope', name, subject, accepted: false, reason: 'unchanged lines' });
+          continue;
+        }
         const predicate = validatePredicateResult(
           await rule.filter.call(rule, subject, projectContextFor(name)),
           `Rule "${name}" filter`,
@@ -507,10 +526,9 @@ async function executeRun(
     const grouping: Grouping = plan.rule.group;
     try {
       const subjects = groupSubjects(plan.subjects, grouping);
-      plan.evaluationSubjects = changedPaths === undefined || grouping === 'scope' || grouping === 'file'
+      plan.evaluationSubjects = changedPaths === undefined
         ? subjects
-        : subjects.filter(subject => subject.kind === 'group' && changedPaths.some(filepath =>
-            subject.group.path === '.' || filepath.startsWith(`${subject.group.path}/`)));
+        : subjects.filter(subject => subject.kind === 'scope' || groupChanged(subject, changedPaths));
       for (const subject of plan.evaluationSubjects) {
         if (subject.kind === 'group') emit({ type: 'group', name: plan.name, subject });
       }
