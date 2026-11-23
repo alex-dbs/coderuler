@@ -1,5 +1,6 @@
 export interface ViolationComment {
   readonly body: string;
+  readonly signature: string;
   readonly locations: readonly {
     readonly filepath: string;
     readonly lines: {

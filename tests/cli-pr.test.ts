@@ -93,7 +93,7 @@ function evaluations(reports: readonly CheckReportShape[]) {
 }
 
 function posts(requests: readonly RequestRecord[]) {
-  return requests.filter(request => request.method === 'POST');
+  return requests.filter(request => request.method === 'POST' && request.url !== '/graphql');
 }
 
 test('--pr uses current committed base and global policy only on PR changes', async context => {
@@ -383,13 +383,21 @@ function commentPolicy(target: PrFixture): PrFixture {
 
 function assertCommentTarget(requests: readonly RequestRecord[], target: PrFixture): void {
   assert.equal(requests.some(request => request.url.startsWith(`/repos/${PR_REPOSITORY}/pulls?`)), false, 'explicit PR identity must not discover a branch');
-  assert.ok(requests.every(request => request.url.startsWith(`/repos/${PR_REPOSITORY}/`)), 'unrelated Actions identity must never redirect requests');
+  const graphql = requests.filter(request => request.url === '/graphql');
+  assert.ok(graphql.length > 0, 'comment placement must check GraphQL review threads');
+  for (const request of graphql) assert.deepEqual(JSON.parse(request.body).variables, { owner: 'owner', name: 'project', number: 42, cursor: null });
+  assert.ok(requests.filter(request => request.url !== '/graphql').every(request => request.url.startsWith(`/repos/${PR_REPOSITORY}/`)), 'unrelated Actions identity must never redirect requests');
   const review = posts(requests).filter(request => request.url.endsWith('/pulls/42/reviews'));
   assert.equal(review.length, 1);
-  const payload = JSON.parse(review[0]!.body);
+  const payload = JSON.parse(review[0]!.body) as { commit_id: string; event: string; comments: { body: string }[] };
   assert.equal(payload.commit_id, target.head);
   assert.equal(payload.event, 'COMMENT');
-  assert.deepEqual(payload.comments, [
+  const marker = /\n\n<!-- coderuler:[0-9a-f]{64}_base -->$/;
+  const comments = payload.comments.map(({ body, ...comment }) => {
+    assert.match(body, marker);
+    return { ...comment, body: body.replace(marker, '') };
+  });
+  assert.deepEqual(comments, [
     { path: 'src/changed.txt', body: CUSTOM_COMMENT, line: 1, side: 'RIGHT' },
   ], 'inline placement requires the PR-head blob to match the analyzed file');
   const fallback = posts(requests).filter(request => request.url.endsWith('/issues/42/comments'));

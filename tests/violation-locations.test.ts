@@ -11,6 +11,7 @@ import type {
   Grouping,
   RunContext,
   RunEvent,
+  RuleReport,
   ScopeSelector,
   Subject,
   ViolationLocation,
@@ -88,6 +89,51 @@ async function run(
 }
 
 const redact = (text: string): string => text;
+test('comment signatures hash evaluated context and rule name, not lines or scope ids', async () => {
+  const base: Subject = {
+    kind: 'scope',
+    filepath: 'app.yml',
+    id: 'row:1',
+    source: 'name: test',
+    data: { name: 'test' },
+    captures: { name: 'test' },
+    lines: { start: 1, end: 1 },
+  };
+  const report = (name: string, subject: Subject): RuleReport => ({
+    name,
+    ruleFile: '.coderuler/policy.rule.ts',
+    status: 'violation',
+    durationMs: 0,
+    evaluations: [{ subject, result: { status: 'violation', message: 'm' } }],
+  });
+  const signature = async (name: string, subject: Subject): Promise<string> =>
+    (await renderViolationComments([report(name, subject)], redact))[0]!.signature;
+  const baseSignature = await signature('policy', base);
+  const hash = baseSignature.split('_')[0];
+  assert.match(baseSignature, /^[0-9a-f]{64}_policy$/);
+  assert.equal(await signature('policy', { ...base, id: 'row:2', lines: { start: 4, end: 5 } }), baseSignature);
+  for (const changed of [
+    { ...base, source: 'name: changed' },
+    { ...base, data: { name: 'changed' } },
+    { ...base, captures: { name: 'changed' } },
+    { ...base, filepath: 'other.yml' },
+  ]) {
+    assert.notEqual((await signature('policy', changed)).split('_')[0], hash);
+  }
+  assert.ok((await signature('other-policy', base)).endsWith('_other-policy'));
+
+  const group: Subject = {
+    kind: 'group',
+    group: { type: 'project', path: '.' },
+    members: [base],
+  };
+  const groupChanged: Subject = {
+    ...group,
+    members: [{ ...base, lines: { start: 8, end: 9 } }],
+  };
+  assert.equal(await signature('policy', groupChanged), await signature('policy', group));
+});
+
 
 function rawResult(locations: unknown, status: CheckResult['status'] = 'violation'): CheckResult {
   return { status, message: 'Invalid attribution', locations } as unknown as CheckResult;
@@ -126,9 +172,9 @@ test('protobuf field comments preserve each field source location', async () => 
     { status: 'violation', message: 'Use trusted token data' },
     { status: 'violation', message: 'Use trusted token data' },
   ]);
-  assert.deepEqual(await renderViolationComments(sync.reports, redact, [
+  assert.deepEqual((await renderViolationComments(sync.reports, redact, [
     { name: 'location-policy', ruleFile: '.coderuler/location-policy.rule.ts', rule: syncRule as Rule<unknown> },
-  ]), [
+  ])).map(({ body, locations }) => ({ body, locations })), [
     {
       body: '**organization_id**: Use trusted token data. [Organization policy](https://example.invalid/organization)',
       locations: [{ filepath: 'pkg/fields.proto', lines: { start: 3, end: 3 } }],
@@ -155,9 +201,9 @@ test('protobuf field comments preserve each field source location', async () => 
     { status: 'violation', message: 'Use trusted token data' },
     { status: 'violation', message: 'Use trusted token data' },
   ]);
-  assert.deepEqual(await renderViolationComments(asyncResult.reports, redact, [
+  assert.deepEqual((await renderViolationComments(asyncResult.reports, redact, [
     { name: 'location-policy', ruleFile: '.coderuler/location-policy.rule.ts', rule: asyncRule as Rule<unknown> },
-  ]), [
+  ])).map(({ body, locations }) => ({ body, locations })), [
     {
       body: '**organization_id**: Use trusted token data. [Organization policy](https://example.invalid/organization)',
       locations: [{ filepath: 'pkg/fields.proto', lines: { start: 3, end: 3 } }],
@@ -190,9 +236,9 @@ test('group comments render once with all resolved member locations', async () =
   };
 
   const result = await run(rule);
-  assert.deepEqual(await renderViolationComments(result.reports, redact, [
+  assert.deepEqual((await renderViolationComments(result.reports, redact, [
     { name: 'location-policy', ruleFile: '.coderuler/location-policy.rule.ts', rule: rule as Rule<unknown> },
-  ]), [{
+  ])).map(({ body, locations }) => ({ body, locations })), [{
     body: '**project .**: head, tail (2 locations)',
     locations: [
       { filepath: 'pkg/a.txt', lines: { start: 1, end: 3 } },

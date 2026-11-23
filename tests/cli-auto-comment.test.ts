@@ -96,7 +96,7 @@ interface Review {
   }[];
 }
 
-async function github(context: TestContext, target: Fixture, postStatus = 201) {
+async function github(context: TestContext, target: Fixture, postStatus = 201, threads: unknown[] = []) {
   const requests: RequestRecord[] = [];
   const files = ['one', 'two', 'good'].map(name => {
     const filename = `src/${name}.txt`;
@@ -117,6 +117,8 @@ async function github(context: TestContext, target: Fixture, postStatus = 201) {
       response.end(JSON.stringify(files));
     } else if (request.method === 'GET' && url === '/repos/owner/project/pulls/42') {
       response.end(JSON.stringify({ head: { sha: target.head } }));
+    } else if (request.method === 'POST' && url === '/graphql') {
+      response.end(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: threads, pageInfo: { hasNextPage: false, endCursor: null } } } } } }));
     } else if (request.method === 'POST' && ['/repos/owner/project/pulls/42/reviews', '/repos/owner/project/issues/42/comments'].includes(url)) {
       response.statusCode = postStatus;
       response.end(JSON.stringify(postStatus === 201 ? { id: 1 } : { message: `Rejected ${TOKEN} ${API_KEY}` }));
@@ -143,12 +145,20 @@ async function github(context: TestContext, target: Fixture, postStatus = 201) {
 }
 
 function posts(requests: readonly RequestRecord[]) {
-  return requests.filter(request => request.method === 'POST');
+  return requests.filter(request => request.method === 'POST' && request.url !== '/graphql');
 }
+const MARKER = /\n\n<!-- coderuler:[0-9a-f]{64}_[\w-]+ -->$/;
 function review(requests: readonly RequestRecord[]): Review {
   const matching = posts(requests).filter(request => request.url.endsWith('/reviews'));
   assert.equal(matching.length, 1);
-  return JSON.parse(matching[0]!.body) as Review;
+  const payload = JSON.parse(matching[0]!.body) as Review;
+  return {
+    ...payload,
+    comments: payload.comments.map(comment => {
+      assert.match(comment.body, MARKER);
+      return { ...comment, body: comment.body.replace(MARKER, '') };
+    }),
+  };
 }
 function fallback(requests: readonly RequestRecord[]): string {
   const matching = posts(requests).filter(request => request.url.endsWith('/issues/42/comments'));
@@ -195,6 +205,33 @@ for (const diff of ['--diff', '--diff-only']) {
     assert.ok(result.stdout.includes('SOURCE-SECRET'));
   });
 }
+
+test('repeated runs skip unresolved marked threads and repost after resolution', async context => {
+  const target = repository('repeated');
+  const threads: { isResolved: boolean; path: string; comments: { nodes: { body: string }[] } }[] = [];
+  const requests = await github(context, target, 201, threads);
+  const args = ['--diff', '--base', target.base, '--auto-comment', '--json'];
+
+  const first = await check(target, args);
+  assert.equal(first.status, 1, first.stderr);
+  assert.equal(first.stderr, '');
+  assert.equal(posts(requests).length, 1);
+  const raw = JSON.parse(posts(requests)[0]!.body) as Review;
+  threads.push(...raw.comments.map(({ path, body }) => ({ isResolved: false, path, comments: { nodes: [{ body }] } })));
+
+  const second = await check(target, args);
+  assert.equal(second.status, 1, second.stderr);
+  assert.equal(second.stderr, '');
+  assert.equal(posts(requests).length, 1, 'unresolved marked threads must suppress a repeat');
+
+  for (const thread of threads) thread.isResolved = true;
+  const third = await check(target, args);
+  assert.equal(third.status, 1, third.stderr);
+  assert.equal(third.stderr, '');
+  assert.equal(posts(requests).length, 2);
+  assert.deepEqual(JSON.parse(posts(requests)[1]!.body).comments, raw.comments);
+  assert.equal(requests.filter(request => request.url === '/graphql').length, 3);
+});
 
 const CUSTOM = '**Policy** — follow [the guide](https://example.invalid/guide) and keep `snake_case`.\n\n- mention @scope';
 for (const kind of ['sync', 'async'] as const) {

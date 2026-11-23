@@ -9,6 +9,19 @@ import { isolatedGitEnvironment } from '../git/environment.js';
 import { createGithubApi, mapping } from './api.js';
 import { originRepository, pullNumber, repositoryName, type PullRequest } from './pull-request.js';
 
+type GithubRequest = (path: string, method: 'GET' | 'POST', payload?: object) => Promise<Response>;
+
+const REVIEW_THREADS = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $cursor) {
+        nodes { isResolved path comments(first: 1) { nodes { body } } }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}`;
+
 async function git(
   root: string,
   args: readonly string[],
@@ -145,6 +158,53 @@ async function matchingFile(
   }
 }
 
+async function unresolvedThreadBodies(
+  request: GithubRequest,
+  pull: PullRequest,
+): Promise<ReadonlyMap<string, readonly string[]>> {
+  const [owner, name] = pull.repository.split('/');
+  const bodies = new Map<string, string[]>();
+  let cursor: string | null = null;
+  while (true) {
+    const response = await request('/graphql', 'POST', {
+      query: REVIEW_THREADS,
+      variables: { owner, name, number: pull.number, cursor },
+    });
+    const payload = mapping(await response.json().catch(() => undefined));
+    const data = mapping(payload?.data);
+    const repository = mapping(data?.repository);
+    const pullRequest = mapping(repository?.pullRequest);
+    const threads = mapping(pullRequest?.reviewThreads);
+    const nodes = threads?.nodes;
+    const pageInfo = mapping(threads?.pageInfo);
+    if (!threads || !Array.isArray(nodes) || typeof pageInfo?.hasNextPage !== 'boolean'
+      || (pageInfo.hasNextPage && typeof pageInfo.endCursor !== 'string')) {
+      throw new Error('GitHub API returned an invalid review threads response.');
+    }
+    for (const value of nodes) {
+      const thread = mapping(value);
+      const comments = mapping(thread?.comments);
+      const commentNodes = comments?.nodes;
+      if (!thread || typeof thread.isResolved !== 'boolean' || typeof thread.path !== 'string' || !Array.isArray(commentNodes)) {
+        throw new Error('GitHub API returned an invalid review threads response.');
+      }
+      const firstComment = commentNodes[0];
+      if (firstComment !== undefined) {
+        const comment = mapping(firstComment);
+        if (typeof comment?.body !== 'string') throw new Error('GitHub API returned an invalid review threads response.');
+        if (!thread.isResolved) {
+          const pathBodies = bodies.get(thread.path);
+          if (pathBodies) pathBodies.push(comment.body);
+          else bodies.set(thread.path, [comment.body]);
+        }
+      }
+    }
+    if (!pageInfo.hasNextPage) return bodies;
+    cursor = pageInfo.endCursor as string;
+  }
+}
+
+
 export function createGithubCommenter(
   env: Readonly<Record<string, string | undefined>>,
 ): (root: string, comments: readonly ViolationComment[], pullRequest?: PullRequest) => Promise<void> {
@@ -194,9 +254,10 @@ export function createGithubCommenter(
     const repository = comments.some(comment => comment.locations.length > 0) ? await repositoryPaths(root, gitEnv) : undefined;
     const matched = new Map<string, Promise<PullFile | undefined>>();
     const patches = new Map<string, readonly DiffRun[]>();
-    const inline: ReviewComment[] = [];
+    const planned: { readonly marker: string; readonly comment: ReviewComment }[] = [];
     const fallback: string[] = [];
     for (const finding of comments) {
+      const marker = `<!-- coderuler:${finding.signature} -->`;
       const anchors = new Set<string>();
       for (const location of finding.locations) {
         if (!repository || !Number.isSafeInteger(location.lines.start) || !Number.isSafeInteger(location.lines.end)
@@ -218,11 +279,16 @@ export function createGithubCommenter(
         const key = JSON.stringify([file.filename, start, end]);
         if (anchors.has(key)) continue;
         anchors.add(key);
-        inline.push({ path: file.filename, body: finding.body, line: end, side: 'RIGHT',
-          ...(start < end ? { start_line: start, start_side: 'RIGHT' as const } : {}) });
+        planned.push({ marker, comment: { path: file.filename, body: `${finding.body}\n\n${marker}`, line: end, side: 'RIGHT',
+          ...(start < end ? { start_line: start, start_side: 'RIGHT' as const } : {}) } });
       }
       if (anchors.size === 0) fallback.push(finding.body);
     }
+
+    const unresolved = planned.length === 0 ? new Map<string, readonly string[]>() : await unresolvedThreadBodies(request, pull);
+    const inline = planned
+      .filter(({ marker, comment }) => !unresolved.get(comment.path)?.some(body => body.includes(marker)))
+      .map(({ comment }) => comment);
 
     if (await readHead() !== head) throw new Error('GitHub pull request head changed during comment planning; refusing stale findings.');
     if (inline.length > 0) {

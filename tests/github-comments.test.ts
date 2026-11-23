@@ -18,7 +18,9 @@ after(() => sandboxes.cleanup());
 const token = 'github_pat_test-secret';
 const body = '**memory**: app.yml:4-7 — limit is too high';
 const head = 'a'.repeat(40);
-const fallback = [{ body, locations: [] }];
+const signature = `${'d'.repeat(64)}_memory`;
+const marker = `<!-- coderuler:${signature} -->`;
+const fallback = [{ body, signature, locations: [] }];
 const detail = { body: { head: { sha: head } } };
 const posted = { status: 201, body: {} };
 const summary = (bodies: readonly string[]) => ({ body: `## CodeRuler violations\n\n${bodies.join('\n\n')}\n` });
@@ -107,7 +109,11 @@ function assertSafeError(error: unknown, expected: RegExp): boolean {
 function payload(request: Request) { return JSON.parse(request.body) as unknown; }
 
 function inline(path: string, line: number, start?: number, text = body) {
-  return { path, body: text, line, side: 'RIGHT', ...(start === undefined ? {} : { start_line: start, start_side: 'RIGHT' }) };
+  return { path, body: `${text}\n\n${marker}`, line, side: 'RIGHT', ...(start === undefined ? {} : { start_line: start, start_side: 'RIGHT' }) };
+}
+
+function threads(nodes: readonly unknown[] = [], next?: string): Reply {
+  return { body: { data: { repository: { pullRequest: { reviewThreads: { nodes, pageInfo: { hasNextPage: next !== undefined, endCursor: next ?? null } } } } } } };
 }
 
 test('empty findings do not require credentials, Git, or HTTP', async t => {
@@ -160,23 +166,24 @@ test('explicit PR target supports detached HEAD and overrides unrelated Actions 
   const repo = repository();
   const file = source(repo);
   repo.git('checkout', '--quiet', '--detach');
-  const requests = await github(t, [detail, { body: [file] }, detail, posted]);
+  const requests = await github(t, [detail, { body: [file] }, threads(), detail, posted]);
   await createGithubCommenter({
     ...repo.env,
     GITHUB_TOKEN: token,
     GITHUB_REPOSITORY: 'unrelated/project',
     GITHUB_REF: 'refs/pull/99/merge',
     GITHUB_EVENT_PATH: join(repo.root, 'missing-event.json'),
-  })(repo.cwd, [{ body, locations: [{ filepath: 'app.yml', lines: { start: 4, end: 5 } }] }], {
+  })(repo.cwd, [{ body, signature, locations: [{ filepath: 'app.yml', lines: { start: 4, end: 5 } }] }], {
     repository: 'requested/project', number: 42, head,
   });
   assert.deepEqual(requests.map(request => [request.method, request.path]), [
     ['GET', '/repos/requested/project/pulls/42'],
     ['GET', '/repos/requested/project/pulls/42/files?per_page=100&page=1'],
+    ['POST', '/graphql'],
     ['GET', '/repos/requested/project/pulls/42'],
     ['POST', '/repos/requested/project/pulls/42/reviews'],
   ]);
-  assert.deepEqual(payload(requests[3]!), {
+  assert.deepEqual(payload(requests[4]!), {
     commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: [inline('app.yml', 5, 4)],
   });
 });
@@ -190,7 +197,7 @@ test('explicit target matches inline files despite inherited Git repository loca
   const callerIndex = caller.git('write-tree');
   const callerStatus = caller.git('status', '--porcelain');
   const transport = { origin: '' };
-  const requests = await github(t, [detail, { body: [file] }, detail, posted], transport);
+  const requests = await github(t, [detail, { body: [file] }, threads(), detail, posted], transport);
   const script = `
     import { createGithubCommenter } from ${JSON.stringify(new URL('../dist/adapter/github/comments.js', import.meta.url).href)};
     const originalFetch = globalThis.fetch;
@@ -200,7 +207,7 @@ test('explicit target matches inline files despite inherited Git repository loca
       return originalFetch(${JSON.stringify(transport.origin)} + url.pathname + url.search, init);
     };
     await createGithubCommenter(process.env)(process.cwd(), ${JSON.stringify([
-      { body, locations: [{ filepath: 'app.yml', lines: { start: 4, end: 5 } }] },
+      { body, signature, locations: [{ filepath: 'app.yml', lines: { start: 4, end: 5 } }] },
     ])}, { repository: 'requested/project', number: 42 });
   `;
   const { promise, resolve, reject } = Promise.withResolvers<void>();
@@ -222,10 +229,11 @@ test('explicit target matches inline files despite inherited Git repository loca
   assert.deepEqual(requests.map(request => [request.method, request.path]), [
     ['GET', '/repos/requested/project/pulls/42'],
     ['GET', '/repos/requested/project/pulls/42/files?per_page=100&page=1'],
+    ['POST', '/graphql'],
     ['GET', '/repos/requested/project/pulls/42'],
     ['POST', '/repos/requested/project/pulls/42/reviews'],
   ]);
-  assert.deepEqual(payload(requests[3]!), {
+  assert.deepEqual(payload(requests[4]!), {
     commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: [inline('app.yml', 5, 4)],
   });
   assert.equal(caller.git('rev-parse', 'HEAD'), callerHead);
@@ -236,42 +244,43 @@ test('explicit target matches inline files despite inherited Git repository loca
 test('nested invocation roots map rename targets and prefer RIGHT additions despite deletions', async t => {
   const repo = repository();
   const file = source(repo, 'packages/app/new.yml');
-  const requests = await github(t, [detail, { body: [{ ...file, status: 'renamed', previous_filename: 'old.yml' }] }, detail, posted]);
-  await actions(repo.env)(join(repo.cwd, 'packages/app'), [{ body, locations: [
+  const requests = await github(t, [detail, { body: [{ ...file, status: 'renamed', previous_filename: 'old.yml' }] }, threads(), detail, posted]);
+  await actions(repo.env)(join(repo.cwd, 'packages/app'), [{ body, signature, locations: [
     { filepath: 'new.yml', lines: { start: 2, end: 7 } },
     { filepath: './new.yml', lines: { start: 4, end: 5 } },
   ] }]);
   assert.deepEqual(requests.map(request => [request.method, request.path]), [
     ['GET', '/repos/example/project/pulls/23'], ['GET', '/repos/example/project/pulls/23/files?per_page=100&page=1'],
+    ['POST', '/graphql'],
     ['GET', '/repos/example/project/pulls/23'], ['POST', '/repos/example/project/pulls/23/reviews'],
   ]);
-  assert.deepEqual(payload(requests[3]!), { commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: [inline('packages/app/new.yml', 5, 4)] });
+  assert.deepEqual(payload(requests[4]!), { commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: [inline('packages/app/new.yml', 5, 4)] });
 });
 
 test('multiple hunks, optional header counts, no-newline markers and context anchors stay in one hunk', async t => {
   const repo = repository();
   const file = source(repo);
   const patch = '@@ -1,2 +1,2 @@ heading\n one\n-two old\n+two\n\\ No newline at end of file\n@@ -5,2 +5,2 @@\n five\n six\n@@ -8 +8 @@\n-eight old\n+eight';
-  const requests = await github(t, [detail, { body: [{ ...file, patch }] }, detail, posted]);
-  await actions(repo.env)(repo.cwd, [{ body, locations: [
+  const requests = await github(t, [detail, { body: [{ ...file, patch }] }, threads(), detail, posted]);
+  await actions(repo.env)(repo.cwd, [{ body, signature, locations: [
     { filepath: 'app.yml', lines: { start: 1, end: 8 } },
     { filepath: 'app.yml', lines: { start: 5, end: 7 } },
     { filepath: 'app.yml', lines: { start: 8, end: 8 } },
   ] }]);
-  assert.deepEqual(payload(requests[3]!), { commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: [inline('app.yml', 2), inline('app.yml', 6, 5), inline('app.yml', 8)] });
+  assert.deepEqual(payload(requests[4]!), { commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: [inline('app.yml', 2), inline('app.yml', 6, 5), inline('app.yml', 8)] });
 });
 
 test('mixed groups use only explicit usable candidates and fallback never duplicates anchored findings', async t => {
   const repo = repository();
   const file = source(repo);
-  const requests = await github(t, [detail, { body: [file] }, detail, posted, posted]);
+  const requests = await github(t, [detail, { body: [file] }, threads(), detail, posted, posted]);
   await actions(repo.env)(repo.cwd, [
-    { body: 'folder: selected member', locations: [{ filepath: 'app.yml', lines: { start: 4, end: 4 } }, { filepath: 'missing.yml', lines: { start: 1, end: 1 } }] },
-    { body: 'project: no attribution', locations: [] },
-    { body: 'scope: no usable hunk', locations: [{ filepath: 'app.yml', lines: { start: 99, end: 100 } }] },
+    { body: 'folder: selected member', signature, locations: [{ filepath: 'app.yml', lines: { start: 4, end: 4 } }, { filepath: 'missing.yml', lines: { start: 1, end: 1 } }] },
+    { body: 'project: no attribution', signature, locations: [] },
+    { body: 'scope: no usable hunk', signature, locations: [{ filepath: 'app.yml', lines: { start: 99, end: 100 } }] },
   ]);
-  assert.deepEqual(payload(requests[3]!), { commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: [inline('app.yml', 4, undefined, 'folder: selected member')] });
-  assert.deepEqual(payload(requests[4]!), summary(['project: no attribution', 'scope: no usable hunk']));
+  assert.deepEqual(payload(requests[4]!), { commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: [inline('app.yml', 4, undefined, 'folder: selected member')] });
+  assert.deepEqual(payload(requests[5]!), summary(['project: no attribution', 'scope: no usable hunk']));
 });
 
 test('unmatched source never gets inline coordinates: dirty, unpushed, untracked, absent, outside root', async t => {
@@ -292,7 +301,7 @@ test('unmatched source never gets inline coordinates: dirty, unpushed, untracked
         writeFile(join(repo.cwd, filepath), 'one\n');
       }
       const requests = await github(t, [detail, { body: [{ ...file, filename: kind === 'missing' ? filepath : file.filename }] }, detail, posted]);
-      await actions(repo.env)(repo.cwd, [{ body, locations: [{ filepath, lines: { start: 1, end: 1 } }] }]);
+      await actions(repo.env)(repo.cwd, [{ body, signature, locations: [{ filepath, lines: { start: 1, end: 1 } }] }]);
       assert.equal(requests.length, 4);
       assert.equal(requests[3]!.path, '/repos/example/project/issues/23/comments');
       assert.deepEqual(payload(requests[3]!), summary([body]));
@@ -309,7 +318,7 @@ test('removed, missing patch, deletion-only, malformed and nonoverlapping hunks 
       const repo = repository();
       const file = source(repo);
       const requests = await github(t, [detail, { body: [{ ...file, ...change }] }, detail, posted]);
-      await actions(repo.env)(repo.cwd, [{ body, locations: [{ filepath: 'app.yml', lines: { start: 1, end: 2 } }] }]);
+      await actions(repo.env)(repo.cwd, [{ body, signature, locations: [{ filepath: 'app.yml', lines: { start: 1, end: 2 } }] }]);
       assert.equal(requests[3]!.path, '/repos/example/project/issues/23/comments');
     });
   }
@@ -323,9 +332,9 @@ test('blob identity hashes UTF-8 bytes and literal Git paths, not JavaScript str
   repo.git('add', '--', filename);
   repo.git('commit', '--quiet', '-m', 'unicode');
   const file = { filename, status: 'added', sha: repo.git('hash-object', '--', filename), patch: '@@ -0,0 +1,2 @@\n+λ\n+第二行\n' };
-  const requests = await github(t, [detail, { body: [file] }, detail, posted]);
-  await actions(repo.env)(repo.cwd, [{ body, locations: [{ filepath: filename, lines: { start: 1, end: 2 } }] }]);
-  assert.deepEqual(payload(requests[3]!), { commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: [inline(filename, 2, 1)] });
+  const requests = await github(t, [detail, { body: [file] }, threads(), detail, posted]);
+  await actions(repo.env)(repo.cwd, [{ body, signature, locations: [{ filepath: filename, lines: { start: 1, end: 2 } }] }]);
+  assert.deepEqual(payload(requests[4]!), { commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: [inline(filename, 2, 1)] });
 });
 
 test('Actions checkout without usable Git metadata falls back even when a file exists', async t => {
@@ -334,7 +343,7 @@ test('Actions checkout without usable Git metadata falls back even when a file e
   const bytes = Buffer.from('one\n');
   const file = { filename: 'app.yml', status: 'added', sha: createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex'), patch: '@@ -0,0 +1 @@\n+one' };
   const requests = await github(t, [detail, { body: [file] }, detail, posted]);
-  await actions(sandbox.env)(sandbox.cwd, [{ body, locations: [{ filepath: 'app.yml', lines: { start: 1, end: 1 } }] }]);
+  await actions(sandbox.env)(sandbox.cwd, [{ body, signature, locations: [{ filepath: 'app.yml', lines: { start: 1, end: 1 } }] }]);
   assert.equal(requests[3]!.path, '/repos/example/project/issues/23/comments');
   assert.deepEqual(payload(requests[3]!), summary([body]));
 });
@@ -343,10 +352,10 @@ test('file pagination finds later files without following arbitrary Link URLs', 
   const repo = repository();
   const file = source(repo);
   const page = Array.from({ length: 100 }, (_, index) => ({ filename: `other-${index}`, status: 'modified', sha: file.sha }));
-  const requests = await github(t, [detail, { body: page, headers: { link: '<https://evil.test/steal>; rel="next"' } }, { body: [file] }, detail, posted]);
-  await actions(repo.env)(repo.cwd, [{ body, locations: [{ filepath: 'app.yml', lines: { start: 4, end: 4 } }] }]);
+  const requests = await github(t, [detail, { body: page, headers: { link: '<https://evil.test/steal>; rel="next"' } }, { body: [file] }, threads(), detail, posted]);
+  await actions(repo.env)(repo.cwd, [{ body, signature, locations: [{ filepath: 'app.yml', lines: { start: 4, end: 4 } }] }]);
   assert.equal(requests[2]!.path, '/repos/example/project/pulls/23/files?per_page=100&page=2');
-  assert.equal(requests[4]!.path, '/repos/example/project/pulls/23/reviews');
+  assert.equal(requests[5]!.path, '/repos/example/project/pulls/23/reviews');
 });
 
 test('pagination stops at GitHub 3000-file cap and unmatched findings fall back', async t => {
@@ -362,10 +371,10 @@ test('pagination stops at GitHub 3000-file cap and unmatched findings fall back'
 test('inline reviews batch at 100, and distinct findings are not collapsed', async t => {
   const repo = repository();
   const file = source(repo);
-  const requests = await github(t, [detail, { body: [file] }, detail, posted, posted]);
-  await actions(repo.env)(repo.cwd, Array.from({ length: 101 }, (_, index) => ({ body: `finding ${index}`, locations: [{ filepath: 'app.yml', lines: { start: 4, end: 4 } }] })));
-  const first = payload(requests[3]!) as { comments: unknown[] };
-  const second = payload(requests[4]!) as { comments: unknown[] };
+  const requests = await github(t, [detail, { body: [file] }, threads(), detail, posted, posted]);
+  await actions(repo.env)(repo.cwd, Array.from({ length: 101 }, (_, index) => ({ body: `finding ${index}`, signature, locations: [{ filepath: 'app.yml', lines: { start: 4, end: 4 } }] })));
+  const first = payload(requests[4]!) as { comments: unknown[] };
+  const second = payload(requests[5]!) as { comments: unknown[] };
   assert.equal(first.comments.length, 100);
   assert.equal(second.comments.length, 1);
   assert.deepEqual(second.comments, [inline('app.yml', 4, undefined, 'finding 100')]);
@@ -374,9 +383,9 @@ test('inline reviews batch at 100, and distinct findings are not collapsed', asy
 test('head movement aborts all posting, including fallback', async t => {
   const repo = repository();
   const file = source(repo);
-  const requests = await github(t, [detail, { body: [file] }, { body: { head: { sha: 'b'.repeat(40) } } }]);
-  await assert.rejects(actions(repo.env)(repo.cwd, [{ body, locations: [{ filepath: 'app.yml', lines: { start: 4, end: 4 } }] }, ...fallback]), /head.*changed|head.*moved/i);
-  assert.deepEqual(requests.map(request => request.method), ['GET', 'GET', 'GET']);
+  const requests = await github(t, [detail, { body: [file] }, threads(), { body: { head: { sha: 'b'.repeat(40) } } }]);
+  await assert.rejects(actions(repo.env)(repo.cwd, [{ body, signature, locations: [{ filepath: 'app.yml', lines: { start: 4, end: 4 } }] }, ...fallback]), /head.*changed|head.*moved/i);
+  assert.deepEqual(requests.map(request => request.method), ['GET', 'GET', 'POST', 'GET']);
 });
 
 test('analyzed PR revision rejects stale context anchors and summary findings before planning', async t => {
@@ -387,6 +396,7 @@ test('analyzed PR revision rejects stale context anchors and summary findings be
       const requests = await github(t, [{ body: { head: { sha: 'b'.repeat(40) } } }]);
       await assert.rejects(createGithubCommenter({ ...repo.env, GITHUB_TOKEN: token })(repo.cwd, [{
         body,
+        signature,
         locations: located ? [{ filepath: 'app.yml', lines: { start: 1, end: 1 } }] : [],
       }], { repository: 'example/project', number: 23, head }), error => assertSafeError(error, /head.*changed.*analysis/i));
       assert.deepEqual(requests.map(request => [request.method, request.path]), [['GET', '/repos/example/project/pulls/23']]);
@@ -402,6 +412,7 @@ test('summary-only planning rechecks the head with and without an analyzed revis
       const requests = await github(t, [detail, { body: [{ ...file, sha: 'c'.repeat(40) }] }, { body: { head: { sha: 'b'.repeat(40) } } }]);
       await assert.rejects(createGithubCommenter({ ...repo.env, GITHUB_TOKEN: token })(repo.cwd, [{
         body,
+        signature,
         locations: [{ filepath: 'app.yml', lines: { start: 4, end: 4 } }],
       }], { repository: 'example/project', number: 23, ...(expected ? { head } : {}) }), error => assertSafeError(error, /head.*changed.*planning/i));
       assert.deepEqual(requests.map(request => request.method), ['GET', 'GET', 'GET']);
@@ -445,20 +456,21 @@ test('credentials and valid Actions event identity are required for nonempty fin
 });
 
 test('all HTTP failure stages are safe, do not retry and never replace a failed review with fallback', async t => {
-  for (const stage of ['discovery', 'head', 'files', 'recheck', 'review', 'fallback']) {
+  for (const stage of ['discovery', 'head', 'files', 'threads', 'recheck', 'review', 'fallback']) {
     await t.test(stage, async t => {
       const repo = repository();
       const file = source(repo);
       const replies: Reply[] = stage === 'discovery' ? [] : [{ body: [{ number: 23 }] }];
       if (!['discovery', 'head'].includes(stage)) replies.push(detail);
       if (!['discovery', 'head', 'files'].includes(stage)) replies.push({ body: stage === 'fallback' ? [] : [file] });
+      if (['recheck', 'review'].includes(stage)) replies.push(threads());
       if (['review', 'fallback'].includes(stage)) replies.push(detail);
       replies.push({ status: 403, body: { message: `credential ${token} denied` } });
       const requests = await github(t, replies);
-      const findings = stage === 'fallback' ? fallback : [{ body, locations: [{ filepath: 'app.yml', lines: { start: 4, end: 4 } }] }, ...fallback];
+      const findings = stage === 'fallback' ? fallback : [{ body, signature, locations: [{ filepath: 'app.yml', lines: { start: 4, end: 4 } }] }, ...fallback];
       await assert.rejects(createGithubCommenter({ ...repo.env, GITHUB_TOKEN: token })(repo.cwd, findings), error => assertSafeError(error, /GitHub.*403.*permission/i));
       assert.equal(requests.length, replies.length);
-      assert.equal(requests.filter(request => request.method === 'POST').length, ['review', 'fallback'].includes(stage) ? 1 : 0);
+      assert.equal(requests.filter(request => request.method === 'POST' && request.path !== '/graphql').length, ['review', 'fallback'].includes(stage) ? 1 : 0);
     });
   }
 });
@@ -487,4 +499,65 @@ test('network and malformed API responses fail without disclosing raw data', asy
       assert.equal(requests.length, replies.length);
     });
   }
+});
+
+test('unresolved marked threads suppress matching paths across pages; resolved and unmarked threads do not', async t => {
+  const repo = repository();
+  const app = source(repo);
+  const other = source(repo, 'other.yml');
+  const requests = await github(t, [
+    detail,
+    { body: [app, other] },
+    threads([{ isResolved: true, path: 'other.yml', comments: { nodes: [{ body: `resolved\n\n${marker}` }] } }], 'c1'),
+    threads([
+      { isResolved: false, path: 'app.yml', comments: { nodes: [{ body: `old message\n\n${marker}` }] } },
+      { isResolved: false, path: 'other.yml', comments: { nodes: [{ body: '<!-- coderuler:other_memory -->' }] } },
+    ]),
+    detail,
+    posted,
+  ]);
+  await actions(repo.env)(repo.cwd, [
+    { body, signature, locations: [{ filepath: 'app.yml', lines: { start: 4, end: 4 } }] },
+    { body, signature, locations: [{ filepath: 'other.yml', lines: { start: 4, end: 4 } }] },
+  ]);
+  assert.deepEqual(requests.map(request => [request.method, request.path]), [
+    ['GET', '/repos/example/project/pulls/23'],
+    ['GET', '/repos/example/project/pulls/23/files?per_page=100&page=1'],
+    ['POST', '/graphql'],
+    ['POST', '/graphql'],
+    ['GET', '/repos/example/project/pulls/23'],
+    ['POST', '/repos/example/project/pulls/23/reviews'],
+  ]);
+  assert.deepEqual(requests.slice(2, 4).map(request => {
+    const graphql = payload(request);
+    assert.ok(typeof graphql === 'object' && graphql !== null && 'variables' in graphql);
+    return graphql.variables;
+  }), [
+    { owner: 'example', name: 'project', number: 23, cursor: null },
+    { owner: 'example', name: 'project', number: 23, cursor: 'c1' },
+  ]);
+  assert.deepEqual(payload(requests[5]!), { commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: [inline('other.yml', 4)] });
+});
+
+test('fully suppressed findings post nothing; invalid thread responses fail safely', async t => {
+  const finding = { body, signature, locations: [{ filepath: 'app.yml', lines: { start: 4, end: 4 } }] };
+  await t.test('matching unresolved thread', async t => {
+    const repo = repository();
+    const file = source(repo);
+    const requests = await github(t, [detail, { body: [file] }, threads([{ isResolved: false, path: 'app.yml', comments: { nodes: [{ body: `old message\n\n${marker}` }] } }]), detail]);
+    await actions(repo.env)(repo.cwd, [finding]);
+    assert.deepEqual(requests.map(request => [request.method, request.path]), [
+      ['GET', '/repos/example/project/pulls/23'],
+      ['GET', '/repos/example/project/pulls/23/files?per_page=100&page=1'],
+      ['POST', '/graphql'],
+      ['GET', '/repos/example/project/pulls/23'],
+    ]);
+  });
+  await t.test('malformed thread response', async t => {
+    const repo = repository();
+    const file = source(repo);
+    const requests = await github(t, [detail, { body: [file] }, { body: { errors: [{ message: token }] } }]);
+    await assert.rejects(actions(repo.env)(repo.cwd, [finding]), error => assertSafeError(error, /GitHub.*review threads response/i));
+    assert.equal(requests.length, 3);
+  });
 });
