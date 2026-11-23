@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 import { stripVTControlCharacters, styleText } from 'node:util';
 
 import { applyEdits, format, visit } from 'jsonc-parser';
@@ -678,6 +679,14 @@ export function countViolations(reports: readonly RuleReport[]): number {
   return total;
 }
 
+function violationSignature(rule: string, subject: Subject): string {
+  const context = ({ filepath, source, data, captures }: ScopeSubject) => ({ filepath, source, data, captures });
+  const evaluated = subject.kind === 'scope'
+    ? context(subject)
+    : { group: subject.group, members: subject.members.map(context) };
+  return `${createHash('sha256').update(JSON.stringify(evaluated)).digest('hex')}_${rule}`;
+}
+
 export async function renderViolationComments(
   reports: readonly RuleReport[],
   redact: TextRedactor,
@@ -753,7 +762,7 @@ export async function renderViolationComments(
         seen.add(key);
         locations.push({ filepath: candidate.filepath, lines: candidate.lines });
       }
-      comments.push({ body, locations });
+      comments.push({ body, signature: violationSignature(report.name, subject), locations });
     }
   }
   return comments;

@@ -155,6 +155,8 @@ export async function startGithubFixture(target: PrFixture, options: GithubFixtu
       response.end(JSON.stringify(files));
     } else if (request.method === 'GET' && url.startsWith(`/repos/${PR_REPOSITORY}/pulls?`)) {
       response.end(JSON.stringify([{ number: PR_NUMBER }]));
+    } else if (request.method === 'POST' && url === '/graphql') {
+      response.end(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } } }));
     } else if (request.method === 'POST' && [
       `${pull}/reviews`, `/repos/${PR_REPOSITORY}/issues/${PR_NUMBER}/comments`,
     ].includes(url)) {
