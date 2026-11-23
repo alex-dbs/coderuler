@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -10,11 +11,13 @@ import { createRuleLoader } from '../dist/adapter/filesystem/rules.js';
 import { createSandbox, writeFile } from './support.ts';
 
 const sandbox = createSandbox('coderuler-srp-diff-');
-const ruleFile = fileURLToPath(new URL('../.coderuler.examples/go-single-responsibility.rule.ts', import.meta.url));
+const exampleRule = fileURLToPath(new URL('../.coderuler.examples/go-single-responsibility.rule.ts', import.meta.url));
 after(() => sandbox.cleanup());
 
 async function check(changedLines?: ReadonlyMap<string, readonly LineRange[]>) {
   const { cwd } = sandbox.isolated('project');
+  const ruleFile = join(cwd, '.coderuler', 'go-single-responsibility.rule.ts');
+  writeFile(ruleFile, readFileSync(exampleRule, 'utf8'));
   writeFile(join(cwd, 'model.go'), `package user
 
 type UserService struct{}
