@@ -64,7 +64,7 @@ Diff mode requires Git. Its default base is `HEAD`. It includes changed files an
 
 In CI, choose a base that represents the comparison you intend. After checkout, `HEAD` alone can leave no working-tree changes. Fetch the base ref before using it. A full checkout history helps make base references available.
 
-Diff mode evaluates all applicable scopes in changed files. It does not select individual scopes by changed lines. Affected groups also include unchanged members needed for the comparison.
+Diff mode checks a scope only when it overlaps a changed line. A grouped check runs when a member overlaps a changed line, or when a changed path inside the group has no added lines (for example, a deleted file). The group keeps all its members.
 
 ## Analyze a GitHub pull request
 
@@ -97,7 +97,7 @@ With `--diff --auto-comment` and no explicit `--pr`, CodeRuler first uses `GITHU
 
 Do not switch to a privileged event that executes untrusted PR code merely to obtain write access. Separate trusted comment handling from untrusted evaluation according to your repository's security model.
 
-CodeRuler uses inline review comments when a finding maps to the current PR diff. Findings without a usable anchor go into an ordinary PR comment. A rule's `comment` property can replace its finding body without changing locations or decisions.
+CodeRuler posts inline review comments only on added lines. Findings without an added-line anchor go into an ordinary PR comment.
 
 If the PR head changes during analysis or comment planning, CodeRuler refuses to post stale findings. Re-run against the current head rather than forcing an outdated review.
 

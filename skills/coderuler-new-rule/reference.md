@@ -186,7 +186,7 @@ type ScopeSelector<T = JsonValue> =
 //   readonly lines?: LineRange }
 ```
 
-For `--diff` and `--pr`, CodeRuler selects changed files for the rule. It does not narrow custom scopes to changed lines. Your custom selector must use `changedLines` if it needs line-level filtering. A selector that ignores line ranges still checks every selected scope in each changed file.
+For `--diff` and `--pr`, a `group: 'scope'` rule checks only scopes that overlap a changed line. A grouped rule runs when a member overlaps a changed line, or when a changed path in the group has no added lines (for example, a deleted file). A custom selector that returns scopes without `lines` is kept when its file changed.
 
 The engine passes `ProjectContext`; direct calls can omit it. Use stable nonempty IDs and actual source text. Line spans are 1-based and inclusive. `data` must be finite, acyclic, JSON-compatible (including `null`, `false`, `0`, and `''`); captures contain only strings/string arrays.
 When a selector reads diff fields, annotate its `context` parameter as `ProjectContext`. This lets direct callers omit the optional parameter.
@@ -317,7 +317,7 @@ interface CheckResult {
 
 Explicit `lines` are absolute file coordinates: positive safe integers with inclusive `start <= end`. Use a narrower subrange within the member's known lines; file-only locations must fit a member's range for that file. When the selected member has no line information, explicit lines may supply it.
 
-With `locations` omitted, a scope violation uses its own source lines; a group violation does **not** automatically blame all members. Explicit `locations: []` disables automatic scope attribution. Without usable source lines (or a matching current PR diff anchor), `--auto-comment` reports the finding in an ordinary PR comment instead of guessing an inline location.
+With `locations` omitted, a scope violation uses its own source lines; a group violation does **not** automatically blame all members. Explicit `locations: []` disables automatic scope attribution. Without usable source lines (or an added line in the current PR diff), `--auto-comment` reports the finding in an ordinary PR comment instead of guessing an inline location.
 
 Set `comment` to a nonblank Markdown string to use the same body for each finding. You can also set a callback to build the body from the evaluated subject and its normalized `CheckResult`.
 

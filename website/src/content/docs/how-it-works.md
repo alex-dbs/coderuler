@@ -61,7 +61,7 @@ The default group is `'scope'`, so the check runs once per selected scope. Use `
 
 Each group produces one decision. Empty groups are not evaluated. A project group can compare identifiers across files, while a file group can compare rows in one CSV file.
 
-Diff checks evaluate all applicable scopes in changed files, not only scopes on changed lines. Affected groups can include unchanged members. See [CI and GitHub](/docs/ci/).
+Diff checks evaluate scopes that overlap changed lines. Groups run when a member changed, and keep all their members. See [CI and GitHub](/docs/ci/).
 
 ## Evaluate and report
 

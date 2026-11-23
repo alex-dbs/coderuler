@@ -257,7 +257,7 @@ test('nested invocation roots map rename targets and prefer RIGHT additions desp
   assert.deepEqual(payload(requests[4]!), { commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: [inline('packages/app/new.yml', 5, 4)] });
 });
 
-test('multiple hunks, optional header counts, no-newline markers and context anchors stay in one hunk', async t => {
+test('multiple hunks, optional header counts and no-newline markers anchor only added lines', async t => {
   const repo = repository();
   const file = source(repo);
   const patch = '@@ -1,2 +1,2 @@ heading\n one\n-two old\n+two\n\\ No newline at end of file\n@@ -5,2 +5,2 @@\n five\n six\n@@ -8 +8 @@\n-eight old\n+eight';
@@ -267,7 +267,19 @@ test('multiple hunks, optional header counts, no-newline markers and context anc
     { filepath: 'app.yml', lines: { start: 5, end: 7 } },
     { filepath: 'app.yml', lines: { start: 8, end: 8 } },
   ] }]);
-  assert.deepEqual(payload(requests[4]!), { commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: [inline('app.yml', 2), inline('app.yml', 6, 5), inline('app.yml', 8)] });
+  assert.deepEqual(payload(requests[4]!), { commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: [inline('app.yml', 2), inline('app.yml', 8)] });
+});
+
+test('context lines in a hunk never get inline comments', async t => {
+  const repo = repository();
+  const file = source(repo);
+  const requests = await github(t, [detail, { body: [file] }, threads(), detail, posted, posted]);
+  await actions(repo.env)(repo.cwd, [
+    { body: 'added line', signature, locations: [{ filepath: 'app.yml', lines: { start: 4, end: 4 } }] },
+    { body: 'context line', signature, locations: [{ filepath: 'app.yml', lines: { start: 7, end: 7 } }] },
+  ]);
+  assert.deepEqual(payload(requests[4]!), { commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: [inline('app.yml', 4, undefined, 'added line')] });
+  assert.deepEqual(payload(requests[5]!), summary(['context line']));
 });
 
 test('mixed groups use only explicit usable candidates and fallback never duplicates anchored findings', async t => {

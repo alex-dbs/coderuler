@@ -322,16 +322,49 @@ test('range-aware scope selection reports only the changed line while nested con
   assert.deepEqual(rule.nestedSources, ['BAD changed']);
 });
 
-test('range-ignoring selectors still evaluate every scope in a changed file', async () => {
+test('diff scope rules skip scopes outside changed lines', async () => {
   const project = fixture({ 'src/a.txt': 'BAD unchanged\nBAD changed\nclean' });
   const rule = new RangeIgnoringRule();
 
-  const { report } = await run(rule, project, ['src/a.txt'], () => true, new Map([
+  const { report, events } = await run(rule, project, ['src/a.txt'], () => true, new Map([
     ['src/a.txt', [{ start: 2, end: 2 }]],
   ]));
 
   assert.equal(report.status, 'pass');
-  assert.deepEqual(rule.checked.map(subject => subject.source), ['BAD unchanged', 'BAD changed', 'clean']);
+  assert.deepEqual(rule.checked.map(subject => subject.source), ['BAD changed']);
+  assert.equal(report.evaluations.length, 1);
+  assert.deepEqual(
+    events.flatMap(event => event.type === 'scope' && !event.accepted ? [[event.subject.id, event.reason]] : []),
+    [['line-1', 'unchanged lines'], ['line-3', 'unchanged lines']],
+  );
+});
+
+test('diff groups run only when a member overlaps a changed line or a path inside has no added lines', async () => {
+  const cases = [
+    { changed: ['src/a.txt'], lines: [['src/a.txt', [{ start: 2, end: 2 }]]], file: 'skipped', folder: 'skipped' },
+    { changed: ['src/a.txt'], lines: [['src/a.txt', [{ start: 1, end: 1 }]]],
+      file: [['src/a.txt', ['BAD first']]], folder: [['src', ['BAD first', 'BAD second']]] },
+    { changed: ['src/gone.txt'], lines: [['src/gone.txt', []]], file: 'skipped',
+      folder: [['src', ['BAD first', 'BAD second']]] },
+    { changed: ['src/notes.md'], lines: [['src/notes.md', [{ start: 1, end: 1 }]]], file: 'skipped', folder: 'skipped' },
+  ] as const;
+  for (const group of ['file', 'folder'] as const) {
+    for (const { changed, lines, ...expected } of cases) {
+      const project = fixture({ 'src/a.txt': 'BAD first\nclean\n', 'src/b.txt': 'BAD second\n', 'other/c.txt': 'BAD third\n' });
+      class GroupRule extends RecordingRule {
+        scope = ({ source }: { filepath: string; source: string }) => lineScopes(source, undefined)
+          .filter(scope => scope.source.startsWith('BAD'));
+      }
+      const rule = new GroupRule();
+      rule.group = group;
+      const { report } = await run(rule, project, changed, () => true, new Map<string, readonly LineRange[]>(lines));
+      const want = expected[group];
+      assert.equal(report.status, want === 'skipped' ? 'skipped' : 'pass');
+      assert.deepEqual(rule.checked.map(subject => subject.kind === 'group'
+        ? [subject.group.path, subject.members.map(member => member.source)]
+        : null), want === 'skipped' ? [] : want);
+    }
+  }
 });
 
 test('missing diff data takes the range-aware full-scan branch and empty diff has no subjects', async () => {

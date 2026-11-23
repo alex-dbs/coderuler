@@ -94,7 +94,7 @@ Git is required for `--diff` and `--pr`. Make sure that the selected base ref ex
 
 Without explicit `--pr`, comment target discovery needs GitHub event context or one open PR for the current branch and origin. Fork workflows can lack write permission or secrets. Keep offline checks independent of comments.
 
-If the PR head changes, CodeRuler refuses stale comments. Re-run on the current revision. If no current diff anchor fits a finding, expect an ordinary summary comment instead of an inline review comment.
+If the PR head changes, CodeRuler refuses stale comments. Re-run on the current revision. Inline comments need an added line, so a finding on unchanged context gets an ordinary summary comment.
 
 ## Report a problem or contribute
 

@@ -170,17 +170,9 @@ context.changedLines // ReadonlyMap<string, readonly { start: number; end: numbe
 
 Both values are `undefined` when no diff was collected. `isDiffMode(context)` returns `true` when either value is available. In diff mode, empty collections mean no changes. `changedLines` contains 1-based, inclusive ranges for added or replaced lines in the current file. A known changed path can have `[]` when it has no added lines. If a path is missing from `changedLines`, its line information is unavailable, for example for binary or conversion-attributed files.
 
-Use `isInDiff` in `filter` to keep only scopes that overlap a changed range. It returns `false` when diff ranges or scope line data are unavailable.
+Scope rules already run only on scopes that overlap a changed range. Use `isInDiff` in `filter` only for custom selectors, which are not narrowed by line. It returns `false` when diff ranges or scope line data are unavailable.
 
-```ts
-import { Rule, isInDiff } from '@alex-dbs/coderuler';
-
-class Local extends Rule {
-  filter = isInDiff;
-}
-```
-
-Use `isDiffMode` to preserve full scans when no diff was collected:
+Custom selectors are not narrowed by line. Use `isDiffMode` with `isInDiff` in `filter` to keep changed-line scopes and full scans:
 
 ```ts
 import {

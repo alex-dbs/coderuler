@@ -61,7 +61,6 @@ async function actionsPullRequest(env: Readonly<Record<string, string | undefine
 interface DiffRun {
   readonly start: number;
   end: number;
-  readonly added: boolean;
 }
 
 interface PullFile {
@@ -80,7 +79,7 @@ interface ReviewComment {
   readonly start_side?: 'RIGHT';
 }
 
-function rightRuns(patch: string): readonly DiffRun[] {
+function addedRuns(patch: string): readonly DiffRun[] {
   const runs: DiffRun[] = [];
   let hunk: { old: number; right: number; oldCount: number; rightCount: number; oldRead: number; rightRead: number; runs: DiffRun[]; valid: boolean } | undefined;
   const finish = () => {
@@ -105,12 +104,13 @@ function rightRuns(patch: string): readonly DiffRun[] {
     const prefix = text[0];
     if (prefix !== ' ' && prefix !== '+' && prefix !== '-') { hunk.valid = false; continue; }
     if (prefix !== '+') hunk.oldRead++;
-    if (prefix !== '-') {
+    if (prefix === '+') {
       const line = hunk.right + hunk.rightRead++;
-      const added = prefix === '+';
       const previous = hunk.runs.at(-1);
-      if (previous && previous.added === added && previous.end + 1 === line) previous.end = line;
-      else hunk.runs.push({ start: line, end: line, added });
+      if (previous && previous.end + 1 === line) previous.end = line;
+      else hunk.runs.push({ start: line, end: line });
+    } else if (prefix === ' ') {
+      hunk.rightRead++;
     }
     if (hunk.oldRead > hunk.oldCount || hunk.rightRead > hunk.rightCount) hunk.valid = false;
   }
@@ -270,9 +270,8 @@ export function createGithubCommenter(
         const file = await match;
         if (!file?.patch) continue;
         let runs = patches.get(file.filename);
-        if (!runs) { runs = rightRuns(file.patch); patches.set(file.filename, runs); }
-        const run = runs.find(run => run.added && run.start <= location.lines.end && run.end >= location.lines.start)
-          ?? runs.find(run => !run.added && run.start <= location.lines.end && run.end >= location.lines.start);
+        if (!runs) { runs = addedRuns(file.patch); patches.set(file.filename, runs); }
+        const run = runs.find(run => run.start <= location.lines.end && run.end >= location.lines.start);
         if (!run) continue;
         const start = Math.max(run.start, location.lines.start);
         const end = Math.min(run.end, location.lines.end);
