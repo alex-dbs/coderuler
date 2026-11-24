@@ -75,7 +75,7 @@ Write `instruction` as the requirement for compliant content. Start with a direc
 
 Add only boundaries or real exceptions needed to define the policy. Keep one policy per instruction. Put reporting text in `violationMessage`, examples in `examples`, and cases in `aiTests`. Use `instruction` for new rules; the deprecated `rule` option remains accepted. Provide exactly one option.
 
-Put every test case for an AI rule in `aiTests`; do not add a separate `tests` export. The fixed question is "Is the rule respected?" Yes/true means no problems. No/false means at least one violation. `examples.good` and `examples.bad` condition the model, and `violationMessage` controls reporting. Neither is an instruction.
+Put every test case for an AI rule in `aiTests`; do not add a separate `tests` export. The fixed question is "Is the rule respected?" Yes/true means no problems. No/false means at least one violation. `examples.good` and `examples.bad` condition the model, and `violationMessage` controls reporting. Neither is an instruction. Without `violationMessage`, a violation reports the `instruction` text.
 
 For an imperative policy, write:
 
