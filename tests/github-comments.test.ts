@@ -513,17 +513,18 @@ test('network and malformed API responses fail without disclosing raw data', asy
   }
 });
 
-test('unresolved marked threads suppress matching paths across pages; resolved and unmarked threads do not', async t => {
+test('marked threads suppress matching paths across pages, resolved or not; unmarked threads do not', async t => {
   const repo = repository();
   const app = source(repo);
   const other = source(repo, 'other.yml');
+  const kept = source(repo, 'kept.yml');
   const requests = await github(t, [
     detail,
-    { body: [app, other] },
+    { body: [app, other, kept] },
     threads([{ isResolved: true, path: 'other.yml', comments: { nodes: [{ body: `resolved\n\n${marker}` }] } }], 'c1'),
     threads([
       { isResolved: false, path: 'app.yml', comments: { nodes: [{ body: `old message\n\n${marker}` }] } },
-      { isResolved: false, path: 'other.yml', comments: { nodes: [{ body: '<!-- coderuler:other_memory -->' }] } },
+      { isResolved: false, path: 'kept.yml', comments: { nodes: [{ body: '<!-- coderuler:other_memory -->' }] } },
     ]),
     detail,
     posted,
@@ -531,6 +532,7 @@ test('unresolved marked threads suppress matching paths across pages; resolved a
   await actions(repo.env)(repo.cwd, [
     { body, signature, locations: [{ filepath: 'app.yml', lines: { start: 4, end: 4 } }] },
     { body, signature, locations: [{ filepath: 'other.yml', lines: { start: 4, end: 4 } }] },
+    { body, signature, locations: [{ filepath: 'kept.yml', lines: { start: 4, end: 4 } }] },
   ]);
   assert.deepEqual(requests.map(request => [request.method, request.path]), [
     ['GET', '/repos/example/project/pulls/23'],
@@ -548,7 +550,7 @@ test('unresolved marked threads suppress matching paths across pages; resolved a
     { owner: 'example', name: 'project', number: 23, cursor: null },
     { owner: 'example', name: 'project', number: 23, cursor: 'c1' },
   ]);
-  assert.deepEqual(payload(requests[5]!), { commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: [inline('other.yml', 4)] });
+  assert.deepEqual(payload(requests[5]!), { commit_id: head, event: 'COMMENT', body: 'CodeRuler violations', comments: [inline('kept.yml', 4)] });
 });
 
 test('fully suppressed findings post nothing; invalid thread responses fail safely', async t => {
