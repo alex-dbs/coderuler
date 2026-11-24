@@ -206,7 +206,7 @@ for (const diff of ['--diff', '--diff-only']) {
   });
 }
 
-test('repeated runs skip unresolved marked threads and repost after resolution', async context => {
+test('repeated runs skip marked threads, resolved or not', async context => {
   const target = repository('repeated');
   const threads: { isResolved: boolean; path: string; comments: { nodes: { body: string }[] } }[] = [];
   const requests = await github(context, target, 201, threads);
@@ -228,8 +228,7 @@ test('repeated runs skip unresolved marked threads and repost after resolution',
   const third = await check(target, args);
   assert.equal(third.status, 1, third.stderr);
   assert.equal(third.stderr, '');
-  assert.equal(posts(requests).length, 2);
-  assert.deepEqual(JSON.parse(posts(requests)[1]!.body).comments, raw.comments);
+  assert.equal(posts(requests).length, 1, 'resolved marked threads must suppress a repeat');
   assert.equal(requests.filter(request => request.url === '/graphql').length, 3);
 });
 

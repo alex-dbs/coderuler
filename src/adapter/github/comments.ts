@@ -15,7 +15,7 @@ const REVIEW_THREADS = `query($owner: String!, $name: String!, $number: Int!, $c
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       reviewThreads(first: 100, after: $cursor) {
-        nodes { isResolved path comments(first: 1) { nodes { body } } }
+        nodes { path comments(first: 1) { nodes { body } } }
         pageInfo { hasNextPage endCursor }
       }
     }
@@ -158,7 +158,7 @@ async function matchingFile(
   }
 }
 
-async function unresolvedThreadBodies(
+async function threadBodies(
   request: GithubRequest,
   pull: PullRequest,
 ): Promise<ReadonlyMap<string, readonly string[]>> {
@@ -185,18 +185,16 @@ async function unresolvedThreadBodies(
       const thread = mapping(value);
       const comments = mapping(thread?.comments);
       const commentNodes = comments?.nodes;
-      if (!thread || typeof thread.isResolved !== 'boolean' || typeof thread.path !== 'string' || !Array.isArray(commentNodes)) {
+      if (!thread || typeof thread.path !== 'string' || !Array.isArray(commentNodes)) {
         throw new Error('GitHub API returned an invalid review threads response.');
       }
       const firstComment = commentNodes[0];
       if (firstComment !== undefined) {
         const comment = mapping(firstComment);
         if (typeof comment?.body !== 'string') throw new Error('GitHub API returned an invalid review threads response.');
-        if (!thread.isResolved) {
-          const pathBodies = bodies.get(thread.path);
-          if (pathBodies) pathBodies.push(comment.body);
-          else bodies.set(thread.path, [comment.body]);
-        }
+        const pathBodies = bodies.get(thread.path);
+        if (pathBodies) pathBodies.push(comment.body);
+        else bodies.set(thread.path, [comment.body]);
       }
     }
     if (!pageInfo.hasNextPage) return bodies;
@@ -284,9 +282,9 @@ export function createGithubCommenter(
       if (anchors.size === 0) fallback.push(finding.body);
     }
 
-    const unresolved = planned.length === 0 ? new Map<string, readonly string[]>() : await unresolvedThreadBodies(request, pull);
+    const threads = planned.length === 0 ? new Map<string, readonly string[]>() : await threadBodies(request, pull);
     const inline = planned
-      .filter(({ marker, comment }) => !unresolved.get(comment.path)?.some(body => body.includes(marker)))
+      .filter(({ marker, comment }) => !threads.get(comment.path)?.some(body => body.includes(marker)))
       .map(({ comment }) => comment);
 
     if (await readHead() !== head) throw new Error('GitHub pull request head changed during comment planning; refusing stale findings.');
