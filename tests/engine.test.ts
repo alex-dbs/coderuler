@@ -1626,7 +1626,7 @@ test('probability equal to the threshold violates; above it passes', async () =>
   const report = reports[0];
   assert.ok(report);
   const expected: readonly CheckResult[] = [
-    { status: 'violation', probability: 0.4, threshold: 0.4, model: 'recording-model', usage: UNREPORTED_AI_USAGE },
+    { status: 'violation', message: 'Boundary policy', probability: 0.4, threshold: 0.4, model: 'recording-model', usage: UNREPORTED_AI_USAGE },
     { status: 'pass', probability: 0.4001, threshold: 0.4, model: 'recording-model', usage: UNREPORTED_AI_USAGE },
   ];
   assert.deepEqual(report.evaluations.map(evaluation => evaluation.result), expected);
@@ -1647,7 +1647,7 @@ test('rule settings threshold overrides the harness default', async () => {
   assert.ok(report);
   assert.equal(report.status, 'violation');
   assert.deepEqual(report.evaluations[0]?.result, {
-    status: 'violation', probability: 0.5, threshold: 0.9, model: 'recording-model',
+    status: 'violation', message: 'Strict policy', probability: 0.5, threshold: 0.9, model: 'recording-model',
     usage: UNREPORTED_AI_USAGE,
   });
   assert.deepEqual(eventsOfType(harness.events, 'result')[0]?.result, report.evaluations[0]?.result);
@@ -1724,7 +1724,7 @@ test('violationMessage is reporting only and examples are normalized', async () 
   fallbackRun.backend.probabilities = [0.1];
   const [fell] = await executeRules([loaded('ai-fallback', fallback)], fallbackRun.context);
   assert.deepEqual(fell?.evaluations[0]?.result, {
-    status: 'violation', probability: 0.1, threshold: 0.4, model: 'recording-model',
+    status: 'violation', message: 'Fallback policy', probability: 0.1, threshold: 0.4, model: 'recording-model',
     usage: UNREPORTED_AI_USAGE,
   });
 

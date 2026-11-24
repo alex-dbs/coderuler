@@ -163,7 +163,7 @@ export async function evaluateAi<T = JsonValue>(
   }
   return {
     status: 'violation',
-    ...(options.violationMessage === undefined ? {} : { message: options.violationMessage }),
+    message: options.violationMessage ?? (options.instruction ?? options.rule),
     probability: decision.probability,
     threshold: runtime.threshold,
     model: decision.model,

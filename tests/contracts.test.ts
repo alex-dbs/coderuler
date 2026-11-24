@@ -990,6 +990,24 @@ test('the public ai evaluator forwards examples, a lazy input override, and the 
   assert.equal(JSON.stringify(requestAt(backend)).includes('Must do the thing'), false);
 });
 
+test('an ai violation without violationMessage reports the rule text as its message', async () => {
+  const subject = scopeSubject({ filepath: 'a.go', id: '$', source: 'package a' });
+  const policy = 'Allocate the final length before the loop.';
+  const backend = new RecordingBackend(0.1);
+  const evaluator = ai<JsonValue>({ instruction: policy });
+  const result = await evaluator(subject, new TestContext({ subject, runtime: runtimeFor(backend), project: new MemoryProject() }));
+  assert.equal(result.status, 'violation');
+  assert.equal(result.message, policy);
+});
+
+test('an ai violation keeps an explicit violationMessage over the rule text', async () => {
+  const subject = scopeSubject({ filepath: 'a.go', id: '$', source: 'package a' });
+  const backend = new RecordingBackend(0.1);
+  const evaluator = ai<JsonValue>({ instruction: 'Allocate the final length.', violationMessage: 'Preallocate it' });
+  const result = await evaluator(subject, new TestContext({ subject, runtime: runtimeFor(backend), project: new MemoryProject() }));
+  assert.equal(result.message, 'Preallocate it');
+});
+
 test('the public ai evaluator sends the same request for rule and instruction options', async () => {
   const subject = scopeSubject({ filepath: 'a.json', id: '$', source: '{}' });
   const policy = 'Return an error for invalid input.';
@@ -1216,7 +1234,7 @@ test('AI decisions retain the exact runtime threshold and compare probability st
     const subject = scopeSubject({ filepath: 'a', id: '$', source: 's' });
     const result = await evaluateAi(subject, { rule: 'r' }, projectContext(), runtimeFor(backend, threshold));
 
-    assert.deepEqual(result, { status, probability, threshold, model: 'test-model', usage: UNREPORTED_AI_USAGE });
+    assert.deepEqual(result, { status, ...(status === 'violation' ? { message: 'r' } : {}), probability, threshold, model: 'test-model', usage: UNREPORTED_AI_USAGE });
   }
 });
 
@@ -1251,7 +1269,7 @@ test('AI instructions carry the rule, question, and normalized examples', async 
   });
 });
 
-test('AI violations preserve metadata and only supplied messages without leaking them upstream', async () => {
+test('AI violations preserve metadata and report the rule text unless a message is supplied', async () => {
   const subject = scopeSubject({ filepath: 'a', id: '$', source: 's' });
 
   const backend = new RecordingBackend(0.1);
@@ -1262,7 +1280,7 @@ test('AI violations preserve metadata and only supplied messages without leaking
     runtimeFor(backend),
   );
   assert.deepStrictEqual(result, {
-    status: 'violation', probability: 0.1, threshold: 0.4, model: 'test-model', usage: UNREPORTED_AI_USAGE,
+    status: 'violation', message: 'r', probability: 0.1, threshold: 0.4, model: 'test-model', usage: UNREPORTED_AI_USAGE,
   });
   assert.deepStrictEqual(requestAt(backend).instructions, { rule: 'r', question: 'Is the rule respected?' });
 
